@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+model User {
+  id String @id
+  name String
+  email String @unique
+  role String
+}
+model Conference {
+  id String @id
+  name String
+  location String
+  timezone String
+  startDate String
+  endDate String
+  slotMinutes Int @default(30)
+}
+model Issuer {
+  id String @id
+  name String
+  sector String
+  color String
+  contactEmail String
+  ownerId String?
+}
+model Investor {
+  id String @id
+  name String
+  contactEmail String
+}
+model Email {
+  id String @id @default(cuid())
+  messageId String @unique
+  threadId String
+  sender String
+  to String[]
+  cc String[]
+  subject String
+  body String
+  newContent String
+  receivedAt DateTime @default(now())
+  conferenceId String?
+  issuerId String?
+  investorId String?
+  category String
+  status String @default("Pending review")
+  proposal Proposal?
+}
+model Proposal {
+  id String @id @default(cuid())
+  emailId String @unique
+  email Email @relation(fields:[emailId], references:[id])
+  extraction Json
+  status String @default("Pending")
+  reviewerId String?
+  reviewNote String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model Availability {
+  id String @id @default(cuid())
+  conferenceId String
+  issuerId String
+  start DateTime
+  end DateTime
+  kind String @default("Available")
+  sourceEmailId String?
+  approvedBy String
+  updatedAt DateTime @updatedAt
+  @@index([conferenceId, issuerId])
+}
+model MeetingRequest {
+  id String @id @default(cuid())
+  conferenceId String
+  issuerId String
+  investorId String
+  salespersonId String
+  bankerId String?
+  start DateTime
+  end DateTime
+  duration Int @default(30)
+  alternativeDates String[]
+  notes String @default("")
+  priority String @default("Normal")
+  status String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  meeting Meeting?
+}
+model Meeting {
+  id String @id @default(cuid())
+  requestId String? @unique
+  request MeetingRequest? @relation(fields:[requestId], references:[id])
+  conferenceId String
+  issuerId String
+  investorId String
+  start DateTime
+  end DateTime
+  status String @default("Confirmed")
+  location String @default("")
+  bankerIds String[]
+  approvedRecipients String[]
+  sourceEmailId String?
+  approvedBy String
+  updatedAt DateTime @updatedAt
+  @@index([conferenceId, issuerId])
+}
+model Action {
+  id String @id @default(cuid())
+  type String
+  title String
+  conferenceId String?
+  issuerId String?
+  investorId String?
+  emailId String?
+  requestId String?
+  assignedTo String?
+  priority String @default("Normal")
+  status String @default("Open")
+  recommendation String
+  createdAt DateTime @default(now())
+}
+model Draft {
+  id String @id @default(cuid())
+  meetingId String?
+  requestId String?
+  emailId String?
+  createdBy String
+  sender String
+  to String[]
+  cc String[]
+  historicalParticipants String[]
+  subject String
+  body String
+  status String @default("Draft")
+  approvedBy String?
+  simulatedSentAt DateTime?
+  createdAt DateTime @default(now())
+}
+model AuditLog {
+  id String @id @default(cuid())
+  actorId String
+  action String
+  entityType String
+  entityId String
+  before Json?
+  after Json?
+  createdAt DateTime @default(now())
+}

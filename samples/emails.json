@@ -1,0 +1,29 @@
+[
+  {
+    "messageId": "sample-bayview-availability-001",
+    "threadId": "sample-bayview-thread",
+    "sender": "ir@bayview.example",
+    "to": ["alex.morgan@conferenceos.demo"],
+    "cc": [],
+    "subject": "ABS East 2026 — Bayview availability",
+    "body": "Hi, Bayview is available Monday between 3 PM and 5 PM for ABS East 2026. However, we already have a meeting scheduled between 3 PM and 3:30 PM. We can also accommodate meetings Tuesday morning."
+  },
+  {
+    "messageId": "sample-athene-availability-002",
+    "threadId": "sample-athene-thread",
+    "sender": "ir@athene.example",
+    "to": ["sarah.chen@conferenceos.demo"],
+    "cc": [],
+    "subject": "ABS East 2026 — Athene availability",
+    "body": "Athene is available Tuesday between 9 AM and 12 PM for ABS East 2026. Please add this window.\n\nOn Monday, Sarah wrote:\n> Are you available on Wednesday?"
+  },
+  {
+    "messageId": "sample-bayview-request-003",
+    "threadId": "sample-bayview-investor-thread",
+    "sender": "meetings@pimco.example",
+    "to": ["alex.morgan@conferenceos.demo"],
+    "cc": [],
+    "subject": "ABS East 2026 — meeting request",
+    "body": "PIMCO requests a meeting with Bayview on Tuesday between 2 PM and 2:30 PM at ABS East 2026."
+  }
+]
