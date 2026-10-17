@@ -2966,3 +2966,98 @@ th {
   .decision-details { grid-column: 2; grid-template-columns: auto 1fr; }
   .decision-details > div { display: none; }
 }
+
+/* Focused dashboard pass: keep primary decisions visible and secondary context quiet. */
+:root {
+  --background: #f6f7f4;
+  --foreground: #1d2c25;
+  --border: #e5e8e2;
+}
+.main-content { max-width: 1480px; padding-inline: 32px; }
+.demo-badge,
+.workspace-footer,
+.conference-location,
+.intelligence-banner,
+.issuer-overview,
+.panel-bottom,
+.inbox-main > p,
+.draft-list small,
+.resource-section-title p,
+.allocation-banner p,
+.allocation-explanation { display: none !important; }
+.page-heading {
+  margin: 30px 0 20px;
+  align-items: flex-end;
+}
+.page-heading h1 {
+  color: #17251e;
+  font-size: 30px;
+  font-weight: 650;
+  letter-spacing: -1.1px;
+  line-height: 1.15;
+}
+.page-heading p {
+  margin-top: 7px;
+  color: #89928b;
+  font-size: 10px;
+}
+.overview-heading { margin: 30px 0 20px; }
+.overview-heading h1 { font-size: 32px; font-weight: 650; }
+.stats-grid.overview-stats,
+.stats-grid.resource-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.overview-stats .stat-card,
+.resource-stats .stat-card {
+  min-height: 116px;
+  padding: 18px 19px;
+  border-radius: 13px;
+  box-shadow: none;
+}
+.overview-stats .stat-card p { display: none; }
+.overview-stats .stat-card > strong { margin-top: 16px; font-size: 29px; }
+.overview-columns { margin-top: 14px; gap: 14px; }
+.panel { border-radius: 13px; box-shadow: 0 1px 2px #18251d05; }
+.panel-heading { padding: 18px 19px; }
+.panel-heading p { display: none; }
+.panel-heading h3 { color: #26362e; font-size: 12px; }
+.action-list { padding-inline: 18px; }
+.action-row { padding: 14px 0; }
+.action-row-content p { margin-top: 2px; }
+.action-row-content > span { margin-top: 6px; }
+.agenda { padding-inline: 18px; }
+.agenda-item { padding-block: 13px; }
+.full-width-link { min-height: 42px; }
+.panel-toolbar { min-height: 52px; padding: 10px 15px; }
+.table-footer { display: none; }
+.nav-item.active {
+  background: #e2e8df;
+  color: #244c3d;
+  font-weight: 600;
+}
+.availability-heading-actions { display: flex; align-items: center; gap: 8px; }
+.availability-heading-actions select {
+  min-width: 190px;
+  min-height: 36px;
+  padding: 0 32px 0 11px;
+  border: 1px solid #dfe4dc;
+  border-radius: 8px;
+  background: #fff;
+  color: #34473d;
+  font-size: 11px;
+}
+.availability-panel .panel-heading { min-height: 64px; }
+.availability-days section { min-width: 0; }
+.inbox-list > button { padding-block: 14px; }
+.inbox-main h3 { margin-top: 3px; }
+.inbox-main .inbox-tags { margin-top: 7px; }
+.resource-stats { margin-bottom: 14px; }
+.resource-panel .tab-buttons button { padding-inline: 10px; }
+.allocation-banner { min-height: 58px; padding-block: 12px; }
+.planner-toolbar { padding-block: 9px; }
+.queue-backbar { margin-top: 20px; }
+
+@media (max-width: 900px) {
+  .stats-grid.overview-stats,
+  .stats-grid.resource-stats { grid-template-columns: repeat(3, minmax(150px, 1fr)); overflow-x: auto; }
+  .availability-heading-actions { width: 100%; }
+  .availability-heading-actions select { flex: 1; min-width: 0; }
+}

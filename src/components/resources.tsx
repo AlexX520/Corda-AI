@@ -63,11 +63,10 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
   }
   return <>
     <div className="page-heading">
-      <div><div className="section-eyebrow">PEOPLE + SPACE, PLANNED TOGETHER</div><h1>Coverage & resources</h1><p>Collect banker preferences, allocate coverage and assign meeting cubes in one review flow.</p></div>
+      <div><h1>Coverage & resources</h1><p>{unresolved} items need review</p></div>
       <Button onClick={() => run('optimizeConference', { conferenceId }, 'New allocation proposal generated.')}><Play size={16}/>Run allocation</Button>
     </div>
     <div className="stats-grid resource-stats">
-      <ResourceStat label="Confirmed meetings" value={meetings.length} icon={<CalendarClock size={17}/>} />
       <ResourceStat label="Fully allocated" value={complete} icon={<CheckCircle2 size={17}/>} />
       <ResourceStat label="Needs review" value={unresolved} icon={<SlidersHorizontal size={17}/>} />
       <ResourceStat label="Active cubes" value={cubes.filter((c) => c.status === 'Active').length} icon={<Boxes size={17}/>} />
@@ -80,21 +79,21 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
       </div>{latestRun && <Badge>{latestRun.runStatus}</Badge>}</div>
       {tab === 'allocation' && <AllocationReview data={data} conferenceId={conferenceId} proposals={proposals} latestRun={latestRun} run={run}/>} 
       {tab === 'preferences' && <div className="resource-split">
-        <section><div className="resource-section-title"><div><h3>Issuer coverage preferences</h3><p>These are weighted preferences. Authorization and schedule conflicts remain hard constraints.</p></div></div>
+        <section><div className="resource-section-title"><div><h3>Issuer preferences</h3></div></div>
           <div className="preference-list">{data.issuers.map((issuer) => <div key={issuer.id}><span className="issuer-dot" style={{background: issuer.color}}/><strong>{issuer.name}</strong><select value={prefs[issuer.id] || 'No Preference'} onChange={(e) => setPrefs({...prefs, [issuer.id]: e.target.value})}>{levels.map((level) => <option key={level}>{level}</option>)}</select></div>)}</div>
           <div className="meeting-preference"><h4>Specific meeting preferences</h4><div><select value={meetingChoice} onChange={(e) => setMeetingChoice(e.target.value)}>{meetings.map((m) => <option value={m.id} key={m.id}>{n.issuer(m.issuerId)} × {n.investor(m.investorId)} · {fmt(m.start, conference.timezone, 'EEE h:mm a')}</option>)}</select><select value={meetingLevel} onChange={(e) => setMeetingLevel(e.target.value)}>{levels.filter((x) => x !== 'No Preference').map((level) => <option key={level}>{level}</option>)}</select><Button variant="outline" onClick={() => meetingChoice && setMeetingPrefs({...meetingPrefs, [meetingChoice]: meetingLevel})}>Add</Button></div>{Object.entries(meetingPrefs).map(([id, level]) => { const m = meetings.find((x) => x.id === id); return m ? <button key={id} onClick={() => { const next = {...meetingPrefs}; delete next[id]; setMeetingPrefs(next); }}>{n.issuer(m.issuerId)} · {level} ×</button> : null; })}</div>
           <div className="resource-actions"><Button variant="outline" onClick={() => savePreferences(false)}>Save draft</Button><Button onClick={() => savePreferences(true)}>Submit preferences</Button></div>
         </section>
-        <section><div className="resource-section-title"><div><h3>My conference availability</h3><p>Availability is interpreted in {conference.timezone}.</p></div></div>
+        <section><div className="resource-section-title"><div><h3>My availability</h3></div></div>
           {availability.length ? <div className="availability-summary">{availability.map((a) => <div key={a.id}><CalendarClock size={15}/><span>{fmt(a.start, conference.timezone)} – {fmt(a.end, conference.timezone, 'h:mm a')}</span><Badge>{a.status}</Badge></div>)}</div> : <Empty title="No availability submitted" description="Add the standard conference-day window, then adjust exceptions as needed."/>}
           <Button variant="outline" onClick={saveAvailability}>Use 9:00 AM–5:00 PM conference days</Button>
         </section>
       </div>}
       {tab === 'cubes' && <div className="resource-split">
-        <section><div className="resource-section-title"><div><h3>Meeting cube inventory</h3><p>Capacity, availability and room buffers are enforced by the allocator.</p></div></div>
+        <section><div className="resource-section-title"><div><h3>Meeting cubes</h3></div></div>
           <div className="cube-grid">{cubes.map((cube) => { const used = data.cubeAssignments.filter((a) => a.cubeId === cube.id).length; return <div className="cube-card" key={cube.id}><div><Boxes size={18}/><Badge>{cube.status}</Badge></div><strong>{cube.name}</strong><span>{cube.location}</span><small>Capacity {cube.capacity} · {used} approved meetings</small></div>})}</div>
         </section>
-        <section><div className="resource-section-title"><div><h3>Add a cube</h3><p>Create a room without leaving the allocation workflow.</p></div></div>
+        <section><div className="resource-section-title"><div><h3>Add cube</h3></div></div>
           <div className="form-grid"><Field label="Cube name"><input value={cubeName} onChange={(e) => setCubeName(e.target.value)} placeholder="Meeting Cube 6"/></Field><Field label="Capacity"><input type="number" min={1} value={cubeCapacity} onChange={(e) => setCubeCapacity(Number(e.target.value))}/></Field><Button onClick={addCube}>Add meeting cube</Button></div>
         </section>
       </div>}
@@ -109,7 +108,7 @@ function AllocationReview({data, conferenceId, proposals, latestRun, run}: {data
   const meetings = useMemo(() => new Map(data.meetings.map((m) => [m.id, m])), [data.meetings]);
   if (!latestRun) return <Empty title="No allocation proposal yet" description="Run allocation to match confirmed meetings with authorized bankers and available cubes."/>;
   return <>
-    <div className="allocation-banner"><div><strong>Proposal generated {fmt(latestRun.runTimestamp, c.timezone)}</strong><p>Review exceptions and manual edits before approving. Locked assignments are preserved.</p></div>{latestRun.runStatus === 'Proposed' && <Button onClick={() => run('approveAllocationRun', {id: latestRun.id}, 'Valid allocations approved; unresolved meetings remain in the action queue.')}>Approve valid allocations</Button>}</div>
+    <div className="allocation-banner"><div><strong>Proposal · {fmt(latestRun.runTimestamp, c.timezone)}</strong></div>{latestRun.runStatus === 'Proposed' && <Button onClick={() => run('approveAllocationRun', {id: latestRun.id}, 'Valid allocations approved; unresolved meetings remain in the action queue.')}>Approve valid</Button>}</div>
     <div className="table-scroll"><table><thead><tr><th>Meeting</th><th>Time</th><th>Coverage</th><th>Meeting cube</th><th>Validation</th></tr></thead><tbody>{proposals.map((proposal) => { const meeting = meetings.get(proposal.meetingId); if (!meeting) return null; return <ProposalRow key={proposal.id} proposal={proposal} meeting={meeting} data={data} conferenceId={conferenceId} run={run}/>; })}</tbody></table></div>
     <div className="table-footer"><span><Lock size={12}/> Approval writes the reviewed proposal to the master schedule.</span><span>Algorithm: deterministic constraints + weighted preferences</span></div>
   </>;

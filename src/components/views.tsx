@@ -52,9 +52,8 @@ export function RequestsView({
     <>
       <div className="page-heading">
         <div>
-          <div className="section-eyebrow">MEETING COORDINATION</div>
           <h1>{data.user.role === 'SALES' ? 'Your meeting requests' : 'Meeting requests'}</h1>
-          <p>From investor interest to an approved meeting, all in one place.</p>
+          <p>{requests.length} requests</p>
         </div>
         <Button onClick={onNew}>
           <Plus size={16} />
@@ -96,7 +95,6 @@ export function RequestsView({
                   <th>Preferred time</th>
                   <th>Status</th>
                   <th>Coverage banker</th>
-                  <th>Priority</th>
                   <th />
                 </tr>
               </thead>
@@ -130,9 +128,6 @@ export function RequestsView({
                       )}
                     </td>
                     <td>{n.user(r.bankerId)}</td>
-                    <td>
-                      <Badge>{r.priority}</Badge>
-                    </td>
                     <td>
                       <button
                         aria-label={`Review ${n.issuer(r.issuerId)} request`}
@@ -358,44 +353,17 @@ export function AvailabilityView({
     <>
       <div className="page-heading">
         <div>
-          <div className="section-eyebrow">APPROVED AVAILABILITY</div>
           <h1>Issuer availability</h1>
-          <p>A shared view of open windows, confirmed meetings, and holds.</p>
+          <p>{issuers.length} issuers</p>
         </div>
-        {data.user.role === 'BANKER' && (
-          <Button onClick={() => setEditing(true)}>
-            <Plus size={16} />
-            Manage availability
-          </Button>
-        )}
-      </div>
-      <div className="issuer-cards">
-        {issuers.map((i) => {
-          const count =
-            data.slots.find((s) => s.conferenceId === conferenceId && s.issuerId === i.id)?.slots
-              .length || 0;
-          return (
-            <button
-              className={`issuer-card ${selected === i.id ? 'selected' : ''}`}
-              key={i.id}
-              onClick={() => setSelected(i.id)}
-            >
-              <div className="flex items-center gap-3">
-                <Avatar name={i.name} color={i.color} />
-                <div>
-                  <strong>{i.name}</strong>
-                  <small>{i.sector}</small>
-                </div>
-              </div>
-              <div className="issuer-card-bottom">
-                <span className={count ? 'green-text' : ''}>
-                  {count ? `${count} open slots` : 'Awaiting availability'}
-                </span>
-                <ChevronRight size={14} />
-              </div>
-            </button>
-          );
-        })}
+        <div className="availability-heading-actions">
+          <select value={selected} onChange={(event) => setSelected(event.target.value)} aria-label="Select issuer">
+            {issuers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
+          </select>
+          {data.user.role === 'BANKER' && (
+            <Button onClick={() => setEditing(true)}><Plus size={16} />Manage</Button>
+          )}
+        </div>
       </div>
       <div className="panel availability-panel">
         <div className="panel-heading">
@@ -404,7 +372,7 @@ export function AvailabilityView({
             <div>
               <h3>{issuer.name}</h3>
               <p>
-                Coverage: {n.user(issuer.ownerId)} · {requests.length} pending requests
+                {n.user(issuer.ownerId)} · {requests.length} pending
               </p>
             </div>
           </div>
@@ -561,9 +529,8 @@ export function PlannerView({
     <>
       <div className="page-heading">
         <div>
-          <div className="section-eyebrow">ONE CONFERENCE. ONE SOURCE OF TRUTH.</div>
-          <h1>Master schedule</h1>
-          <p>Approved meetings with banker coverage and meeting cube assignments.</p>
+          <h1>Schedule</h1>
+          <p>{meetings.length} confirmed meetings</p>
         </div>
         <div className="resource-actions">
           <Button variant="outline" asChild><a href={`${exportUrl}&format=pdf`}><Download size={16} />Export PDF</a></Button>

@@ -236,7 +236,13 @@ export function Workspace() {
                 onClick={() => navigate(m.id)}
               >
                 <m.icon size={18} strokeWidth={1.7} />
-                <span>{!banker && m.id === 'requests' ? 'Request tracker' : m.label}</span>
+                <span>
+                  {!banker && m.id === 'requests'
+                    ? 'Request tracker'
+                    : !banker && m.id === 'schedule'
+                      ? 'Schedule'
+                      : m.label}
+                </span>
                 {m.id === 'queue' && openActions.length > 0 && (
                   <span className="nav-count">{openActions.length}</span>
                 )}
@@ -301,7 +307,11 @@ export function Workspace() {
             <span>{banker ? 'Banker workspace' : 'Sales workspace'}</span>
             <ChevronRight size={13} />
             <strong>
-              {menu.find((m) => m.id === page)?.label || { audit: 'Audit trail' }[page]}
+              {!banker && page === 'requests'
+                ? 'Request tracker'
+                : !banker && page === 'schedule'
+                  ? 'Schedule'
+                  : menu.find((m) => m.id === page)?.label || { audit: 'Audit trail' }[page]}
             </strong>
           </div>
           <div className="topbar-right">
@@ -377,19 +387,9 @@ export function Workspace() {
             <>
               <div className="page-heading overview-heading">
                 <div>
-                  <div className="section-eyebrow">YOUR CONFERENCE, CONNECTED</div>
-                  <h1>
-                    Let’s make room for opportunity<span>.</span>
-                  </h1>
+                  <h1>{c.name}</h1>
                   <p>
-                    Welcome back, {data.user.name.split(' ')[0]}.{' '}
-                    {banker ? (
-                      <>
-                        {openActions.length} items need your attention at {c.name}.
-                      </>
-                    ) : (
-                      'Your investor meetings and the next best opportunities, in one place.'
-                    )}
+                    {banker ? `${openActions.length} decisions need attention.` : 'Your meeting activity.'}
                   </p>
                 </div>
                 <Button onClick={() => setRequestOpen(true)}>
@@ -397,7 +397,7 @@ export function Workspace() {
                   New meeting request
                 </Button>
               </div>
-              <div className="stats-grid">
+              <div className="stats-grid overview-stats">
                 <Stat
                   icon={CalendarDays}
                   label="Confirmed meetings"
@@ -423,15 +423,6 @@ export function Workspace() {
                   tone="blue"
                 />
                 <Stat
-                  icon={Clock3}
-                  label="Available slots"
-                  value={data.slots
-                    .filter((s) => s.conferenceId === conferenceId)
-                    .reduce((acc, s) => acc + s.slots.length, 0)}
-                  foot={`${c.slotMinutes}-minute approved windows`}
-                  tone="green"
-                />
-                <Stat
                   icon={banker ? Sparkles : CheckCheck}
                   label={banker ? 'Needs your review' : 'Potential matches'}
                   value={
@@ -445,24 +436,6 @@ export function Workspace() {
                   tone="amber"
                 />
               </div>
-              {banker && (
-                <div className="intelligence-banner">
-                  <div className="sparkle-box">
-                    <Sparkles size={21} />
-                  </div>
-                  <div>
-                    <strong>A little less back-and-forth.</strong>
-                    <p>
-                      {pendingEmails.length} emails analyzed. Review the proposed changes and keep
-                      your conference moving.
-                    </p>
-                  </div>
-                  <button onClick={() => navigate('inbox')}>
-                    Review email updates <ArrowRight size={16} />
-                  </button>
-                  <div className="banner-orbits" />
-                </div>
-              )}
               <div className="overview-columns">
                 <div className="panel">
                   <div className="panel-heading">
@@ -475,11 +448,6 @@ export function Workspace() {
                             : data.requests.filter((r) => r.conferenceId === conferenceId).length}
                         </span>
                       </h3>
-                      <p>
-                        {banker
-                          ? 'The next right action, already surfaced.'
-                          : 'Track progress and explore available alternatives.'}
-                      </p>
                     </div>
                     <button
                       className="text-button"
@@ -495,7 +463,7 @@ export function Workspace() {
                           `${a.title} ${a.type}`.toLowerCase().includes(search.toLowerCase()),
                         )
                         .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority))
-                        .slice(0, 5)}
+                        .slice(0, 4)}
                       data={data}
                       onClick={actionClick}
                     />
@@ -525,12 +493,6 @@ export function Workspace() {
                       )}
                     </div>
                   )}
-                  <div className="panel-bottom">
-                    <ShieldCheck size={13} />
-                    {banker
-                      ? 'Every change is reviewed by you. Nothing is sent automatically.'
-                      : 'Available times remain subject to issuer consent.'}
-                  </div>
                 </div>
                 <div className="panel schedule-preview">
                   <div className="panel-heading">
@@ -732,9 +694,8 @@ export function Workspace() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="section-eyebrow">REVIEW BEFORE DELIVERY</div>
-                  <h1>Draft communications</h1>
-                  <p>Review drafts created by decisions in this queue.</p>
+                  <h1>Drafts</h1>
+                  <p>{data.drafts.filter((d) => d.status === 'Draft').length} pending</p>
                 </div>
                 <Badge tone="amber">Simulated sending only</Badge>
               </div>
@@ -772,11 +733,8 @@ export function Workspace() {
             <>
               <div className="page-heading">
                 <div>
-                  <div className="section-eyebrow">ACCOUNTABILITY BY DESIGN</div>
                   <h1>Audit trail</h1>
-                  <p>
-                    A durable record of reviews, scheduling decisions, and simulated deliveries.
-                  </p>
+                  <p>{data.auditLogs.length} events</p>
                 </div>
                 <Badge tone="green">Database-backed history</Badge>
               </div>
@@ -1019,26 +977,13 @@ function InboxView({
     <>
       <div className="page-heading">
         <div>
-          <div className="section-eyebrow">AI-ASSISTED INBOX</div>
-          <h1>
-            Email reviews{' '}
-            <span className="heading-pill">
-              {data.parser === 'Deterministic mock' ? 'Mock parser' : 'AI assisted'}
-            </span>
-          </h1>
-          <p>Your conference emails, organized and ready for a decision.</p>
+          <h1>Email reviews</h1>
+          <p>{filtered.length} emails</p>
         </div>
         <Button onClick={onAdd}>
           <Plus size={16} />
           Add email
         </Button>
-      </div>
-      <div className="notice inbox-notice">
-        <Sparkles size={17} />
-        <span>
-          Extracted changes stay in review until you approve them. Quoted email history is excluded.
-        </span>
-        <ShieldCheck size={17} />
       </div>
       <div className="panel">
         <div className="panel-toolbar">
@@ -1185,11 +1130,9 @@ function QueueView({
     <>
       <div className="page-heading action-queue-heading">
         <div>
-          <div className="section-eyebrow">YOUR DECISIONS</div>
           <h1>
             Action queue <span className="queue-heading-count">{openForConference.length}</span>
           </h1>
-          <p>Only the items that need your judgment.</p>
         </div>
         <div className="queue-secondary-links">
           <button onClick={onOpenEmails}>
