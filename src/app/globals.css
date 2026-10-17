@@ -1517,6 +1517,55 @@ td small {
   margin-top: 4px;
   opacity: 0.7;
 }
+.banker-week-summary {
+  min-height: 68px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #e9ede1;
+  background: #fcfdf9;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.banker-week-summary > div,
+.banker-week-summary > span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.banker-week-summary strong { font-size: 12px; }
+.banker-week-summary p,
+.banker-week-summary > span { color: #8d998b; font-size: 9px; margin-top: 3px; }
+.banker-week-scroll { overflow: auto; max-height: calc(100vh - 355px); min-height: 520px; }
+.banker-week-grid { display: grid; min-width: 860px; position: relative; }
+.banker-week-corner,
+.banker-day-heading {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #fbfcf8;
+  border-bottom: 1px solid #dfe5dc;
+  border-right: 1px solid #e4e8e1;
+  min-height: 67px;
+}
+.banker-week-corner { padding: 27px 14px 0; font-size: 8px; color: #a6b0a3; }
+.banker-day-heading { padding: 10px 14px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: 7px; }
+.banker-day-heading span { font-size: 10px; text-transform: uppercase; letter-spacing: .7px; color: #758774; }
+.banker-day-heading strong { font-size: 15px; color: #334b3e; }
+.banker-day-heading small { grid-column: 1 / -1; color: #9aa69a; margin-top: 4px; }
+.banker-time-column { position: relative; background: #fbfcf9; border-right: 1px solid #e2e7df; }
+.banker-time-slot { height: 56px; border-bottom: 1px solid #edf0eb; padding: 8px 10px; text-align: right; color: #89958c; font-size: 9px; }
+.banker-time-slot:nth-child(odd) { border-bottom-color: #e4e9e2; }
+.banker-day-column { position: relative; border-right: 1px solid #e1e6df; background: #fff; }
+.banker-slot-line { position: absolute; left: 0; right: 0; height: 1px; background: #f0f2ee; }
+.banker-slot-line:nth-child(odd) { background: #e5e9e3; }
+.banker-calendar-event { position: absolute; left: 6px; right: 6px; width: calc(100% - 12px); z-index: 2; padding: 7px 9px; border-left: 3px solid; border-radius: 5px; text-align: left; overflow: hidden; box-shadow: 0 1px 2px #243d2b0b; }
+.banker-calendar-event:hover { filter: saturate(1.08); box-shadow: 0 3px 9px #243d2b12; }
+.banker-calendar-event > div { display: flex; align-items: center; justify-content: space-between; gap: 7px; }
+.banker-calendar-event strong { font-size: 10px; color: #385044; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.banker-calendar-event .badge { font-size: 7px; padding: 2px 5px; flex-shrink: 0; }
+.banker-calendar-event p { margin: 2px 0; font-size: 9px; color: #536b5f; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.banker-calendar-event small { font-size: 8px; color: #718178; white-space: nowrap; }
 .recipient-filter {
   padding: 15px 21px;
   background: #fafbf6;

@@ -584,7 +584,7 @@ export function PlannerView({
                     : e.target.value === 'investor'
                       ? data.investors[0].id
                       : e.target.value === 'banker'
-                        ? data.users.find((u) => u.role === 'BANKER')?.id || ''
+                        ? (data.user.role === 'BANKER' ? data.user.id : data.users.find((u) => u.role === 'BANKER')?.id) || ''
                         : e.target.value === 'cube'
                           ? data.meetingCubes.find((cube) => cube.conferenceId === conferenceId)?.id || ''
                           : '',
@@ -626,7 +626,7 @@ export function PlannerView({
             </button>
           </div>
         </div>
-        {scope !== 'master' && (
+        {['issuer', 'investor'].includes(scope) && (
           <div className="recipient-filter">
             <Field
               label="Recipient-specific export (optional)"
@@ -688,6 +688,14 @@ export function PlannerView({
               description="Approved meeting requests will appear here automatically."
             />
           )
+        ) : scope === 'banker' ? (
+          <BankerWeekCalendar
+            data={data}
+            conferenceId={conferenceId}
+            bankerId={audience}
+            meetings={meetings}
+            onSelect={setSelected}
+          />
         ) : (
           <>
             <div className="planner-days">
@@ -793,4 +801,82 @@ export function PlannerView({
       )}
     </>
   );
+}
+
+function BankerWeekCalendar({
+  data,
+  conferenceId,
+  bankerId,
+  meetings,
+  onSelect,
+}: {
+  data: AppState;
+  conferenceId: string;
+  bankerId: string;
+  meetings: AppState['meetings'];
+  onSelect: (id: string) => void;
+}) {
+  const conference = data.conferences.find((c) => c.id === conferenceId)!;
+  const n = names(data);
+  const days = eachDayOfInterval({ start: parseISO(conference.startDate), end: parseISO(conference.endDate) });
+  const startHour = 9;
+  const endHour = 18;
+  const slotHeight = 56;
+  const slots = Array.from({ length: (endHour - startHour) * 2 }, (_, index) => index);
+  const assignment = (meetingId: string) =>
+    data.coverageAssignments.find((a) => a.meetingId === meetingId && a.bankerId === bankerId);
+  return (
+    <div className="banker-week">
+      <div className="banker-week-summary">
+        <div>
+          <Avatar name={n.user(bankerId)} color="#436b5e" />
+          <div>
+            <strong>{n.user(bankerId)}’s coverage schedule</strong>
+            <p>{meetings.length} approved meetings · {conference.timezone}</p>
+          </div>
+        </div>
+        <span><i className="green-dot" />Approved coverage only</span>
+      </div>
+      <div className="banker-week-scroll">
+        <div className="banker-week-grid" style={{ gridTemplateColumns: `72px repeat(${days.length}, minmax(250px, 1fr))` }}>
+          <div className="banker-week-corner">TIME</div>
+          {days.map((day) => {
+            const dateKey = format(day, 'yyyy-MM-dd');
+            const count = meetings.filter((m) => fmt(m.start, conference.timezone, 'yyyy-MM-dd') === dateKey).length;
+            return <div className="banker-day-heading" key={dateKey}><span>{format(day, 'EEE')}</span><strong>{format(day, 'MMM d')}</strong><small>{count} meeting{count === 1 ? '' : 's'}</small></div>;
+          })}
+          <div className="banker-time-column">
+            {slots.map((slot) => <div className="banker-time-slot" key={slot}>{slot % 2 === 0 ? formatHour(startHour + slot / 2) : ''}</div>)}
+          </div>
+          {days.map((day) => {
+            const dateKey = format(day, 'yyyy-MM-dd');
+            const dayMeetings = meetings.filter((m) => fmt(m.start, conference.timezone, 'yyyy-MM-dd') === dateKey);
+            return <div className="banker-day-column" key={dateKey} style={{ height: slots.length * slotHeight }}>
+              {slots.map((slot) => <div className="banker-slot-line" key={slot} style={{ top: slot * slotHeight }} />)}
+              {dayMeetings.map((meeting) => {
+                const startMinutes = Number(fmt(meeting.start, conference.timezone, 'H')) * 60 + Number(fmt(meeting.start, conference.timezone, 'm'));
+                const endMinutes = Number(fmt(meeting.end, conference.timezone, 'H')) * 60 + Number(fmt(meeting.end, conference.timezone, 'm'));
+                const top = ((startMinutes - startHour * 60) / 30) * slotHeight;
+                const height = Math.max(((endMinutes - startMinutes) / 30) * slotHeight - 5, 50);
+                const issuer = data.issuers.find((i) => i.id === meeting.issuerId)!;
+                const room = data.cubeAssignments.find((a) => a.meetingId === meeting.id);
+                const cube = data.meetingCubes.find((x) => x.id === room?.cubeId);
+                const role = assignment(meeting.id)?.coverageRole || 'Coverage';
+                return <button key={meeting.id} className="banker-calendar-event" style={{ top: Math.max(top, 0), height, borderLeftColor: issuer.color, background: `${issuer.color}14` }} onClick={() => onSelect(meeting.id)}>
+                  <div><strong>{n.issuer(meeting.issuerId)}</strong><Badge tone={role === 'Primary' ? 'green' : 'gray'}>{role}</Badge></div>
+                  <p>{n.investor(meeting.investorId)}</p>
+                  <small>{fmt(meeting.start, conference.timezone, 'h:mm')}–{fmt(meeting.end, conference.timezone, 'h:mm a')} · {cube?.name || meeting.location || 'Location TBC'}</small>
+                </button>;
+              })}
+            </div>;
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatHour(hour: number) {
+  if (hour === 12) return '12 PM';
+  return hour > 12 ? `${hour - 12} PM` : `${hour} AM`;
 }
