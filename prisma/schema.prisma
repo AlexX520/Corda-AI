@@ -19,6 +19,11 @@ model Conference {
   startDate String
   endDate String
   slotMinutes Int @default(30)
+  roomBufferMinutes Int @default(0)
+  preferenceDeadline DateTime?
+  preferenceWeight Int @default(100)
+  workloadWeight Int @default(12)
+  backToBackWeight Int @default(5)
 }
 model Issuer {
   id String @id
@@ -107,6 +112,8 @@ model Meeting {
   approvedRecipients String[]
   sourceEmailId String?
   approvedBy String
+  expectedAttendees Int @default(4)
+  requiresCube Boolean @default(true)
   updatedAt DateTime @updatedAt
   @@index([conferenceId, issuerId])
 }
@@ -151,4 +158,129 @@ model AuditLog {
   before Json?
   after Json?
   createdAt DateTime @default(now())
+}
+
+model BankerPreference {
+  id String @id @default(cuid())
+  conferenceId String
+  bankerId String
+  issuerId String
+  meetingId String?
+  preferenceLevel String @default("No Preference")
+  preferenceWeight Int @default(0)
+  isMandatory Boolean @default(false)
+  submissionStatus String @default("Draft")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([conferenceId, bankerId])
+  @@index([meetingId])
+}
+
+model BankerAvailability {
+  id String @id @default(cuid())
+  conferenceId String
+  bankerId String
+  start DateTime
+  end DateTime
+  status String @default("Available")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([conferenceId, bankerId])
+}
+
+model IssuerCoverageAuthorization {
+  id String @id @default(cuid())
+  conferenceId String
+  bankerId String
+  issuerId String
+  qualification String @default("Support")
+  isActive Boolean @default(true)
+  @@unique([conferenceId, bankerId, issuerId])
+}
+
+model MeetingCoverageRequirement {
+  id String @id @default(cuid())
+  meetingId String @unique
+  requiredBankerCount Int @default(2)
+  requiredPrimaryCount Int @default(1)
+  updatedAt DateTime @updatedAt
+}
+
+model MeetingCoverageAssignment {
+  id String @id @default(cuid())
+  meetingId String
+  bankerId String
+  coverageRole String @default("Support")
+  assignmentStatus String @default("Approved")
+  isLocked Boolean @default(false)
+  assignedBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([meetingId, bankerId])
+  @@index([bankerId])
+}
+
+model MeetingCube {
+  id String @id @default(cuid())
+  conferenceId String
+  name String
+  capacity Int
+  location String
+  status String @default("Active")
+  restrictions String @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([conferenceId, name])
+}
+
+model CubeAvailability {
+  id String @id @default(cuid())
+  cubeId String
+  start DateTime
+  end DateTime
+  status String @default("Available")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([cubeId])
+}
+
+model MeetingCubeAssignment {
+  id String @id @default(cuid())
+  meetingId String @unique
+  cubeId String
+  assignmentStatus String @default("Approved")
+  isLocked Boolean @default(false)
+  assignedBy String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([cubeId])
+}
+
+model AllocationRun {
+  id String @id @default(cuid())
+  conferenceId String
+  algorithmVersion String
+  runTimestamp DateTime @default(now())
+  runStatus String @default("Proposed")
+  objectiveScore Float @default(0)
+  createdBy String
+  approvedBy String?
+  approvedAt DateTime?
+  summary Json
+  @@index([conferenceId, runTimestamp])
+}
+
+model AllocationProposal {
+  id String @id @default(cuid())
+  allocationRunId String
+  meetingId String
+  proposedBankerIds String[]
+  proposedCubeId String?
+  validationStatus String
+  preferenceScore Float @default(0)
+  explanation String
+  manualOverride Boolean @default(false)
+  updatedAt DateTime @updatedAt
+  @@unique([allocationRunId, meetingId])
+  @@index([meetingId])
 }

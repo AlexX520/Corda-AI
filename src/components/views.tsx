@@ -548,7 +548,11 @@ export function PlannerView({
       `${n.issuer(m.issuerId)} ${n.investor(m.investorId)}`
         .toLowerCase()
         .includes(search.toLowerCase()) &&
-      (scope === 'master' || (scope === 'issuer' ? m.issuerId : m.investorId) === audience),
+      (scope === 'master' ||
+        (scope === 'issuer' && m.issuerId === audience) ||
+        (scope === 'investor' && m.investorId === audience) ||
+        (scope === 'banker' && data.coverageAssignments.some((a) => a.meetingId === m.id && a.bankerId === audience)) ||
+        (scope === 'cube' && data.cubeAssignments.some((a) => a.meetingId === m.id && a.cubeId === audience))),
   );
   const active = meetings.find((m) => m.id === selected);
   const days = eachDayOfInterval({ start: parseISO(c.startDate), end: parseISO(c.endDate) });
@@ -558,15 +562,13 @@ export function PlannerView({
       <div className="page-heading">
         <div>
           <div className="section-eyebrow">ONE CONFERENCE. ONE SOURCE OF TRUTH.</div>
-          <h1>Conference planner</h1>
-          <p>Confirmed meetings, automatically kept in sync with approvals.</p>
+          <h1>Master schedule</h1>
+          <p>Approved meetings with banker coverage and meeting cube assignments.</p>
         </div>
-        <Button asChild>
-          <a href={exportUrl}>
-            <Download size={16} />
-            Export Excel
-          </a>
-        </Button>
+        <div className="resource-actions">
+          <Button variant="outline" asChild><a href={`${exportUrl}&format=pdf`}><Download size={16} />Export PDF</a></Button>
+          <Button asChild><a href={exportUrl}><Download size={16} />Export Excel</a></Button>
+        </div>
       </div>
       <div className="panel">
         <div className="panel-toolbar planner-toolbar">
@@ -581,12 +583,18 @@ export function PlannerView({
                     ? data.issuers[0].id
                     : e.target.value === 'investor'
                       ? data.investors[0].id
-                      : '',
+                      : e.target.value === 'banker'
+                        ? data.users.find((u) => u.role === 'BANKER')?.id || ''
+                        : e.target.value === 'cube'
+                          ? data.meetingCubes.find((cube) => cube.conferenceId === conferenceId)?.id || ''
+                          : '',
                 );
                 setRecipient('');
               }}
             >
               <option value="master">Master planner · internal</option>
+              {data.user.role === 'BANKER' && <option value="banker">Banker schedule</option>}
+              {data.user.role === 'BANKER' && <option value="cube">Meeting cube schedule</option>}
               <option value="issuer">Issuer-specific planner</option>
               <option value="investor">Investor-specific planner</option>
             </select>
@@ -596,7 +604,7 @@ export function PlannerView({
                 value={audience}
                 onChange={(e) => setAudience(e.target.value)}
               >
-                {(scope === 'issuer' ? data.issuers : data.investors).map((i) => (
+                {(scope === 'issuer' ? data.issuers : scope === 'investor' ? data.investors : scope === 'banker' ? data.users.filter((u) => u.role === 'BANKER') : data.meetingCubes.filter((cube) => cube.conferenceId === conferenceId)).map((i) => (
                   <option key={i.id} value={i.id}>
                     {i.name}
                   </option>
@@ -640,13 +648,20 @@ export function PlannerView({
                   <tr>
                     <th>Meeting</th>
                     <th>Date & time</th>
-                    <th>Location</th>
-                    <th>Bankers</th>
+                    <th>Primary banker</th>
+                    <th>Additional coverage</th>
+                    <th>Meeting cube</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {meetings.map((m) => (
+                  {meetings.map((m) => {
+                    const coverage = data.coverageAssignments.filter((a) => a.meetingId === m.id);
+                    const room = data.cubeAssignments.find((a) => a.meetingId === m.id);
+                    const cube = data.meetingCubes.find((x) => x.id === room?.cubeId);
+                    const requirement = data.coverageRequirements.find((r) => r.meetingId === m.id);
+                    const warning = coverage.length < (requirement?.requiredBankerCount || 2) || (m.requiresCube && !room);
+                    return (
                     <tr key={m.id} className="clickable" onClick={() => setSelected(m.id)}>
                       <td>
                         <strong>{n.issuer(m.issuerId)}</strong>
@@ -656,13 +671,14 @@ export function PlannerView({
                         {fmt(m.start, c.timezone)}
                         <small>to {fmt(m.end, c.timezone, 'h:mm a')}</small>
                       </td>
-                      <td>{m.location || 'TBC'}</td>
-                      <td>{m.bankerIds.map(n.user).join(', ')}</td>
+                      <td>{coverage.filter((a) => a.coverageRole === 'Primary').map((a) => n.user(a.bankerId)).join(', ') || 'Unassigned'}</td>
+                      <td>{coverage.filter((a) => a.coverageRole !== 'Primary').map((a) => n.user(a.bankerId)).join(', ') || '—'}</td>
+                      <td>{cube?.name || m.location || 'Unassigned'}</td>
                       <td>
-                        <Badge>{m.status}</Badge>
+                        <Badge tone={warning ? 'amber' : 'green'}>{warning ? 'Needs resources' : m.status}</Badge>
                       </td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>

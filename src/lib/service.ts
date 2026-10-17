@@ -7,6 +7,7 @@ import { banker } from './auth';
 import { extractEmail, extractionSchema, newEmailContent, generateDraft } from './extraction';
 import { availableSlots, evaluate, isAvailable, overlaps, validateInterval } from './scheduling';
 import { SimulatedOutlook } from './outlook';
+import { getResourceState, handleResourceCommand } from './resource-service';
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 async function audit(
@@ -561,6 +562,26 @@ export async function command(user: User, type: string, input: unknown): Promise
                 sourceEmailId: proposal.emailId,
               },
             });
+            await tx.meetingCoverageAssignment.updateMany({
+              where: { meetingId: m.id },
+              data: { assignmentStatus: 'Needs Review' },
+            });
+            await tx.meetingCubeAssignment.updateMany({
+              where: { meetingId: m.id },
+              data: { assignmentStatus: 'Needs Review' },
+            });
+            await tx.action.create({
+              data: {
+                conferenceId: m.conferenceId,
+                issuerId: m.issuerId,
+                investorId: m.investorId,
+                type: 'Resource allocation',
+                title: 'Rescheduled meeting needs resource review',
+                assignedTo: user.id,
+                priority: 'High',
+                recommendation: 'Re-run allocation to revalidate banker coverage and meeting cube availability.',
+              },
+            });
             if (m.requestId)
               await tx.meetingRequest.update({
                 where: { id: m.requestId },
@@ -762,6 +783,8 @@ export async function command(user: User, type: string, input: unknown): Promise
       return updated;
     });
   }
+  const resourceResult = await handleResourceCommand(user, type, input);
+  if (resourceResult !== undefined) return resourceResult;
   throw new Error('Unknown command.');
 }
 async function applyAvailability(
@@ -830,6 +853,7 @@ async function applyAvailability(
   // Confirmed meetings are preserved; refresh() flags gaps after the entire update.
 }
 export async function getState(user: User) {
+  const resourceStatePromise = getResourceState(user);
   const [
     conferences,
     issuers,
@@ -896,6 +920,7 @@ export async function getState(user: User) {
         slots: availableSlots(windows, busy, c.slotMinutes, c.slotMinutes),
       });
     }
+  const resourceState = await resourceStatePromise;
   return {
     user,
     conferences,
@@ -925,6 +950,7 @@ export async function getState(user: User) {
     drafts,
     auditLogs,
     slots,
+    ...resourceState,
     parser: process.env.LLM_API_KEY ? 'Configured LLM' : 'Deterministic mock',
     demo: process.env.DEMO_MODE === 'true',
   };

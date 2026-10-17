@@ -27,6 +27,7 @@
     "exceljs": "^4.4.0",
     "lucide-react": "^0.468.0",
     "next": "^15.5.7",
+    "pdfkit": "^0.20.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "tailwind-merge": "^3.0.0",
@@ -35,6 +36,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.9",
     "@types/node": "^22.13.0",
+    "@types/pdfkit": "^0.17.6",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "embedded-postgres": "^18.1.0-beta.16",

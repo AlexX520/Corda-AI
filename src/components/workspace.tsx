@@ -8,6 +8,7 @@ import {
   ArrowUpRight,
   Bell,
   Building2,
+  Boxes,
   CalendarDays,
   Check,
   CheckCheck,
@@ -41,13 +42,15 @@ import { Avatar, Badge, Empty, Field, fmt, names, Run } from './shared';
 import { EmailForm, RequestForm } from './forms';
 import { DraftEditor, EmailReview } from './review';
 import { AvailabilityView, PlannerView, RequestsView } from './views';
+import { ResourceAllocationView } from './resources';
 const menu = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'inbox', label: 'AI Inbox', icon: Inbox },
   { id: 'queue', label: 'Action queue', icon: CheckCheck },
   { id: 'availability', label: 'Issuer availability', icon: Clock3 },
   { id: 'requests', label: 'Meeting requests', icon: Users },
-  { id: 'planner', label: 'Conference planner', icon: CalendarDays },
+  { id: 'resources', label: 'Coverage & resources', icon: Boxes },
+  { id: 'planner', label: 'Master schedule', icon: CalendarDays },
 ];
 export function Workspace() {
   const [data, setData] = useState<AppState | null>(null),
@@ -213,7 +216,7 @@ export function Workspace() {
         <div className="nav-label">WORKSPACE</div>
         <nav>
           {menu
-            .filter((m) => banker || !['inbox', 'queue'].includes(m.id))
+            .filter((m) => banker || !['inbox', 'queue', 'resources'].includes(m.id))
             .map((m) => (
               <button
                 key={m.id}
@@ -701,6 +704,14 @@ export function Workspace() {
               data={data}
               conferenceId={conferenceId}
               search={search}
+            />
+          )}
+          {page === 'resources' && banker && (
+            <ResourceAllocationView
+              key={conferenceId}
+              data={data}
+              conferenceId={conferenceId}
+              run={run}
             />
           )}
           {page === 'drafts' && (
