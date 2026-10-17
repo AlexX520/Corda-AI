@@ -2004,6 +2004,26 @@ td small {
   width: 100%;
   cursor: pointer;
 }
+.outlook-drop {
+  min-height: 92px;
+  border-width: 1.5px;
+  background: #f9fbf7;
+  color: #577664;
+  transition: border-color .15s, background .15s, transform .15s;
+}
+.outlook-drop > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+}
+.outlook-drop strong { color: #355846; font-size: 11px; font-weight: 600; }
+.outlook-drop small { color: #8d9b8f; font-size: 9px; }
+.outlook-drop.dragging {
+  border-color: #4e8069;
+  background: #edf5ef;
+  transform: scale(.995);
+}
 .error {
   color: #ba786e;
   font-size: 11px;

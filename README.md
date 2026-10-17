@@ -75,7 +75,7 @@ Seed: ABS East 2026 (October 19–21, America/New_York), a second conference in 
 ## Implemented capabilities
 
 - Banker and Sales workspaces with server-enforced role restrictions, signed HttpOnly demo sessions, and per-salesperson record access.
-- Simulated Outlook inbox; pasted emails; JSON and XLSX email imports; unique message-ID deduplication; thread metadata; conference, issuer, category, and status filters.
+- Simulated Outlook inbox; pasted emails; drag-and-drop `.eml` and `.msg` Outlook files; JSON and XLSX batch imports; unique message-ID deduplication; thread metadata; conference, issuer, category, and status filters.
 - Deterministic mock extraction and optional OpenAI-compatible JSON extraction. Both use Zod validation. Quoted replies are removed before extraction. Uncertain associations are left unassigned. Exact source evidence accompanies windows.
 - Review cards with original email, proposed values, current availability, overlap information, uncertainty, and an auditable structured JSON editor. Approve, edit, reject, or request clarification.
 - Availability add/remove/replace, blocked windows, tentative holds, hold release, source references, coverage owners, calendar cards, and remaining slots. Replacement requires explicit confirmation. Confirmed meetings survive removal or replacement, with an urgent conflict action if left outside availability.
@@ -89,13 +89,13 @@ Seed: ABS East 2026 (October 19–21, America/New_York), a second conference in 
 
 ## Email import format
 
-Use `samples/emails.json` or `samples/emails.xlsx` from **Action Queue → Email reviews → Add email**. The workbook's first row contains:
+Drag Outlook `.eml` or `.msg` files onto **Action Queue → Email reviews → Add email**, or use `samples/emails.json` / `samples/emails.xlsx` for batch imports. Outlook attachments are ignored; only message headers, recipients, subject, and body enter the review workflow. The workbook's first row contains:
 
 ```text
 messageId | threadId | sender | to | cc | subject | body
 ```
 
-JSON uses arrays for `to` and `cc`; Excel uses comma-separated email addresses. Optional `conferenceId` / `issuerId` hints explicitly associate a synthetic message. Each row is processed independently and reports success or failure. Limits: 2 MB, 100 emails per import. Reimporting the same message ID is rejected. Imported emails still require review before schedule changes.
+JSON uses arrays for `to` and `cc`; Excel uses comma-separated email addresses. Optional `conferenceId` / `issuerId` hints explicitly associate a synthetic message. Each row is processed independently and reports success or failure. Limits: 10 MB per file, 100 emails per JSON/XLSX import. Reimporting the same message ID is rejected. Imported emails still require review before schedule changes.
 
 Excel planner files are exports, not round-trip database imports. The MVP imports email workbooks rather than silently treating unreviewed planner rows as approved meetings.
 

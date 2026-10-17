@@ -194,13 +194,44 @@ export function EmailForm({
     [messageId, setMessageId] = useState(`synthetic-${Date.now()}`),
     [threadId, setThreadId] = useState('thread-bayview-availability'),
     [busy, setBusy] = useState(false),
-    [result, setResult] = useState('');
+    [result, setResult] = useState(''),
+    [dragging, setDragging] = useState(false);
+  async function importFiles(files: File[]) {
+    if (!files.length) return;
+    setBusy(true);
+    setResult('');
+    let imported = 0;
+    const errors: string[] = [];
+    for (const file of files) {
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const response = await fetch('/api/import', { method: 'POST', body: form });
+        const json = await response.json();
+        if (!response.ok || json.error) {
+          errors.push(`${file.name}: ${json.error || 'Import failed'}`);
+          continue;
+        }
+        imported += json.results.filter((item: { ok: boolean }) => item.ok).length;
+        errors.push(
+          ...json.results
+            .filter((item: { ok: boolean }) => !item.ok)
+            .map((item: { error: string }) => `${file.name}: ${item.error}`),
+        );
+      } catch {
+        errors.push(`${file.name}: Import failed`);
+      }
+    }
+    setResult(`${imported} email${imported === 1 ? '' : 's'} imported.${errors.length ? ` ${errors.join(' ')}` : ''}`);
+    await reload();
+    setBusy(false);
+  }
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => !v && close()}
       title="Add to AI Inbox"
-      description="Paste a synthetic email or import a JSON / Excel email file. No Outlook connection needed."
+      description="Paste a sample or drop Outlook email files. No Outlook connection needed."
     >
       <form
         className="form-grid"
@@ -269,36 +300,34 @@ export function EmailForm({
           <Sparkles size={16} />
           {busy ? 'Analyzing…' : 'Analyze email'}
         </Button>
-        <div className="divider-label">or import emails</div>
-        <label className="upload">
+        <div className="divider-label">or drag from Outlook</div>
+        <label
+          className={`upload outlook-drop ${dragging ? 'dragging' : ''}`}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            setDragging(true);
+          }}
+          onDragOver={(event) => event.preventDefault()}
+          onDragLeave={(event) => {
+            event.preventDefault();
+            if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false);
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            setDragging(false);
+            void importFiles(Array.from(event.dataTransfer.files));
+          }}
+        >
           <Upload size={17} />
-          <span>Choose .json or .xlsx file</span>
+          <span><strong>Drop Outlook emails here</strong><small>.eml, .msg, .json, or .xlsx</small></span>
           <input
             type="file"
-            accept=".json,.xlsx"
+            accept=".eml,.msg,.json,.xlsx"
+            multiple
             disabled={busy}
             onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              setBusy(true);
-              const form = new FormData();
-              form.append('file', file);
-              try {
-                const r = await fetch('/api/import', { method: 'POST', body: form }),
-                  j = await r.json();
-                setResult(
-                  j.error ||
-                    `${j.results.filter((r: { ok: boolean }) => r.ok).length} imported. ${j.results
-                      .filter((r: { ok: boolean }) => !r.ok)
-                      .map((r: { row: number; error: string }) => `Row ${r.row}: ${r.error}`)
-                      .join(' ')}`,
-                );
-                await reload();
-              } catch {
-                setResult('Import failed.');
-              } finally {
-                setBusy(false);
-              }
+              await importFiles(Array.from(e.target.files || []));
+              e.target.value = '';
             }}
           />
         </label>

@@ -16,6 +16,7 @@
     "test:integration": "RUN_INTEGRATION=true node --import tsx --test tests/integration.test.ts"
   },
   "dependencies": {
+    "@kenjiuno/msgreader": "^1.28.0",
     "@prisma/client": "6.19.0",
     "@radix-ui/react-dialog": "^1.1.6",
     "@radix-ui/react-slot": "^1.1.2",
@@ -26,6 +27,7 @@
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
     "lucide-react": "^0.468.0",
+    "mailparser": "^3.9.38",
     "next": "^15.5.7",
     "pdfkit": "^0.20.2",
     "react": "^19.1.0",
@@ -35,6 +37,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.9",
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^22.13.0",
     "@types/pdfkit": "^0.17.6",
     "@types/react": "^19.0.8",
