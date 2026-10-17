@@ -358,17 +358,13 @@ export function Workspace() {
               Live workspace
             </div>
           </div>
-          {page === 'queue' && banker && (
-            <div className="workspace-subnav" aria-label="Action queue sections">
-              <button className={queueSection === 'tasks' ? 'active' : ''} onClick={() => setQueueSection('tasks')}>
-                Decisions <span>{openActions.length}</span>
+          {page === 'queue' && banker && queueSection !== 'tasks' && (
+            <div className="queue-backbar" aria-label="Action queue navigation">
+              <button onClick={() => setQueueSection('tasks')}>
+                <ChevronRight size={14} /> Back to action queue
               </button>
-              <button className={queueSection === 'emails' ? 'active' : ''} onClick={() => setQueueSection('emails')}>
-                Email reviews <span>{pendingEmails.length}</span>
-              </button>
-              <button className={queueSection === 'drafts' ? 'active' : ''} onClick={() => setQueueSection('drafts')}>
-                Drafts <span>{data.drafts.filter((d) => d.status === 'Draft').length}</span>
-              </button>
+              <span>/</span>
+              <strong>{queueSection === 'emails' ? 'Email reviews' : 'Draft communications'}</strong>
             </div>
           )}
           {page === 'schedule' && banker && (
@@ -693,6 +689,8 @@ export function Workspace() {
               search={search}
               onClick={actionClick}
               run={run}
+              onOpenEmails={() => setQueueSection('emails')}
+              onOpenDrafts={() => setQueueSection('drafts')}
             />
           )}
           {page === 'requests' && (
@@ -1138,113 +1136,172 @@ function QueueView({
   search,
   onClick,
   run,
+  onOpenEmails,
+  onOpenDrafts,
 }: {
   data: AppState;
   conferenceId: string;
   search: string;
   onClick: (a: AppState['actions'][number]) => void;
   run: Run;
+  onOpenEmails: () => void;
+  onOpenDrafts: () => void;
 }) {
   const [status, setStatus] = useState('Open');
+  const [focus, setFocus] = useState<'all' | 'priority' | 'requests' | 'email'>('all');
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const n = names(data);
+  const conference = data.conferences.find((item) => item.id === conferenceId)!;
+  const emailCount = data.emails.filter(
+    (email) => email.conferenceId === conferenceId && email.status === 'Pending review',
+  ).length;
+  const draftCount = data.drafts.filter((draft) => draft.status === 'Draft').length;
   const actions = data.actions
     .filter(
       (a) =>
         (a.conferenceId === conferenceId || !a.conferenceId) &&
         (status === 'All' || a.status === status) &&
+        (focus === 'all' ||
+          (focus === 'priority' && ['Urgent', 'High'].includes(a.priority)) ||
+          (focus === 'requests' && (a.requestId || /request|alternative/i.test(a.type))) ||
+          (focus === 'email' && Boolean(a.emailId))) &&
         `${a.title} ${a.recommendation}`.toLowerCase().includes(search.toLowerCase()),
     )
     .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+  const openForConference = data.actions.filter(
+    (a) => (a.conferenceId === conferenceId || !a.conferenceId) && a.status === 'Open',
+  );
+  const priorityCount = openForConference.filter((a) => ['Urgent', 'High'].includes(a.priority)).length;
+  const requestCount = openForConference.filter(
+    (a) => a.requestId || /request|alternative/i.test(a.type),
+  ).length;
+  const primaryLabel = (a: AppState['actions'][number]) => {
+    if (a.type === 'Resource allocation') return 'Review allocation';
+    if (a.requestId || /request|alternative/i.test(a.type)) return 'Review request';
+    if (a.emailId) return 'Review update';
+    return 'Review';
+  };
   return (
     <>
-      <div className="page-heading">
+      <div className="page-heading action-queue-heading">
         <div>
-          <div className="section-eyebrow">MAKE THE NEXT RIGHT MOVE</div>
-          <h1>Action queue</h1>
-          <p>Prioritized decisions that keep your conference moving forward.</p>
+          <div className="section-eyebrow">YOUR DECISIONS</div>
+          <h1>
+            Action queue <span className="queue-heading-count">{openForConference.length}</span>
+          </h1>
+          <p>Only the items that need your judgment.</p>
         </div>
-        <select
-          className="compact-select"
-          value={status}
-          onChange={(e) => setStatus(e.target.value)}
-        >
-          {['Open', 'Resolved', 'Rejected', 'All'].map((s) => (
-            <option key={s}>{s}</option>
-          ))}
-        </select>
+        <div className="queue-secondary-links">
+          <button onClick={onOpenEmails}>
+            <Mail size={15} /> Email reviews <span>{emailCount}</span>
+          </button>
+          <button onClick={onOpenDrafts}>
+            <FileSpreadsheet size={15} /> Drafts <span>{draftCount}</span>
+          </button>
+        </div>
       </div>
-      <div className="queue-cards">
-        {actions.map((a) => (
-          <div className="panel queue-card" key={a.id}>
-            <div className="flex items-center gap-2">
-              <Badge>{a.priority}</Badge>
-              <span className="muted">{a.type}</span>
-              <Badge>{a.status}</Badge>
-            </div>
-            <h3>{a.title}</h3>
-            <p>{a.recommendation}</p>
-            <div className="queue-card-footer">
-              <select
-                aria-label={`Assign ${a.title}`}
-                value={a.assignedTo || ''}
-                onChange={(e) =>
-                  run(
-                    'action',
-                    { id: a.id, assignedTo: e.target.value || null },
-                    'Coverage assignment updated',
-                  )
-                }
-              >
-                <option value="">Unassigned</option>
-                {data.users
-                  .filter((u) => u.role === 'BANKER')
-                  .map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-              </select>
-              <span>{fmt(a.createdAt, undefined, 'MMM d')}</span>
-              <div className="flex gap-2">
-                {a.status === 'Open' && (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        run('action', { id: a.id, status: 'Rejected' }, 'Action rejected')
-                      }
+      <div className="decision-summary">
+        <div className={priorityCount ? 'attention' : ''}>
+          <strong>{priorityCount}</strong>
+          <span>Priority decisions</span>
+        </div>
+        <div>
+          <strong>{requestCount}</strong>
+          <span>Investor requests</span>
+        </div>
+        <div>
+          <strong>{emailCount}</strong>
+          <span>Email updates</span>
+        </div>
+        <p><ShieldCheck size={14} /> No schedule changes without your approval</p>
+      </div>
+      <div className="panel decision-panel">
+        <div className="decision-toolbar">
+          <div className="decision-filters" aria-label="Filter action queue">
+            {([
+              ['all', 'All', openForConference.length],
+              ['priority', 'Priority', priorityCount],
+              ['requests', 'Requests', requestCount],
+              ['email', 'Email updates', emailCount],
+            ] as const).map(([id, label, count]) => (
+              <button key={id} className={focus === id ? 'active' : ''} onClick={() => setFocus(id)}>
+                {label} <span>{count}</span>
+              </button>
+            ))}
+          </div>
+          <select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>
+            {['Open', 'Resolved', 'Rejected', 'All'].map((s) => <option key={s}>{s}</option>)}
+          </select>
+        </div>
+        <div className="decision-list">
+          {actions.map((a) => {
+            const request = data.requests.find((item) => item.id === a.requestId);
+            const issuer = n.issuer(a.issuerId);
+            const investor = n.investor(a.investorId);
+            const isPriority = ['Urgent', 'High'].includes(a.priority);
+            return (
+              <div className={`decision-row ${isPriority ? 'is-priority' : ''}`} key={a.id}>
+                <span className="decision-priority-mark" />
+                <div className="decision-main">
+                  <div className="decision-kicker">
+                    {isPriority && <strong>{a.priority}</strong>}
+                    <span>{a.type}</span>
+                  </div>
+                  <h3>
+                    {issuer === 'Unassociated' ? a.title : issuer}
+                    {issuer !== 'Unassociated' && investor !== '—' && <><i>with</i>{investor}</>}
+                  </h3>
+                  <p>{a.recommendation}</p>
+                  <div className="decision-meta">
+                    {request && <span><Clock3 size={12} /> {fmt(request.start, conference.timezone, 'EEE, h:mm a')}</span>}
+                    <span>{n.user(a.assignedTo)}</span>
+                    <span>{fmt(a.createdAt, undefined, 'MMM d')}</span>
+                  </div>
+                </div>
+                <div className="decision-primary-action">
+                  <Button size="sm" onClick={() => onClick(a)}>
+                    {primaryLabel(a)} <ArrowRight size={13} />
+                  </Button>
+                  <button
+                    className="decision-more"
+                    aria-label={`More options for ${a.title}`}
+                    aria-expanded={expanded === a.id}
+                    onClick={() => setExpanded(expanded === a.id ? null : a.id)}
+                  >
+                    <MoreHorizontal size={17} />
+                  </button>
+                </div>
+                {expanded === a.id && (
+                  <div className="decision-details">
+                    <span>Owner</span>
+                    <select
+                      aria-label={`Assign ${a.title}`}
+                      value={a.assignedTo || ''}
+                      onChange={(e) => run('action', { id: a.id, assignedTo: e.target.value || null }, 'Coverage assignment updated')}
                     >
-                      Reject
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        run(
-                          'action',
-                          { id: a.id, status: 'Resolved' },
-                          'Action resolved. No schedule change applied.',
-                        )
-                      }
-                    >
-                      Resolve
-                    </Button>
-                  </>
+                      <option value="">Unassigned</option>
+                      {data.users.filter((u) => u.role === 'BANKER').map((u) => (
+                        <option key={u.id} value={u.id}>{u.name}</option>
+                      ))}
+                    </select>
+                    <div />
+                    {a.status === 'Open' && (
+                      <>
+                        <Button size="sm" variant="ghost" onClick={() => run('action', { id: a.id, status: 'Rejected' }, 'Action rejected')}>Reject</Button>
+                        <Button size="sm" variant="outline" onClick={() => run('action', { id: a.id, status: 'Resolved' }, 'Action resolved. No schedule change applied.')}>Mark resolved</Button>
+                      </>
+                    )}
+                  </div>
                 )}
-                <Button size="sm" onClick={() => onClick(a)}>
-                  Review <ArrowRight size={13} />
-                </Button>
               </div>
-            </div>
-          </div>
-        ))}
+            );
+          })}
+        </div>
         {!actions.length && (
-          <div className="panel">
-            <Empty
-              title="Nothing waiting on you"
-              description="New proposals and investor requests will appear here automatically."
-            />
-          </div>
+          <Empty
+            title="Nothing waiting on you"
+            description="New proposals and investor requests will appear here automatically."
+          />
         )}
       </div>
     </>
