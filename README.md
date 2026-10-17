@@ -1,4 +1,4 @@
-# ConferenceOS
+# Corda AI
 
 A working local MVP for capital-markets conference coordination. Next.js App Router + TypeScript, Tailwind CSS, shadcn-style Radix components, PostgreSQL, Prisma, Zod, date-fns/date-fns-tz, and ExcelJS.
 

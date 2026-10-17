@@ -16,7 +16,6 @@ import {
   ChevronsUpDown,
   CircleHelp,
   Clock3,
-  Command,
   FileSpreadsheet,
   LayoutDashboard,
   Leaf,
@@ -47,6 +46,18 @@ const menu = [
   { id: 'requests', label: 'Meeting requests', icon: Users },
   { id: 'schedule', label: 'Schedule & allocation', icon: CalendarDays },
 ];
+function CordaMark() {
+  return (
+    <div className="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M22.5 9.1a9.4 9.4 0 1 0 0 13.8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+        <path d="M19.3 12.1a5.4 5.4 0 1 0 0 7.8" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" opacity=".7" />
+        <circle cx="23.1" cy="9.1" r="2.15" fill="currentColor" />
+        <circle cx="23.1" cy="22.9" r="2.15" fill="currentColor" opacity=".7" />
+      </svg>
+    </div>
+  );
+}
 export function Workspace() {
   const [data, setData] = useState<AppState | null>(null),
     [page, setPage] = useState('overview'),
@@ -162,10 +173,8 @@ export function Workspace() {
   if (!data)
     return (
       <main className="loading-screen">
-        <div className="brand-mark">
-          <Command size={26} />
-        </div>
-        <h1>ConferenceOS</h1>
+        <CordaMark />
+        <h1>Corda AI</h1>
         {error ? (
           <>
             <p>{error}</p>
@@ -208,12 +217,8 @@ export function Workspace() {
           }}
           className="brand"
         >
-          <div className="brand-mark">
-            <Command size={23} strokeWidth={1.6} />
-          </div>
-          <span>
-            Conference<span className="brand-os">OS</span>
-          </span>
+          <CordaMark />
+          <span>Corda <span className="brand-ai">AI</span></span>
         </a>
         <div className="workspace-label">
           <div className="workspace-icon">
@@ -790,7 +795,7 @@ export function Workspace() {
               Human decisions. Connected workflows.
             </span>
             <span>
-              ConferenceOS <span className="footer-dot">·</span> {c.timezone}
+              Corda AI <span className="footer-dot">·</span> {c.timezone}
             </span>
           </footer>
         </main>
@@ -841,7 +846,7 @@ export function Workspace() {
       <Dialog
         open={help}
         onOpenChange={setHelp}
-        title="Your ConferenceOS workspace"
+        title="Your Corda AI workspace"
         description="A local MVP for investment banking conference coordination."
       >
         <div className="form-grid">

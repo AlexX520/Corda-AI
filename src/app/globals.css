@@ -109,8 +109,16 @@ small {
   background: #214f42;
   box-shadow: 0 2px 4px #214f4212;
 }
-.brand-os {
-  font-weight: 400;
+.brand-mark svg {
+  width: 25px;
+  height: 25px;
+}
+.brand-ai {
+  color: #678477;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.25px;
+  vertical-align: 1px;
 }
 .workspace-label {
   margin-top: 32px;

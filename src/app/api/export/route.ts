@@ -64,7 +64,7 @@ export async function GET(req: Request) {
       const text = [
         'BEGIN:VCALENDAR',
         'VERSION:2.0',
-        'PRODID:-//ConferenceOS//Local MVP//EN',
+        'PRODID:-//Corda AI//Local MVP//EN',
         'BEGIN:VEVENT',
         `UID:${m.id}@conferenceos.local`,
         `DTSTAMP:${utc(m.updatedAt)}`,
@@ -125,7 +125,7 @@ export async function GET(req: Request) {
       return new Response(new Uint8Array(pdf), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="conferenceos-${scope}-schedule.pdf"`, 'Cache-Control': 'no-store' } });
     }
     const wb = new ExcelJS.Workbook();
-    wb.creator = 'ConferenceOS';
+    wb.creator = 'Corda AI';
     const sheet = wb.addWorksheet('Conference Planner');
     sheet.columns = [
       { header: 'Conference', key: 'conference', width: 25 },
