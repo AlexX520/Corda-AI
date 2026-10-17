@@ -1015,6 +1015,39 @@ td small {
   border-bottom: 1px solid #e9ede3;
   gap: 12px;
 }
+.workspace-subnav {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  margin: 24px 0 2px;
+  border: 1px solid #e1e6dd;
+  border-radius: 8px;
+  background: #eef1eb;
+}
+.workspace-subnav button {
+  min-height: 31px;
+  padding: 0 12px;
+  border-radius: 6px;
+  color: #778378;
+  font-size: 10px;
+}
+.workspace-subnav button:hover { color: #445d4c; }
+.workspace-subnav button.active {
+  background: #fff;
+  color: #315944;
+  font-weight: 600;
+  box-shadow: 0 1px 3px #233b2710;
+}
+.workspace-subnav button span {
+  margin-left: 5px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: #e5ebe1;
+  color: #71806e;
+  font-size: 8px;
+}
+.workspace-subnav + .page-heading { margin-top: 20px; }
 .compact-select {
   font-size: 11px !important;
   border: 1px solid #e1e6d9 !important;

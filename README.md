@@ -63,13 +63,13 @@ Seed: ABS East 2026 (October 19–21, America/New_York), a second conference in 
 
 ## Try the full workflow
 
-1. **AI Inbox → Bayview updated availability.** Monday 3–5 PM is extracted. Tuesday morning stays unresolved. The PIMCO 3–3:30 PM booking is shown separately and preserved. Approving without resolving uncertainty fails. Request clarification to prepare a local draft without changing availability.
-2. **AI Inbox → Athene Tuesday availability.** Review and approve the explicit window. The change persists; available slots and affected requests recalculate.
+1. **Action Queue → Email reviews → Bayview updated availability.** Monday 3–5 PM is extracted. Tuesday morning stays unresolved. The PIMCO 3–3:30 PM booking is shown separately and preserved. Approving without resolving uncertainty fails. Request clarification to prepare a local draft without changing availability.
+2. **Action Queue → Email reviews → Athene Tuesday availability.** Review and approve the explicit window. The change persists; available slots and affected requests recalculate.
 3. **Sales profile → Request tracker → Bayview / Ford Credit.** The requested time conflicts with PIMCO. Choose a computed alternative. The request becomes _Awaiting Banker Approval_, never _Confirmed_ automatically.
 4. **Banker profile → Meeting requests.** Review the new time, enter a room, attest issuer consent, and confirm. A meeting is created, the planner updates, and a confirmation draft is prepared atomically.
-5. **Communications.** Review suggested contacts, deliberately select recipients, edit the draft, inspect the meeting-only attachment, and approve simulated delivery. Historical participants are never automatically included. Nothing is sent externally.
-6. **Coverage & resources.** Submit issuer preferences and banker availability, run the deterministic allocator, review exceptions, edit incomplete assignments, and approve valid banker/cube allocations. Locked assignments survive later optimization runs.
-7. **Master schedule.** Switch calendar/table views and filter by banker, issuer, investor, or meeting cube. Download role-authorized Excel or PDF schedules. Meeting details also offer `.ics` calendar downloads.
+5. **Action Queue → Drafts.** Review suggested contacts, deliberately select recipients, edit the draft, inspect the meeting-only attachment, and approve simulated delivery. Historical participants are never automatically included. Nothing is sent externally.
+6. **Schedule & allocation → Coverage & resources.** Submit issuer preferences and banker availability, run the deterministic allocator, review exceptions, edit incomplete assignments, and approve valid banker/cube allocations. Locked assignments survive later optimization runs.
+7. **Schedule & allocation → Schedules.** Switch calendar/table views and filter by banker, issuer, investor, or meeting cube. Banker schedules use an Outlook-style conference week. Download role-authorized Excel or PDF schedules. Meeting details also offer `.ics` calendar downloads.
 8. **Audit trail.** Inspect before/after state for approved changes, allocation runs, and simulated deliveries.
 
 ## Implemented capabilities
@@ -89,7 +89,7 @@ Seed: ABS East 2026 (October 19–21, America/New_York), a second conference in 
 
 ## Email import format
 
-Use `samples/emails.json` or `samples/emails.xlsx` from **AI Inbox → Add email**. The workbook's first row contains:
+Use `samples/emails.json` or `samples/emails.xlsx` from **Action Queue → Email reviews → Add email**. The workbook's first row contains:
 
 ```text
 messageId | threadId | sender | to | cc | subject | body

@@ -8,7 +8,6 @@ import {
   ArrowUpRight,
   Bell,
   Building2,
-  Boxes,
   CalendarDays,
   Check,
   CheckCheck,
@@ -19,7 +18,6 @@ import {
   Clock3,
   Command,
   FileSpreadsheet,
-  Inbox,
   LayoutDashboard,
   Leaf,
   Loader2,
@@ -28,7 +26,6 @@ import {
   MoreHorizontal,
   Plus,
   Search,
-  Send,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
@@ -45,12 +42,10 @@ import { AvailabilityView, PlannerView, RequestsView } from './views';
 import { ResourceAllocationView } from './resources';
 const menu = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'inbox', label: 'AI Inbox', icon: Inbox },
   { id: 'queue', label: 'Action queue', icon: CheckCheck },
   { id: 'availability', label: 'Issuer availability', icon: Clock3 },
   { id: 'requests', label: 'Meeting requests', icon: Users },
-  { id: 'resources', label: 'Coverage & resources', icon: Boxes },
-  { id: 'planner', label: 'Master schedule', icon: CalendarDays },
+  { id: 'schedule', label: 'Schedule & allocation', icon: CalendarDays },
 ];
 export function Workspace() {
   const [data, setData] = useState<AppState | null>(null),
@@ -63,6 +58,8 @@ export function Workspace() {
     [requestOpen, setRequestOpen] = useState(false),
     [reviewId, setReviewId] = useState<string | null>(null),
     [draftId, setDraftId] = useState<string | null>(null),
+    [queueSection, setQueueSection] = useState<'tasks' | 'emails' | 'drafts'>('tasks'),
+    [scheduleSection, setScheduleSection] = useState<'schedule' | 'allocation'>('schedule'),
     [help, setHelp] = useState(false),
     [busy, setBusy] = useState(false),
     [mobile, setMobile] = useState(false);
@@ -128,7 +125,21 @@ export function Workspace() {
     }
   };
   function navigate(id: string) {
-    setPage(id);
+    if (id === 'inbox') {
+      setPage('queue');
+      setQueueSection('emails');
+    } else if (id === 'drafts') {
+      setPage('queue');
+      setQueueSection('drafts');
+    } else if (id === 'planner') {
+      setPage('schedule');
+      setScheduleSection('schedule');
+    } else if (id === 'resources') {
+      setPage('schedule');
+      setScheduleSection('allocation');
+    } else {
+      setPage(id);
+    }
     setSearch('');
     setMobile(false);
   }
@@ -183,6 +194,7 @@ export function Workspace() {
   function actionClick(a: AppState['actions'][number]) {
     if (a.emailId) setReviewId(a.emailId);
     else if (a.requestId) navigate('requests');
+    else if (a.type === 'Resource allocation') navigate('resources');
     else navigate('availability');
   }
   return (
@@ -216,7 +228,7 @@ export function Workspace() {
         <div className="nav-label">WORKSPACE</div>
         <nav>
           {menu
-            .filter((m) => banker || !['inbox', 'queue', 'resources'].includes(m.id))
+            .filter((m) => banker || m.id !== 'queue')
             .map((m) => (
               <button
                 key={m.id}
@@ -225,35 +237,12 @@ export function Workspace() {
               >
                 <m.icon size={18} strokeWidth={1.7} />
                 <span>{!banker && m.id === 'requests' ? 'Request tracker' : m.label}</span>
-                {m.id === 'inbox' && pendingEmails.length > 0 && <b>{pendingEmails.length}</b>}
                 {m.id === 'queue' && openActions.length > 0 && (
                   <span className="nav-count">{openActions.length}</span>
                 )}
               </button>
             ))}
         </nav>
-        <div className="nav-label second">COORDINATION</div>
-        <button
-          className={`nav-item ${page === 'drafts' ? 'active' : ''}`}
-          onClick={() => navigate('drafts')}
-        >
-          <Send size={18} strokeWidth={1.7} />
-          <span>Communications</span>
-          {data.drafts.filter((d) => d.status === 'Draft').length > 0 && (
-            <span className="nav-count">
-              {data.drafts.filter((d) => d.status === 'Draft').length}
-            </span>
-          )}
-        </button>
-        {banker && (
-          <button
-            className={`nav-item ${page === 'audit' ? 'active' : ''}`}
-            onClick={() => navigate('audit')}
-          >
-            <ShieldCheck size={18} strokeWidth={1.7} />
-            <span>Audit trail</span>
-          </button>
-        )}
         <div className="sidebar-bottom">
           <div className="ai-status">
             <div>
@@ -271,6 +260,15 @@ export function Workspace() {
             <CircleHelp size={18} />
             <span>Help & workspace info</span>
           </button>
+          {banker && (
+            <button
+              className={`nav-item ${page === 'audit' ? 'active' : ''}`}
+              onClick={() => navigate('audit')}
+            >
+              <ShieldCheck size={18} strokeWidth={1.7} />
+              <span>Audit trail</span>
+            </button>
+          )}
           <div className="profile">
             <Avatar name={data.user.name} color="#436b5e" />
             <div>
@@ -303,8 +301,7 @@ export function Workspace() {
             <span>{banker ? 'Banker workspace' : 'Sales workspace'}</span>
             <ChevronRight size={13} />
             <strong>
-              {menu.find((m) => m.id === page)?.label ||
-                { drafts: 'Communications', audit: 'Audit trail' }[page]}
+              {menu.find((m) => m.id === page)?.label || { audit: 'Audit trail' }[page]}
             </strong>
           </div>
           <div className="topbar-right">
@@ -361,6 +358,25 @@ export function Workspace() {
               Live workspace
             </div>
           </div>
+          {page === 'queue' && banker && (
+            <div className="workspace-subnav" aria-label="Action queue sections">
+              <button className={queueSection === 'tasks' ? 'active' : ''} onClick={() => setQueueSection('tasks')}>
+                Decisions <span>{openActions.length}</span>
+              </button>
+              <button className={queueSection === 'emails' ? 'active' : ''} onClick={() => setQueueSection('emails')}>
+                Email reviews <span>{pendingEmails.length}</span>
+              </button>
+              <button className={queueSection === 'drafts' ? 'active' : ''} onClick={() => setQueueSection('drafts')}>
+                Drafts <span>{data.drafts.filter((d) => d.status === 'Draft').length}</span>
+              </button>
+            </div>
+          )}
+          {page === 'schedule' && banker && (
+            <div className="workspace-subnav" aria-label="Schedule and allocation sections">
+              <button className={scheduleSection === 'schedule' ? 'active' : ''} onClick={() => setScheduleSection('schedule')}>Schedules</button>
+              <button className={scheduleSection === 'allocation' ? 'active' : ''} onClick={() => setScheduleSection('allocation')}>Coverage & resources</button>
+            </div>
+          )}
           {page === 'overview' && (
             <>
               <div className="page-heading overview-heading">
@@ -446,7 +462,7 @@ export function Workspace() {
                     </p>
                   </div>
                   <button onClick={() => navigate('inbox')}>
-                    Review AI Inbox <ArrowRight size={16} />
+                    Review email updates <ArrowRight size={16} />
                   </button>
                   <div className="banner-orbits" />
                 </div>
@@ -661,7 +677,7 @@ export function Workspace() {
               </div>
             </>
           )}
-          {page === 'inbox' && (
+          {page === 'queue' && queueSection === 'emails' && (
             <InboxView
               data={data}
               conferenceId={conferenceId}
@@ -670,7 +686,7 @@ export function Workspace() {
               onAdd={() => setEmailOpen(true)}
             />
           )}
-          {page === 'queue' && (
+          {page === 'queue' && queueSection === 'tasks' && (
             <QueueView
               data={data}
               conferenceId={conferenceId}
@@ -698,7 +714,7 @@ export function Workspace() {
               onEmail={setReviewId}
             />
           )}
-          {page === 'planner' && (
+          {page === 'schedule' && scheduleSection === 'schedule' && (
             <PlannerView
               key={conferenceId}
               data={data}
@@ -706,7 +722,7 @@ export function Workspace() {
               search={search}
             />
           )}
-          {page === 'resources' && banker && (
+          {page === 'schedule' && scheduleSection === 'allocation' && banker && (
             <ResourceAllocationView
               key={conferenceId}
               data={data}
@@ -714,13 +730,13 @@ export function Workspace() {
               run={run}
             />
           )}
-          {page === 'drafts' && (
+          {page === 'queue' && queueSection === 'drafts' && (
             <>
               <div className="page-heading">
                 <div>
                   <div className="section-eyebrow">REVIEW BEFORE DELIVERY</div>
-                  <h1>Communications</h1>
-                  <p>Drafts prepared from approved meetings and coordination requests.</p>
+                  <h1>Draft communications</h1>
+                  <p>Review drafts created by decisions in this queue.</p>
                 </div>
                 <Badge tone="amber">Simulated sending only</Badge>
               </div>
@@ -1005,9 +1021,9 @@ function InboxView({
     <>
       <div className="page-heading">
         <div>
-          <div className="section-eyebrow">SIGNAL FROM THE INBOX</div>
+          <div className="section-eyebrow">AI-ASSISTED INBOX</div>
           <h1>
-            AI Inbox{' '}
+            Email reviews{' '}
             <span className="heading-pill">
               {data.parser === 'Deterministic mock' ? 'Mock parser' : 'AI assisted'}
             </span>
