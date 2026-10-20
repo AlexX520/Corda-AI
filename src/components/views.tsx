@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatInTimeZone } from 'date-fns-tz';
 import { eachDayOfInterval, parseISO, format } from 'date-fns';
 import type { AppState, RequestItem } from '@/lib/types';
@@ -22,38 +22,84 @@ import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { AvailabilityForm } from './forms';
 import { Avatar, Badge, Empty, Field, fmt, names, Run } from './shared';
+const requestTabs = [
+  {
+    id: 'decide',
+    label: 'Needs decision',
+    statuses: ['Potential Match', 'Awaiting Banker Approval', 'Conflict', 'Alternative Slots Available'],
+  },
+  { id: 'waiting', label: 'Waiting on issuer', statuses: ['Awaiting Issuer Availability'] },
+  { id: 'confirmed', label: 'Confirmed', statuses: ['Confirmed'] },
+  { id: 'cancelled', label: 'Cancelled', statuses: ['Cancelled'] },
+  { id: 'all', label: 'All', statuses: [] as string[] },
+] as const;
+/** Plain-language status so nobody has to decode workflow states. */
+export function requestStatus(r: RequestItem, role: string) {
+  const sales = role === 'SALES';
+  switch (r.status) {
+    case 'Potential Match':
+      return { tone: 'green', text: 'Time is open', hint: sales ? 'Banker to confirm' : 'Ready to confirm' };
+    case 'Awaiting Banker Approval':
+      return { tone: 'green', text: 'Time is open', hint: sales ? 'Banker to confirm' : 'Ready to confirm' };
+    case 'Conflict':
+      return { tone: 'red', text: 'Time is taken', hint: r.alternatives.length ? `${r.alternatives.length} open times` : 'No open times' };
+    case 'Alternative Slots Available':
+      return { tone: 'amber', text: 'Pick another time', hint: `${r.alternatives.length} open times` };
+    case 'Awaiting Issuer Availability':
+      return { tone: 'blue', text: 'Waiting on issuer', hint: 'Availability not in yet' };
+    case 'Confirmed':
+      return { tone: 'green', text: 'Confirmed', hint: '' };
+    case 'Cancelled':
+      return { tone: '', text: 'Cancelled', hint: '' };
+    default:
+      return { tone: '', text: r.status, hint: '' };
+  }
+}
 export function RequestsView({
   data,
   conferenceId,
   search,
   run,
   onNew,
+  onOpen,
 }: {
   data: AppState;
   conferenceId: string;
   search: string;
   run: Run;
   onNew: () => void;
+  onOpen: (id: string) => void;
 }) {
-  const [selected, setSelected] = useState<string | null>(null),
-    [status, setStatus] = useState('All requests');
+  const sales = data.user.role === 'SALES';
+  const [tab, setTab] = useState<(typeof requestTabs)[number]['id']>(sales ? 'all' : 'decide');
   const n = names(data),
     c = data.conferences.find((c) => c.id === conferenceId)!;
-  const requests = data.requests.filter(
+  const base = data.requests.filter(
     (r) =>
       r.conferenceId === conferenceId &&
-      `${n.issuer(r.issuerId)} ${n.investor(r.investorId)} ${r.status}`
-        .toLowerCase()
-        .includes(search.toLowerCase()) &&
-      (status === 'All requests' || r.status === status),
+      `${n.issuer(r.issuerId)} ${n.investor(r.investorId)} ${r.status}`.toLowerCase().includes(search.toLowerCase()),
   );
-  const active = data.requests.find((r) => r.id === selected);
+  const inTab = (id: string, r: RequestItem) => {
+    const t = requestTabs.find((t) => t.id === id)!;
+    return !t.statuses.length || (t.statuses as readonly string[]).includes(r.status);
+  };
+  const requests = base.filter((r) => inTab(tab, r)).sort((x, y) => x.start.localeCompare(y.start));
+  const cta = (r: RequestItem) => {
+    if (sales || ['Confirmed', 'Cancelled'].includes(r.status)) return 'View';
+    if (['Conflict', 'Alternative Slots Available'].includes(r.status)) return 'Pick a time';
+    if (r.status === 'Awaiting Issuer Availability') return 'Email issuer';
+    return 'Confirm';
+  };
   return (
     <>
       <div className="page-heading">
         <div>
-          <h1>{data.user.role === 'SALES' ? 'Your meeting requests' : 'Meeting requests'}</h1>
-          <p>{requests.length} requests</p>
+          <h1>{sales ? 'Your meeting requests' : 'Meeting requests'}</h1>
+          <p>
+            {sales
+              ? 'Type one line and Corda finds the time. Your banker confirms with the issuer.'
+              : `${base.filter((r) => inTab('decide', r)).length} need your decision`}
+          </p>
         </div>
         <Button onClick={onNew}>
           <Plus size={16} />
@@ -61,109 +107,225 @@ export function RequestsView({
         </Button>
       </div>
       <div className="panel">
-        <div className="panel-toolbar">
-          <div className="tab-buttons">
-            <button className="active">
-              Requests <span>{requests.length}</span>
-            </button>
-          </div>
-          <select
-            className="compact-select"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-          >
-            {[
-              'All requests',
-              'Potential Match',
-              'Alternative Slots Available',
-              'Awaiting Issuer Availability',
-              'Awaiting Banker Approval',
-              'Confirmed',
-              'Cancelled',
-              'Conflict',
-            ].map((s) => (
-              <option key={s}>{s}</option>
-            ))}
-          </select>
+        {sales && <QuickRequest data={data} conferenceId={conferenceId} run={run} />}
+        <div className="status-tabs" role="tablist" aria-label="Request status">
+          {requestTabs.map((t) => {
+            const count = base.filter((r) => inTab(t.id, r)).length;
+            return (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={tab === t.id}
+                className={tab === t.id ? 'active' : ''}
+                onClick={() => setTab(t.id)}
+              >
+                {sales && t.id === 'decide' ? 'With banker' : t.label}
+                <span className={`tab-count ${t.id === 'decide' && count && !sales ? 'hot' : ''}`}>{count}</span>
+              </button>
+            );
+          })}
         </div>
         {requests.length ? (
           <div className="table-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Issuer / investor</th>
-                  <th>Preferred time</th>
+                  <th>Investor → issuer</th>
+                  <th>Requested time</th>
                   <th>Status</th>
-                  <th>Coverage banker</th>
+                  <th>{sales ? 'Coverage banker' : 'Requested by'}</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {requests.map((r) => (
-                  <tr className="clickable" key={r.id} onClick={() => setSelected(r.id)}>
-                    <td>
-                      <div className="entity-cell">
-                        <Avatar
-                          name={n.issuer(r.issuerId)}
-                          color={data.issuers.find((i) => i.id === r.issuerId)?.color}
-                        />
-                        <div>
-                          <strong>{n.issuer(r.issuerId)}</strong>
-                          <small>{n.investor(r.investorId)}</small>
+                {requests.map((r) => {
+                  const st = requestStatus(r, data.user.role);
+                  return (
+                    <tr className="clickable" key={r.id} onClick={() => onOpen(r.id)}>
+                      <td>
+                        <div className="entity-cell">
+                          <Avatar
+                            name={n.issuer(r.issuerId)}
+                            color={data.issuers.find((i) => i.id === r.issuerId)?.color}
+                          />
+                          <div>
+                            <strong>{n.investor(r.investorId)}</strong>
+                            <small>with {n.issuer(r.issuerId)}</small>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td>
-                      <strong>{fmt(r.start, c.timezone, 'EEE, MMM d')}</strong>
-                      <small>
-                        {fmt(r.start, c.timezone, 'h:mm a')} – {fmt(r.end, c.timezone, 'h:mm a')}
-                      </small>
-                    </td>
-                    <td>
-                      <Badge>{r.status}</Badge>
-                      {r.alternatives.length > 0 && r.status !== 'Potential Match' && (
-                        <small className="green-text">
-                          {r.alternatives.length} alternative slots
-                        </small>
-                      )}
-                    </td>
-                    <td>{n.user(r.bankerId)}</td>
-                    <td>
-                      <button
-                        aria-label={`Review ${n.issuer(r.issuerId)} request`}
-                        onClick={() => setSelected(r.id)}
-                      >
-                        <ChevronRight size={17} />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td>
+                        <div className="req-when">
+                          <strong>{fmt(r.start, c.timezone, 'EEE, MMM d')}</strong>
+                          <small>
+                            {fmt(r.start, c.timezone, 'h:mm a')} – {fmt(r.end, c.timezone, 'h:mm a')}
+                          </small>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`req-status ${st.tone}`}>
+                          <i />
+                          <span>
+                            {st.text}
+                            {st.hint && <small style={{ display: 'block' }}>{st.hint}</small>}
+                          </span>
+                        </span>
+                      </td>
+                      <td>{n.user(sales ? r.bankerId : r.salespersonId)}</td>
+                      <td>
+                        <div className="req-actions">
+                          <Button
+                            size="sm"
+                            variant={cta(r) === 'View' ? 'ghost' : cta(r) === 'Confirm' ? 'default' : 'outline'}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onOpen(r.id);
+                            }}
+                          >
+                            {cta(r)} <ChevronRight size={13} />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         ) : (
           <Empty
-            title="No requests here yet"
-            description="Submit a meeting request to check approved issuer availability."
+            title={tab === 'decide' ? 'No decisions waiting' : 'Nothing in this tab'}
+            description={
+              sales
+                ? 'Type a request above, e.g. “Ally Financial / Vanguard 2-3pm Tuesday”.'
+                : 'New requests from sales land in “Needs decision”.'
+            }
           />
         )}
         <div className="table-footer">
-          Availability is a potential match, not a confirmation.<span>{c.timezone}</span>
+          An open time is a match, not a confirmation, until the banker confirms.<span>{c.timezone}</span>
         </div>
       </div>
-      {active && (
-        <RequestDetail
-          key={active.id}
-          r={active}
-          data={data}
-          close={() => setSelected(null)}
-          run={run}
+    </>
+  );
+}
+type Parsed = {
+  parsed: {
+    issuerId: string | null;
+    investorId: string | null;
+    date: string | null;
+    windowStart: string | null;
+    windowEnd: string | null;
+    duration: number;
+    missing: string[];
+  };
+  proposal: { start: string; end: string; status: string; alternatives: { start: string; end: string }[] } | null;
+};
+/** One-sentence request entry for sales: "Issuer / Investor 3-4pm Monday". */
+function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceId: string; run: Run }) {
+  const [text, setText] = useState(''),
+    [result, setResult] = useState<Parsed | null>(null),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState('');
+  const n = names(data),
+    c = data.conferences.find((x) => x.id === conferenceId)!;
+  async function check() {
+    if (text.trim().length < 3) return;
+    setBusy(true);
+    setError('');
+    try {
+      const r = await fetch('/api/commands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'parseRequest', data: { text, conferenceId } }),
+      });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error);
+      setResult(out.result);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not read that request');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function submit() {
+    if (!result?.proposal || !result.parsed.issuerId || !result.parsed.investorId) return;
+    setBusy(true);
+    const ok = await run(
+      'request',
+      {
+        conferenceId,
+        issuerId: result.parsed.issuerId,
+        investorId: result.parsed.investorId,
+        start: result.proposal.start,
+        end: result.proposal.end,
+        duration: result.parsed.duration,
+        notes: text,
+      },
+      'Request sent to the coverage banker.',
+    );
+    setBusy(false);
+    if (ok) {
+      setText('');
+      setResult(null);
+    }
+  }
+  const p = result?.parsed;
+  return (
+    <>
+      <form
+        className="quick-request"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void (result?.proposal ? submit() : check());
+        }}
+      >
+        <Search size={15} color="#8a968c" />
+        <input
+          aria-label="Describe the meeting in one line"
+          placeholder="e.g. Ally Financial / Vanguard 2-3pm Tuesday"
+          value={text}
+          onChange={(e) => {
+            setText(e.target.value);
+            setResult(null);
+          }}
         />
+        <Button size="sm" disabled={busy || text.trim().length < 3} type="submit">
+          {result?.proposal ? (
+            <>
+              <Send size={13} /> Send request
+            </>
+          ) : (
+            'Find a time'
+          )}
+        </Button>
+      </form>
+      {(result || error) && (
+        <div className="quick-preview" aria-live="polite">
+          {error && <span className="warn">{error}</span>}
+          {p && (
+            <>
+              <span>
+                Issuer <b>{p.issuerId ? n.issuer(p.issuerId) : '—'}</b>
+              </span>
+              <span>
+                Investor <b>{p.investorId ? n.investor(p.investorId) : '—'}</b>
+              </span>
+              {result?.proposal && (
+                <span>
+                  Best time <b>{fmt(result.proposal.start, c.timezone, 'EEE h:mm a')}</b> ·{' '}
+                  {result.proposal.status === 'Potential Match' ? 'open on both calendars' : result.proposal.status.toLowerCase()}
+                </span>
+              )}
+              {p.missing.length > 0 && <span className="warn">Add: {p.missing.join(', ')}</span>}
+            </>
+          )}
+        </div>
       )}
     </>
   );
 }
-function RequestDetail({
+export function RequestDetail({
   r,
   data,
   close,
@@ -530,7 +692,9 @@ export function PlannerView({
       <div className="page-heading">
         <div>
           <h1>Schedule</h1>
-          <p>{meetings.length} confirmed meetings</p>
+          <p>
+            {meetings.length} confirmed meeting{meetings.length === 1 ? '' : 's'}
+          </p>
         </div>
         <div className="resource-actions">
           <Button variant="outline" asChild><a href={`${exportUrl}&format=pdf`}><Download size={16} />Export PDF</a></Button>
@@ -539,35 +703,50 @@ export function PlannerView({
       </div>
       <div className="panel">
         <div className="panel-toolbar planner-toolbar">
-          <div className="flex gap-2">
-            <select
-              className="compact-select"
-              value={scope}
-              onChange={(e) => {
-                setScope(e.target.value);
-                setAudience(
-                  e.target.value === 'issuer'
-                    ? data.issuers[0].id
-                    : e.target.value === 'investor'
-                      ? data.investors[0].id
-                      : e.target.value === 'banker'
-                        ? (data.user.role === 'BANKER' ? data.user.id : data.users.find((u) => u.role === 'BANKER')?.id) || ''
-                        : e.target.value === 'cube'
-                          ? data.meetingCubes.find((cube) => cube.conferenceId === conferenceId)?.id || ''
-                          : '',
-                );
-                setRecipient('');
-              }}
-            >
-              <option value="master">Master planner · internal</option>
-              {data.user.role === 'BANKER' && <option value="banker">Banker schedule</option>}
-              {data.user.role === 'BANKER' && <option value="cube">Meeting cube schedule</option>}
-              <option value="issuer">Issuer-specific planner</option>
-              <option value="investor">Investor-specific planner</option>
-            </select>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="seg" role="tablist" aria-label="Whose schedule">
+              {(
+                [
+                  ['master', 'Everyone'],
+                  ...(data.user.role === 'BANKER'
+                    ? ([
+                        ['banker', 'Banker'],
+                        ['cube', 'Meeting room'],
+                      ] as const)
+                    : []),
+                  ['issuer', 'Issuer'],
+                  ['investor', 'Investor'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  role="tab"
+                  aria-selected={scope === id}
+                  className={scope === id ? 'active' : ''}
+                  onClick={() => {
+                    setScope(id);
+                    setAudience(
+                      id === 'issuer'
+                        ? data.issuers[0].id
+                        : id === 'investor'
+                          ? data.investors[0].id
+                          : id === 'banker'
+                            ? (data.user.role === 'BANKER' ? data.user.id : data.users.find((u) => u.role === 'BANKER')?.id) || ''
+                            : id === 'cube'
+                              ? data.meetingCubes.find((cube) => cube.conferenceId === conferenceId)?.id || ''
+                              : '',
+                    );
+                    setRecipient('');
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
             {scope !== 'master' && (
               <select
                 className="compact-select"
+                aria-label="Show schedule for"
                 value={audience}
                 onChange={(e) => setAudience(e.target.value)}
               >
@@ -672,7 +851,10 @@ export function PlannerView({
                   className={date === format(d, 'yyyy-MM-dd') ? 'active' : ''}
                   onClick={() => setDate(format(d, 'yyyy-MM-dd'))}
                 >
-                  {format(d, 'EEE, MMM d')}
+                  {format(d, 'EEE, MMM d')}{' '}
+                  <small style={{ opacity: 0.7 }}>
+                    {meetings.filter((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === format(d, 'yyyy-MM-dd')).length}
+                  </small>
                 </button>
               ))}
               <span>{c.timezone}</span>
@@ -788,8 +970,15 @@ function BankerWeekCalendar({
   const days = eachDayOfInterval({ start: parseISO(conference.startDate), end: parseISO(conference.endDate) });
   const startHour = 9;
   const endHour = 18;
-  const slotHeight = 56;
+  const slotHeight = 64;
   const slots = Array.from({ length: (endHour - startHour) * 2 }, (_, index) => index);
+  const firstMinutes = meetings.length
+    ? Math.min(...meetings.map((m) => Number(fmt(m.start, conference.timezone, 'H')) * 60 + Number(fmt(m.start, conference.timezone, 'm'))))
+    : startHour * 60;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = Math.max(0, ((firstMinutes - startHour * 60) / 30) * slotHeight - 24);
+  }, [firstMinutes, bankerId]);
   const assignment = (meetingId: string) =>
     data.coverageAssignments.find((a) => a.meetingId === meetingId && a.bankerId === bankerId);
   return (
@@ -799,12 +988,12 @@ function BankerWeekCalendar({
           <Avatar name={n.user(bankerId)} color="#436b5e" />
           <div>
             <strong>{n.user(bankerId)}’s coverage schedule</strong>
-            <p>{meetings.length} approved meetings · {conference.timezone}</p>
+            <p>{meetings.length} approved meeting{meetings.length === 1 ? '' : 's'} · {conference.timezone}</p>
           </div>
         </div>
         <span><i className="green-dot" />Approved coverage only</span>
       </div>
-      <div className="banker-week-scroll">
+      <div className="banker-week-scroll" ref={scrollRef}>
         <div className="banker-week-grid" style={{ gridTemplateColumns: `72px repeat(${days.length}, minmax(250px, 1fr))` }}>
           <div className="banker-week-corner">TIME</div>
           {days.map((day) => {
@@ -824,15 +1013,14 @@ function BankerWeekCalendar({
                 const startMinutes = Number(fmt(meeting.start, conference.timezone, 'H')) * 60 + Number(fmt(meeting.start, conference.timezone, 'm'));
                 const endMinutes = Number(fmt(meeting.end, conference.timezone, 'H')) * 60 + Number(fmt(meeting.end, conference.timezone, 'm'));
                 const top = ((startMinutes - startHour * 60) / 30) * slotHeight;
-                const height = Math.max(((endMinutes - startMinutes) / 30) * slotHeight - 5, 50);
+                const height = Math.max(((endMinutes - startMinutes) / 30) * slotHeight - 5, 44);
                 const issuer = data.issuers.find((i) => i.id === meeting.issuerId)!;
                 const room = data.cubeAssignments.find((a) => a.meetingId === meeting.id);
                 const cube = data.meetingCubes.find((x) => x.id === room?.cubeId);
                 const role = assignment(meeting.id)?.coverageRole || 'Coverage';
-                return <button key={meeting.id} className="banker-calendar-event" style={{ top: Math.max(top, 0), height, borderLeftColor: issuer.color, background: `${issuer.color}14` }} onClick={() => onSelect(meeting.id)}>
-                  <div><strong>{n.issuer(meeting.issuerId)}</strong><Badge tone={role === 'Primary' ? 'green' : 'gray'}>{role}</Badge></div>
-                  <p>{n.investor(meeting.investorId)}</p>
-                  <small>{fmt(meeting.start, conference.timezone, 'h:mm')}–{fmt(meeting.end, conference.timezone, 'h:mm a')} · {cube?.name || meeting.location || 'Location TBC'}</small>
+                return <button key={meeting.id} title={`${n.issuer(meeting.issuerId)} × ${n.investor(meeting.investorId)} · ${cube?.name || meeting.location || 'Room TBC'}`} className={`banker-calendar-event ${height < 56 ? 'short' : ''}`} style={{ top: Math.max(top, 0), height, borderLeftColor: issuer.color, background: `${issuer.color}14` }} onClick={() => onSelect(meeting.id)}>
+                  <small>{fmt(meeting.start, conference.timezone, 'h:mm')}–{fmt(meeting.end, conference.timezone, 'h:mm a')} · {cube?.name || meeting.location || 'Room TBC'}</small>
+                  <div><strong>{n.issuer(meeting.issuerId)} <span style={{ fontWeight: 400, color: '#5d6f63' }}>× {n.investor(meeting.investorId)}</span></strong><Badge tone={role === 'Primary' ? 'green' : 'gray'}>{role}</Badge></div>
                 </button>;
               })}
             </div>;

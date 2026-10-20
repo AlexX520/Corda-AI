@@ -24,6 +24,8 @@ import {
   MapPin,
   MoreHorizontal,
   Plus,
+  RefreshCw,
+  Unplug,
   Search,
   Settings2,
   ShieldCheck,
@@ -37,7 +39,9 @@ import { Dialog } from './ui/dialog';
 import { Avatar, Badge, Empty, Field, fmt, names, Run } from './shared';
 import { EmailForm, RequestForm } from './forms';
 import { DraftEditor, EmailReview } from './review';
-import { AvailabilityView, PlannerView, RequestsView } from './views';
+import { Sheet } from './ui/sheet';
+import { RequestDecision } from './decision';
+import { AvailabilityView, PlannerView, RequestDetail, RequestsView } from './views';
 import { ResourceAllocationView } from './resources';
 const menu = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -73,6 +77,9 @@ export function Workspace() {
     [scheduleSection, setScheduleSection] = useState<'schedule' | 'allocation'>('schedule'),
     [help, setHelp] = useState(false),
     [busy, setBusy] = useState(false),
+    [sheetRequestId, setSheetRequestId] = useState<string | null>(null),
+    [outlookOpen, setOutlookOpen] = useState(false),
+    [agendaDay, setAgendaDay] = useState<string | null>(null),
     [mobile, setMobile] = useState(false);
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
@@ -110,6 +117,29 @@ export function Workspace() {
     };
   }, [reload]);
   useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const state = q.get('outlook');
+    if (!state) return;
+    setToast(
+      state === 'connected'
+        ? { message: 'Outlook connected. New conference emails are in Email reviews.' }
+        : { message: q.get('message') || 'Outlook sign-in did not finish.', error: true },
+    );
+    setOutlookOpen(true);
+    history.replaceState(null, '', location.pathname);
+  }, []);
+  // Keep a linked inbox fresh while the workspace is open.
+  const outlookLinked = Boolean(data?.outlook?.connected);
+  useEffect(() => {
+    if (!outlookLinked) return;
+    const t = setInterval(() => {
+      void fetch('/api/outlook/sync', { method: 'POST' })
+        .then((r) => (r.ok ? reload() : undefined))
+        .catch(() => {});
+    }, 120000);
+    return () => clearInterval(t);
+  }, [outlookLinked, reload]);
+  useEffect(() => {
     if (toast) {
       const timer = setTimeout(() => setToast(null), 6500);
       return () => clearTimeout(timer);
@@ -135,6 +165,24 @@ export function Workspace() {
       setBusy(false);
     }
   };
+  async function syncOutlook() {
+    setBusy(true);
+    try {
+      const r = await fetch('/api/outlook/sync', { method: 'POST' });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error);
+      await reload();
+      setToast({
+        message: out.imported
+          ? `${out.imported} new conference email${out.imported === 1 ? '' : 's'} ready to review`
+          : 'Inbox is up to date',
+      });
+    } catch (e) {
+      setToast({ message: e instanceof Error ? e.message : 'Outlook sync failed', error: true });
+    } finally {
+      setBusy(false);
+    }
+  }
   function navigate(id: string) {
     if (id === 'inbox') {
       setPage('queue');
@@ -199,10 +247,23 @@ export function Workspace() {
       (e) => e.status === 'Pending review' && e.conferenceId === conferenceId,
     ),
     reviewEmail = data.emails.find((e) => e.id === reviewId),
+    sheetRequest = data.requests.find((r) => r.id === sheetRequestId),
+    outlook = data.outlook,
     draft = data.drafts.find((d) => d.id === draftId);
+  const confirmed = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed');
+  const days: string[] = [];
+  for (let d = new Date(`${c.startDate}T12:00:00Z`); d <= new Date(`${c.endDate}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 1))
+    days.push(d.toISOString().slice(0, 10));
+  const shownDay =
+    agendaDay && days.includes(agendaDay)
+      ? agendaDay
+      : days.find((d) => confirmed.some((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === d)) || c.startDate;
+  const dayMeetings = confirmed
+    .filter((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === shownDay)
+    .sort((a, b) => a.start.localeCompare(b.start));
   function actionClick(a: AppState['actions'][number]) {
     if (a.emailId) setReviewId(a.emailId);
-    else if (a.requestId) navigate('requests');
+    else if (a.requestId) setSheetRequestId(a.requestId);
     else if (a.type === 'Resource allocation') navigate('resources');
     else navigate('availability');
   }
@@ -255,6 +316,21 @@ export function Workspace() {
             ))}
         </nav>
         <div className="sidebar-bottom">
+          {banker && (
+            <button className="outlook-pill" onClick={() => setOutlookOpen(true)}>
+              <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} />
+              <span>
+                <strong>{outlook?.connected ? 'Outlook connected' : 'Connect Outlook'}</strong>
+                <small>
+                  {outlook?.connected
+                    ? outlook.email || 'Inbox linked'
+                    : outlook?.configured
+                      ? 'Read and send real email'
+                      : 'Using simulated email'}
+                </small>
+              </span>
+            </button>
+          )}
           <div className="ai-status">
             <div>
               <span className="live-dot" />
@@ -404,32 +480,8 @@ export function Workspace() {
               </div>
               <div className="stats-grid overview-stats">
                 <Stat
-                  icon={CalendarDays}
-                  label="Confirmed meetings"
-                  value={
-                    data.meetings.filter(
-                      (m) => m.conferenceId === conferenceId && m.status === 'Confirmed',
-                    ).length
-                  }
-                  foot="Approved and on the planner"
-                  tone="green"
-                />
-                <Stat
-                  icon={Users}
-                  label="Meeting requests"
-                  value={
-                    data.requests.filter(
-                      (r) =>
-                        r.conferenceId === conferenceId &&
-                        !['Confirmed', 'Cancelled'].includes(r.status),
-                    ).length
-                  }
-                  foot="Investor conversations in motion"
-                  tone="blue"
-                />
-                <Stat
                   icon={banker ? Sparkles : CheckCheck}
-                  label={banker ? 'Needs your review' : 'Potential matches'}
+                  label={banker ? 'Needs your decision' : 'Potential matches'}
                   value={
                     banker
                       ? openActions.length
@@ -438,7 +490,37 @@ export function Workspace() {
                         ).length
                   }
                   foot={banker ? 'AI has done the groundwork' : 'Subject to banker approval'}
+                  cta={banker ? 'Start reviewing' : 'See requests'}
+                  onClick={() => navigate(banker ? 'queue' : 'requests')}
                   tone="amber"
+                />
+                <Stat
+                  icon={Users}
+                  label="Open meeting requests"
+                  value={
+                    data.requests.filter(
+                      (r) =>
+                        r.conferenceId === conferenceId &&
+                        !['Confirmed', 'Cancelled'].includes(r.status),
+                    ).length
+                  }
+                  foot="Investor conversations in motion"
+                  cta="Open requests"
+                  onClick={() => navigate('requests')}
+                  tone="blue"
+                />
+                <Stat
+                  icon={CalendarDays}
+                  label="Confirmed meetings"
+                  value={
+                    data.meetings.filter(
+                      (m) => m.conferenceId === conferenceId && m.status === 'Confirmed',
+                    ).length
+                  }
+                  foot="Approved and on the planner"
+                  cta="Open schedule"
+                  onClick={() => navigate('planner')}
+                  tone="green"
                 />
               </div>
               <div className="overview-columns">
@@ -503,7 +585,7 @@ export function Workspace() {
                   <div className="panel-heading">
                     <div>
                       <h3>On the agenda</h3>
-                      <p>{fmt(`${c.startDate}T12:00:00Z`, c.timezone, 'EEEE, MMMM d')}</p>
+                      <p>{fmt(`${shownDay}T12:00:00Z`, c.timezone, 'EEEE, MMMM d')}</p>
                     </div>
                     <button
                       className="text-button"
@@ -513,51 +595,54 @@ export function Workspace() {
                       <ArrowUpRight size={17} />
                     </button>
                   </div>
+                  <div className="day-tabs" role="tablist" aria-label="Conference day">
+                    {days.map((d) => (
+                      <button
+                        key={d}
+                        role="tab"
+                        aria-selected={d === shownDay}
+                        className={d === shownDay ? 'active' : ''}
+                        onClick={() => setAgendaDay(d)}
+                      >
+                        {fmt(`${d}T12:00:00Z`, c.timezone, 'EEE d')}
+                        <small>{confirmed.filter((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === d).length}</small>
+                      </button>
+                    ))}
+                  </div>
                   <div className="agenda">
-                    {data.meetings
-                      .filter(
-                        (m) =>
-                          m.conferenceId === conferenceId &&
-                          m.status === 'Confirmed' &&
-                          fmt(m.start, c.timezone, 'yyyy-MM-dd') === c.startDate,
-                      )
-                      .slice(0, 4)
-                      .map((m) => (
-                        <button
-                          key={m.id}
-                          onClick={() => navigate('planner')}
-                          className="agenda-item"
+                    {dayMeetings.slice(0, 5).map((m) => (
+                      <button key={m.id} onClick={() => navigate('planner')} className="agenda-item">
+                        <span className="agenda-time">
+                          {fmt(m.start, c.timezone, 'h:mm')}
+                          <small>{fmt(m.start, c.timezone, 'a')}</small>
+                        </span>
+                        <div
+                          className="agenda-detail"
+                          style={{
+                            borderLeftColor: data.issuers.find((i) => i.id === m.issuerId)?.color,
+                          }}
                         >
-                          <span className="agenda-time">
-                            {fmt(m.start, c.timezone, 'h:mm')}
-                            <small>{fmt(m.start, c.timezone, 'a')}</small>
-                          </span>
-                          <div
-                            className="agenda-detail"
-                            style={{
-                              borderLeftColor: data.issuers.find((i) => i.id === m.issuerId)?.color,
-                            }}
-                          >
-                            <strong>
-                              {n.issuer(m.issuerId)} <span>×</span> {n.investor(m.investorId)}
-                            </strong>
-                            <p>
-                              <MapPin size={11} />
-                              {m.location || 'Location to be confirmed'}
-                            </p>
-                            <Badge tone="green">Confirmed</Badge>
-                          </div>
-                        </button>
-                      ))}
-                    {!data.meetings.some((m) => m.conferenceId === conferenceId) && (
+                          <strong>
+                            {n.issuer(m.issuerId)} <span>×</span> {n.investor(m.investorId)}
+                          </strong>
+                          <p>
+                            <MapPin size={11} />
+                            {m.location || 'Room to be confirmed'}
+                          </p>
+                          <Badge tone="green">Confirmed</Badge>
+                        </div>
+                      </button>
+                    ))}
+                    {!dayMeetings.length && (
                       <Empty
-                        title="A clear calendar"
-                        description="Confirmed meetings will appear here."
+                        title="Nothing confirmed this day"
+                        description="Confirmed meetings appear here as soon as you approve them."
                       />
                     )}
                   </div>
                   <button className="full-width-link" onClick={() => navigate('planner')}>
-                    Open conference planner <ArrowRight size={14} />
+                    {dayMeetings.length > 5 ? `See all ${dayMeetings.length} meetings` : 'Open conference planner'}{' '}
+                    <ArrowRight size={14} />
                   </button>
                 </div>
               </div>
@@ -647,6 +732,9 @@ export function Workspace() {
               search={search}
               onEmail={setReviewId}
               onAdd={() => setEmailOpen(true)}
+              outlookConnected={Boolean(outlook?.connected)}
+              onSync={syncOutlook}
+              onConnect={() => setOutlookOpen(true)}
             />
           )}
           {page === 'queue' && queueSection === 'tasks' && (
@@ -667,6 +755,7 @@ export function Workspace() {
               search={search}
               run={run}
               onNew={() => setRequestOpen(true)}
+              onOpen={setSheetRequestId}
             />
           )}
           {page === 'availability' && (
@@ -702,7 +791,9 @@ export function Workspace() {
                   <h1>Drafts</h1>
                   <p>{data.drafts.filter((d) => d.status === 'Draft').length} pending</p>
                 </div>
-                <Badge tone="amber">Simulated sending only</Badge>
+                <Badge tone={outlook?.connected ? 'green' : 'amber'}>
+                  {outlook?.connected ? `Sends from ${outlook.email}` : 'Simulated sending until Outlook is connected'}
+                </Badge>
               </div>
               <div className="panel">
                 {data.drafts.filter((d) => d.subject.toLowerCase().includes(search.toLowerCase()))
@@ -832,8 +923,116 @@ export function Workspace() {
           data={data}
           close={() => setReviewId(null)}
           run={run}
+          onOpenDraft={setDraftId}
         />
       )}
+      {sheetRequest && banker && !['Confirmed', 'Cancelled'].includes(sheetRequest.status) && (
+        <Sheet
+          open
+          onOpenChange={(v) => !v && setSheetRequestId(null)}
+          title={`${n.investor(sheetRequest.investorId)} × ${n.issuer(sheetRequest.issuerId)}`}
+          description="Decide here. The list stays where you left it."
+        >
+          <RequestDecision
+            key={sheetRequest.id}
+            request={sheetRequest}
+            data={data}
+            run={run}
+            onDone={() => setSheetRequestId(null)}
+            onOpenDraft={(id) => {
+              setSheetRequestId(null);
+              setDraftId(id);
+            }}
+          />
+        </Sheet>
+      )}
+      {sheetRequest && (!banker || ['Confirmed', 'Cancelled'].includes(sheetRequest.status)) && (
+        <RequestDetail
+          key={sheetRequest.id}
+          r={sheetRequest}
+          data={data}
+          close={() => setSheetRequestId(null)}
+          run={run}
+        />
+      )}
+      <Dialog
+        open={outlookOpen}
+        onOpenChange={setOutlookOpen}
+        title="Outlook"
+        description="Corda reads conference emails from your inbox and sends approved drafts from your address."
+      >
+        <div className="form-grid">
+          <div className="outlook-status">
+            <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} style={{ width: 10, height: 10, borderRadius: 99, background: outlook?.connected ? '#2f8a5f' : '#b9c2b8' }} />
+            <div style={{ flex: 1 }}>
+              <strong>{outlook?.connected ? `Connected as ${outlook.email}` : 'Not connected'}</strong>
+              <p>
+                {outlook?.connected
+                  ? outlook.lastSyncAt
+                    ? `Last sync ${fmt(outlook.lastSyncAt, undefined, 'MMM d, h:mm a')} · ${outlook.lastSyncCount} new`
+                    : 'Not synced yet'
+                  : outlook?.configured
+                    ? 'Sign in with your Microsoft account to link your inbox.'
+                    : 'No Azure app is set up yet, so mail is simulated.'}
+              </p>
+              {outlook?.lastError && <p style={{ color: 'var(--warn)' }}>{outlook.lastError}</p>}
+            </div>
+            {outlook?.connected ? (
+              <div className="dc-actions">
+                <Button size="sm" onClick={syncOutlook} disabled={busy}>
+                  <RefreshCw size={13} /> Sync now
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={async () => {
+                    await fetch('/api/outlook/disconnect', { method: 'POST' });
+                    await reload();
+                    setToast({ message: 'Outlook disconnected. Mail is simulated again.' });
+                  }}
+                >
+                  <Unplug size={13} /> Disconnect
+                </Button>
+              </div>
+            ) : (
+              outlook?.configured && (
+                <Button size="sm" onClick={() => (location.href = '/api/outlook/connect')}>
+                  Connect
+                </Button>
+              )
+            )}
+          </div>
+          {!outlook?.configured && (
+            <>
+              <strong>Set up once (about 5 minutes)</strong>
+              <ol className="outlook-steps">
+                <li>
+                  Open <code>portal.azure.com</code> → <b>App registrations</b> → <b>New registration</b>.
+                </li>
+                <li>
+                  Account type: <b>Personal Microsoft accounts only</b>. Redirect URI (Web):{' '}
+                  <code>http://localhost:3000/api/outlook/callback</code>
+                </li>
+                <li>
+                  <b>Certificates &amp; secrets</b> → New client secret. Copy the value.
+                </li>
+                <li>
+                  <b>API permissions</b> → Microsoft Graph → Delegated: <code>Mail.Read</code>, <code>Mail.Send</code>,{' '}
+                  <code>User.Read</code>, <code>offline_access</code>.
+                </li>
+                <li>
+                  Put <code>MS_CLIENT_ID</code>, <code>MS_CLIENT_SECRET</code> and <code>MS_TENANT=consumers</code> in{' '}
+                  <code>.env</code>, restart, then click Connect.
+                </li>
+              </ol>
+            </>
+          )}
+          <p className="muted">
+            Corda only imports emails that look conference-related and never sends anything until you press Send on a
+            draft.
+          </p>
+        </div>
+      </Dialog>
       {draft && (
         <DraftEditor
           key={draft.id}
@@ -869,8 +1068,10 @@ export function Workspace() {
             timezone.
           </p>
           <p>
-            <strong>Delivery:</strong> All sends are simulated and audited. Outlook Graph is a
-            future integration interface.
+            <strong>Delivery:</strong>{' '}
+            {outlook?.connected
+              ? `Approved drafts are sent from ${outlook.email} through Outlook and audited.`
+              : 'Sends are simulated and audited until you connect Outlook.'}
           </p>
           <p>
             <strong>Updates:</strong> Views refresh automatically every 10 seconds.
@@ -890,15 +1091,19 @@ function Stat({
   value,
   foot,
   tone,
+  cta,
+  onClick,
 }: {
   icon: typeof CalendarDays;
   label: string;
   value: number;
   foot: string;
   tone: string;
+  cta?: string;
+  onClick?: () => void;
 }) {
   return (
-    <div className="stat-card">
+    <button className="stat-card" onClick={onClick}>
       <div>
         <span>{label}</span>
         <Icon size={17} strokeWidth={1.6} />
@@ -908,7 +1113,12 @@ function Stat({
         <span className={`stat-accent ${tone}`} />
       </strong>
       <p>{foot}</p>
-    </div>
+      {cta && (
+        <span className="stat-cta">
+          {cta} <ArrowRight size={13} />
+        </span>
+      )}
+    </button>
   );
 }
 const priorityRank = (p: string) => (p === 'Urgent' ? 0 : p === 'High' ? 1 : 2);
@@ -953,128 +1163,200 @@ function ActionList({
     </div>
   );
 }
+const emailTabs = [
+  { id: 'review', label: 'Needs review', match: (s: string) => s === 'Pending review' },
+  { id: 'waiting', label: 'Waiting on reply', match: (s: string) => s === 'Clarification requested' },
+  { id: 'done', label: 'Done', match: (s: string) => ['Approved', 'Rejected', 'Ignored'].includes(s) },
+  { id: 'all', label: 'All', match: () => true },
+] as const;
+const shortCategory: Record<string, string> = {
+  'Issuer Availability Update': 'Availability',
+  'New Meeting Request': 'New request',
+  'Meeting Confirmation': 'Confirmation',
+  'Reschedule Request': 'Reschedule',
+  'Meeting Cancellation': 'Cancellation',
+  'General Conference Inquiry': 'Question',
+  'Unrelated Email': 'Unrelated',
+};
+const operationText: Record<string, string> = {
+  add: 'Add',
+  replace: 'Replace availability with',
+  remove: 'Remove',
+  confirm: 'Confirm',
+  reschedule: 'Move to',
+  cancel: 'Cancel',
+  inquiry: 'Answer a question',
+};
+function proposalLine(e: EmailItem, zone: string) {
+  const x = e.proposal?.extraction as
+    | { operation: string; windows: { start: string; kind: string }[]; uncertainties: string[] }
+    | undefined;
+  if (!x) return null;
+  const w = x.windows || [];
+  const when = w.length === 1 ? fmt(w[0].start, zone, 'EEE h:mm a') : w.length ? `${w.length} time windows` : '';
+  const verb = operationText[x.operation] || x.operation;
+  const base = x.operation === 'inquiry' ? verb : `${verb}${when ? ` ${when}` : ''}`;
+  return x.uncertainties?.length ? `${base} · 1 thing to check` : base;
+}
 function InboxView({
   data,
   conferenceId,
   search,
   onEmail,
   onAdd,
+  outlookConnected,
+  onSync,
+  onConnect,
 }: {
   data: AppState;
   conferenceId: string;
   search: string;
   onEmail: (id: string) => void;
   onAdd: () => void;
+  outlookConnected: boolean;
+  onSync: () => void;
+  onConnect: () => void;
 }) {
-  const [category, setCategory] = useState('All categories'),
-    [issuer, setIssuer] = useState('All issuers'),
-    [status, setStatus] = useState('All statuses');
+  const [tab, setTab] = useState<(typeof emailTabs)[number]['id']>('review'),
+    [category, setCategory] = useState<string | null>(null),
+    [issuer, setIssuer] = useState('All issuers');
   const n = names(data);
-  const filtered = data.emails.filter(
+  const zone = data.conferences.find((c) => c.id === conferenceId)?.timezone || 'America/New_York';
+  const base = data.emails.filter(
     (e) =>
       (e.conferenceId === conferenceId || !e.conferenceId) &&
-      (category === 'All categories' || e.category === category) &&
       (issuer === 'All issuers' || e.issuerId === issuer) &&
-      (status === 'All statuses' || e.status === status) &&
       `${e.subject} ${e.sender} ${e.body}`.toLowerCase().includes(search.toLowerCase()),
   );
+  const inTab = base.filter((e) => emailTabs.find((t) => t.id === tab)!.match(e.status));
+  const filtered = inTab
+    .filter((e) => !category || e.category === category)
+    .sort((x, y) => y.receivedAt.localeCompare(x.receivedAt));
+  const categories = Object.keys(shortCategory)
+    .map((c) => [c, inTab.filter((e) => e.category === c).length] as const)
+    .filter(([, count]) => count > 0);
   return (
     <>
       <div className="page-heading">
         <div>
           <h1>Email reviews</h1>
-          <p>{filtered.length} emails</p>
+          <p>
+            {base.filter((e) => e.status === 'Pending review').length} waiting for a decision · open one to see exactly
+            what will change
+          </p>
         </div>
-        <Button onClick={onAdd}>
-          <Plus size={16} />
-          Add email
-        </Button>
+        <div className="flex gap-2">
+          {outlookConnected ? (
+            <Button variant="outline" onClick={onSync}>
+              <RefreshCw size={15} />
+              Sync Outlook
+            </Button>
+          ) : (
+            <Button variant="outline" onClick={onConnect}>
+              <Mail size={15} />
+              Connect Outlook
+            </Button>
+          )}
+          <Button onClick={onAdd}>
+            <Plus size={16} />
+            Paste an email
+          </Button>
+        </div>
       </div>
       <div className="panel">
-        <div className="panel-toolbar">
-          <div className="flex flex-wrap gap-2">
-            <select
-              className="compact-select"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              {[
-                'All categories',
-                'Issuer Availability Update',
-                'New Meeting Request',
-                'Meeting Confirmation',
-                'Reschedule Request',
-                'Meeting Cancellation',
-                'General Conference Inquiry',
-                'Unrelated Email',
-              ].map((c) => (
-                <option key={c}>{c}</option>
-              ))}
-            </select>
-            <select
-              className="compact-select"
-              value={issuer}
-              onChange={(e) => setIssuer(e.target.value)}
-            >
-              <option>All issuers</option>
-              {data.issuers.map((i) => (
-                <option value={i.id} key={i.id}>
-                  {i.name}
-                </option>
-              ))}
-            </select>
-            <select
-              className="compact-select"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
-            >
-              {[
-                'All statuses',
-                'Pending review',
-                'Approved',
-                'Rejected',
-                'Clarification requested',
-                'Ignored',
-              ].map((s) => (
-                <option key={s}>{s}</option>
-              ))}
-            </select>
-          </div>
-          <span className="muted">{filtered.length} emails</span>
+        <div className="status-tabs" role="tablist" aria-label="Email status">
+          {emailTabs.map((t) => {
+            const count = base.filter((e) => t.match(e.status)).length;
+            return (
+              <button
+                key={t.id}
+                role="tab"
+                aria-selected={tab === t.id}
+                className={tab === t.id ? 'active' : ''}
+                onClick={() => {
+                  setTab(t.id);
+                  setCategory(null);
+                }}
+              >
+                {t.label}
+                <span className={`tab-count ${t.id === 'review' && count ? 'hot' : ''}`}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="filter-row">
+          <button className={`chip ${!category ? 'active' : ''}`} onClick={() => setCategory(null)}>
+            All types <small>{inTab.length}</small>
+          </button>
+          {categories.map(([c, count]) => (
+            <button key={c} className={`chip ${category === c ? 'active' : ''}`} onClick={() => setCategory(c)}>
+              {shortCategory[c]} <small>{count}</small>
+            </button>
+          ))}
+          <select
+            className="compact-select"
+            aria-label="Filter by issuer"
+            value={issuer}
+            onChange={(e) => setIssuer(e.target.value)}
+          >
+            <option>All issuers</option>
+            {data.issuers.map((i) => (
+              <option value={i.id} key={i.id}>
+                {i.name}
+              </option>
+            ))}
+          </select>
         </div>
         {filtered.length ? (
           <div className="inbox-list">
-            {filtered.map((e) => (
-              <button key={e.id} onClick={() => onEmail(e.id)}>
-                <span className={e.status === 'Pending review' ? 'unread-dot' : 'read-dot'} />
-                <Avatar
-                  name={n.issuer(e.issuerId)}
-                  color={data.issuers.find((i) => i.id === e.issuerId)?.color}
-                />
-                <div className="inbox-main">
-                  <div>
-                    <strong>{n.issuer(e.issuerId)}</strong>
-                    <span>{fmt(e.receivedAt, undefined, 'MMM d, h:mm a')}</span>
+            {filtered.map((e) => {
+              const line = e.status === 'Pending review' ? proposalLine(e, zone) : null;
+              return (
+                <button key={e.id} onClick={() => onEmail(e.id)}>
+                  <span className={e.status === 'Pending review' ? 'unread-dot' : 'read-dot'} />
+                  <Avatar
+                    name={n.issuer(e.issuerId)}
+                    color={data.issuers.find((i) => i.id === e.issuerId)?.color}
+                  />
+                  <div className="inbox-main">
+                    <div>
+                      <strong>{n.issuer(e.issuerId)}</strong>
+                      <span>{fmt(e.receivedAt, undefined, 'MMM d, h:mm a')}</span>
+                    </div>
+                    <h3>{e.subject}</h3>
+                    <p>{e.newContent.replace(/\n/g, ' ').slice(0, 130)}…</p>
+                    {line ? (
+                      <span className="inbox-proposal">
+                        <Sparkles size={12} />
+                        <span>{line}</span>
+                      </span>
+                    ) : (
+                      <div className="inbox-tags">
+                        <Badge tone="gray">{shortCategory[e.category] || e.category}</Badge>
+                        <Badge>{e.status}</Badge>
+                      </div>
+                    )}
                   </div>
-                  <h3>{e.subject}</h3>
-                  <p>{e.newContent.replace(/\n/g, ' ').slice(0, 130)}…</p>
-                  <div className="inbox-tags">
-                    <Badge tone="gray">{e.category}</Badge>
-                    <Badge>{e.status}</Badge>
-                  </div>
-                </div>
-                <ChevronRight size={16} />
-              </button>
-            ))}
+                  <span className="row-cta">
+                    {e.status === 'Pending review' ? 'Review' : 'Open'} <ChevronRight size={15} />
+                  </span>
+                </button>
+              );
+            })}
           </div>
         ) : (
           <Empty
-            title="No emails match these filters"
-            description="Adjust your filters or add a synthetic email to start processing."
+            title={tab === 'review' ? 'Inbox zero' : 'Nothing here'}
+            description={
+              tab === 'review'
+                ? 'Every conference email has been handled. New ones land here after each sync.'
+                : 'Try another tab or clear the type filter.'
+            }
           />
         )}
         <div className="table-footer">
-          Simulated Outlook inbox<span>Deduplicated by message ID</span>
+          {outlookConnected ? 'Linked to Outlook' : 'Simulated inbox'}
+          <span>Duplicates are skipped by message ID</span>
         </div>
       </div>
     </>

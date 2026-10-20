@@ -63,14 +63,30 @@ Seed: ABS East 2026 (October 19–21, America/New_York), a second conference in 
 
 ## Try the full workflow
 
-1. **Action Queue → Email reviews → Bayview updated availability.** Monday 3–5 PM is extracted. Tuesday morning stays unresolved. The PIMCO 3–3:30 PM booking is shown separately and preserved. Approving without resolving uncertainty fails. Request clarification to prepare a local draft without changing availability.
+0. **Overview.** Each number card opens the list behind it. The agenda has a tab per conference day.
+1. **Action Queue → Email reviews → Bayview updated availability.** Tabs (Needs review / Waiting on reply / Done) and type chips replace the dropdown filters; each row shows the AI's proposed change. Opening an email slides in a side panel with *now → after you approve*. Monday 3–5 PM is extracted. Tuesday morning stays unresolved. The PIMCO 3–3:30 PM booking is shown separately and preserved. Approving without resolving uncertainty fails. Request clarification to prepare a local draft without changing availability.
 2. **Action Queue → Email reviews → Athene Tuesday availability.** Review and approve the explicit window. The change persists; available slots and affected requests recalculate.
-3. **Sales profile → Request tracker → Bayview / Ford Credit.** The requested time conflicts with PIMCO. Choose a computed alternative. The request becomes _Awaiting Banker Approval_, never _Confirmed_ automatically.
-4. **Banker profile → Meeting requests.** Review the new time, enter a room, attest issuer consent, and confirm. A meeting is created, the planner updates, and a confirmation draft is prepared atomically.
-5. **Action Queue → Drafts.** Review suggested contacts, deliberately select recipients, edit the draft, inspect the meeting-only attachment, and approve simulated delivery. Historical participants are never automatically included. Nothing is sent externally.
+3. **Sales profile → Request tracker.** Type one line, e.g. `Ally Financial / Vanguard 2-3pm Tuesday`, press **Find a time**, then **Send request**. Or open **Bayview / Ford Credit**: The requested time conflicts with PIMCO. Choose a computed alternative. The request becomes _Awaiting Banker Approval_, never _Confirmed_ automatically.
+4. **Banker profile → Meeting requests.** Status tabs with counts; each row has its next step (**Confirm** or **Pick a time**) and opens a side panel. Review the new time, enter a room, attest issuer consent, and confirm. A meeting is created, the planner updates, and a confirmation draft is prepared atomically.
+5. **Action Queue → Drafts.** Review suggested contacts, deliberately select recipients, edit the draft, inspect the meeting-only attachment, and send it (**Send via Outlook** when connected, simulated otherwise). Historical participants are never automatically included. Nothing is sent externally.
 6. **Schedule & allocation → Coverage & resources.** Submit issuer preferences and banker availability, run the deterministic allocator, review exceptions, edit incomplete assignments, and approve valid banker/cube allocations. Locked assignments survive later optimization runs.
 7. **Schedule & allocation → Schedules.** Switch calendar/table views and filter by banker, issuer, investor, or meeting cube. Banker schedules use an Outlook-style conference week. Download role-authorized Excel or PDF schedules. Meeting details also offer `.ics` calendar downloads.
 8. **Audit trail.** Inspect before/after state for approved changes, allocation runs, and simulated deliveries.
+
+## Connect Outlook
+
+Corda reads a mailbox through Microsoft Graph with delegated sign-in: the banker signs in once; while the workspace is open Corda pulls new Inbox mail every 2 minutes (or on **Sync Outlook**) and sends only the drafts the banker approves. Mail that has nothing to do with a conference is skipped and never stored.
+
+One-time setup (about 5 minutes) for a personal Outlook.com account:
+
+1. Go to portal.azure.com → Microsoft Entra ID → App registrations → New registration.
+2. Name: Corda AI. Supported account types: **Personal Microsoft accounts only**.
+3. Redirect URI: platform **Web**, `http://localhost:3000/api/outlook/callback`.
+4. Certificates & secrets → New client secret → copy the **Value**.
+5. API permissions → Microsoft Graph → Delegated: `User.Read`, `Mail.Read`, `Mail.Send`, `offline_access`.
+6. In `.env` set `MS_CLIENT_ID` (Application (client) ID) and `MS_CLIENT_SECRET`, restart `npm run dev`, then click **Connect Outlook** at the bottom of the sidebar.
+
+For a company Microsoft 365 mailbox, set `MS_TENANT` to the tenant ID and have the tenant admin approve the app; no code changes.
 
 ## Implemented capabilities
 
@@ -111,6 +127,10 @@ See `.env.example` for all variables.
 | `LLM_API_KEY`    | Empty means deterministic mock mode                                                |
 | `LLM_BASE_URL`   | OpenAI-compatible `/v1` endpoint                                                   |
 | `LLM_MODEL`      | Model name for extraction and optional request draft generation                    |
+| `MS_CLIENT_ID`   | Azure app (client) ID for the Outlook connection; empty = simulated mail           |
+| `MS_CLIENT_SECRET` | Azure client secret value                                                        |
+| `MS_TENANT`      | `consumers` for Outlook.com, or a Microsoft 365 tenant ID                          |
+| `MS_REDIRECT_URI` | Optional; defaults to `http://localhost:3000/api/outlook/callback`                |
 
 No LLM calls occur without a key. With a key, only newly ingested email content and known conference/entity context are sent to the configured provider. Invalid JSON, unknown associations, and fabricated evidence are rejected. Provider errors leave ingestion uncommitted so it can be retried. Generated drafts always require review. The mock parser intentionally supports explicit English weekday/AM-PM ranges; unsupported phrasing is flagged for manual review, not guessed.
 
