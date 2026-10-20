@@ -95,9 +95,9 @@ export async function GET(req: Request) {
       const columns = [34, 100, 190, 285, 370, 485, 610, 700];
       const header = () => {
         doc.fontSize(7).fillColor('#174f43').text('DATE / TIME', columns[0], doc.y)
-          .text('ISSUER', columns[1], doc.y - 8).text('INVESTOR', columns[2], doc.y - 8)
-          .text('PRIMARY', columns[3], doc.y - 8).text('ADDITIONAL COVERAGE', columns[4], doc.y - 8)
-          .text('MEETING CUBE', columns[5], doc.y - 8).text('STATUS', columns[6], doc.y - 8);
+          .text('INVESTOR', columns[1], doc.y - 8).text('ISSUER', columns[2], doc.y - 8)
+          .text('COVERAGE 1', columns[3], doc.y - 8).text('COVERAGE 2', columns[4], doc.y - 8)
+          .text('ROOM', columns[5], doc.y - 8).text('STATUS', columns[6], doc.y - 8);
         doc.moveDown(0.8).strokeColor('#dfe5dd').moveTo(34, doc.y).lineTo(760, doc.y).stroke(); doc.moveDown(0.4);
       };
       header();
@@ -108,12 +108,13 @@ export async function GET(req: Request) {
         const room = roomAssignments.find((a) => a.meetingId === m.id);
         const cube = cubes.find((x) => x.id === room?.cubeId);
         const person = (bankerId: string) => people.find((p) => p.id === bankerId)?.name || bankerId;
-        const primary = cov.filter((a) => a.coverageRole === 'Primary').map((a) => person(a.bankerId)).join(', ') || 'UNASSIGNED';
-        const support = cov.filter((a) => a.coverageRole !== 'Primary').map((a) => person(a.bankerId)).join(', ') || '—';
+        const ordered = [...cov.filter((a) => a.coverageRole === 'Primary'), ...cov.filter((a) => a.coverageRole !== 'Primary')];
+        const primary = ordered[0] ? person(ordered[0].bankerId) : 'UNASSIGNED';
+        const support = ordered[1] ? person(ordered[1].bankerId) : 'UNASSIGNED';
         doc.fontSize(7).fillColor('#33453b')
           .text(formatInTimeZone(m.start, c.timezone, 'MMM d\nHH:mm'), columns[0], rowY, {width: 60})
-          .text(issuers.find((x) => x.id === m.issuerId)?.name || '', columns[1], rowY, {width: 84})
-          .text(investors.find((x) => x.id === m.investorId)?.name || '', columns[2], rowY, {width: 90})
+          .text(investors.find((x) => x.id === m.investorId)?.name || '', columns[1], rowY, {width: 84})
+          .text(issuers.find((x) => x.id === m.issuerId)?.name || '', columns[2], rowY, {width: 90})
           .text(primary, columns[3], rowY, {width: 80}).text(support, columns[4], rowY, {width: 110})
           .text(cube?.name || 'UNASSIGNED', columns[5], rowY, {width: 115})
           .fillColor(cov.length >= 2 && (!m.requiresCube || cube) ? '#32725b' : '#a16b27')
@@ -127,45 +128,45 @@ export async function GET(req: Request) {
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Corda AI';
     const sheet = wb.addWorksheet('Conference Planner');
+    // Column order requested by the desk: who meets whom, when, and which two bankers cover it.
     sheet.columns = [
-      { header: 'Conference', key: 'conference', width: 25 },
-      { header: 'Meeting ID', key: 'id', width: 28 },
-      { header: 'Issuer', key: 'issuer', width: 25 },
-      { header: 'Investor', key: 'investor', width: 25 },
-      { header: 'Date', key: 'date', width: 15 },
-      { header: 'Start', key: 'start', width: 15 },
-      { header: 'End', key: 'end', width: 15 },
-      { header: 'Timezone', key: 'timezone', width: 25 },
-      { header: 'Primary Banker', key: 'primary', width: 25 },
-      { header: 'Additional Coverage', key: 'additional', width: 35 },
-      { header: 'Meeting Cube', key: 'cube', width: 24 },
+      { header: 'Date', key: 'date', width: 13 },
+      { header: 'Time', key: 'time', width: 15 },
+      { header: 'Investor Name', key: 'investor', width: 26 },
+      { header: 'Issuer Name', key: 'issuer', width: 26 },
+      { header: 'Banker Coverage 1', key: 'coverage1', width: 22 },
+      { header: 'Banker Coverage 2', key: 'coverage2', width: 22 },
+      { header: 'Meeting Room', key: 'cube', width: 22 },
+      { header: 'Location', key: 'location', width: 22 },
       { header: 'Status', key: 'status', width: 18 },
-      { header: 'Approved recipients', key: 'recipients', width: 50 },
+      { header: 'Timezone', key: 'timezone', width: 22 },
+      { header: 'Meeting ID', key: 'id', width: 28 },
+      { header: 'Approved recipients', key: 'recipients', width: 40 },
     ];
     for (const m of authorized) {
       const i = issuers.find((x) => x.id === m.issuerId)!, v = investors.find((x) => x.id === m.investorId)!;
       const cov = coverage.filter((a) => a.meetingId === m.id), room = roomAssignments.find((a) => a.meetingId === m.id), cube = cubes.find((x) => x.id === room?.cubeId);
       const person = (bankerId: string) => people.find((p) => p.id === bankerId)?.name || bankerId;
+      const ordered = [...cov.filter((a) => a.coverageRole === 'Primary'), ...cov.filter((a) => a.coverageRole !== 'Primary')];
       sheet.addRow({
-        conference: safe(c.name),
-        id: m.id,
-        issuer: safe(i.name),
-        investor: safe(v.name),
         date: formatInTimeZone(m.start, c.timezone, 'yyyy-MM-dd'),
-        start: formatInTimeZone(m.start, c.timezone, 'HH:mm'),
-        end: formatInTimeZone(m.end, c.timezone, 'HH:mm'),
-        timezone: c.timezone,
-        primary: cov.filter((a) => a.coverageRole === 'Primary').map((a) => safe(person(a.bankerId))).join(', ') || 'UNASSIGNED',
-        additional: cov.filter((a) => a.coverageRole !== 'Primary').map((a) => safe(person(a.bankerId))).join(', '),
+        time: `${formatInTimeZone(m.start, c.timezone, 'HH:mm')}–${formatInTimeZone(m.end, c.timezone, 'HH:mm')}`,
+        investor: safe(v.name),
+        issuer: safe(i.name),
+        coverage1: ordered[0] ? safe(person(ordered[0].bankerId)) : 'UNASSIGNED',
+        coverage2: ordered[1] ? safe(person(ordered[1].bankerId)) : 'UNASSIGNED',
         cube: cube?.name || 'UNASSIGNED',
+        location: safe(m.location || ''),
         status: cov.length >= 2 && (!m.requiresCube || cube) ? m.status : 'Needs resources',
+        timezone: c.timezone,
+        id: m.id,
         recipients: recipient ? recipient : m.approvedRecipients.join(', '),
       });
     }
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF123D35' } };
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
-    sheet.autoFilter = { from: 'A1', to: 'M1' };
+    sheet.autoFilter = { from: 'A1', to: 'L1' };
     sheet.eachRow((row, rowNumber) => { if (rowNumber > 1 && row.getCell('status').value === 'Needs resources') row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1D6' } }; });
     const info = wb.addWorksheet('Read me');
     info.addRow(['Audience', recipient || 'Internal authenticated user']);

@@ -5,8 +5,12 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { db } from './db';
 import { banker } from './auth';
 import { extractEmail, extractionSchema, newEmailContent, generateDraft } from './extraction';
-import { availableSlots, evaluate, isAvailable, overlaps, validateInterval } from './scheduling';
+import { availableSlots, conferenceTime, evaluate, isAvailable, overlaps, validateInterval } from './scheduling';
 import { SimulatedOutlook } from './outlook';
+import { meetingIcs } from './ics';
+import { accessTokenFor, outlookStatus } from './outlook-service';
+import { replyInThread, sendMail } from './graph';
+import { parseRequestText } from './request-parser';
 import { getResourceState, handleResourceCommand } from './resource-service';
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -118,20 +122,22 @@ async function makeConfirmationDraft(tx: Tx, user: User, meetingId: string) {
   const email = m.sourceEmailId
     ? await tx.email.findUnique({ where: { id: m.sourceEmailId } })
     : null;
+  const internal = new Set((await tx.user.findMany()).map((u) => u.email.toLowerCase()));
+  const to = [...new Set([i.contactEmail, v.contactEmail].filter(Boolean))];
+  // Everyone else on the email chain is copied; the banker reviews before anything is sent.
+  const chain = email ? [email.sender, ...email.to, ...email.cc] : [];
+  const cc = [...new Set(chain.map((x) => x.toLowerCase()))].filter(
+    (x) => !to.includes(x) && !internal.has(x) && x !== user.email.toLowerCase(),
+  );
   return tx.draft.create({
     data: {
       meetingId: m.id,
+      emailId: email?.id,
       createdBy: user.id,
       sender: user.email,
-      to: [],
-      cc: [],
-      historicalParticipants: [
-        ...new Set([
-          i.contactEmail,
-          v.contactEmail,
-          ...(email ? [email.sender, ...email.to, ...email.cc] : []),
-        ]),
-      ],
+      to,
+      cc,
+      historicalParticipants: [...new Set([i.contactEmail, v.contactEmail, ...chain])],
       subject: `${c.name} | ${i.name} × ${v.name} — meeting confirmation`,
       body: `Hello,\n\nYour meeting is confirmed for ${formatInTimeZone(m.start, c.timezone, 'EEEE, MMMM d, h:mm a')}–${formatInTimeZone(m.end, c.timezone, 'h:mm a')} (${c.timezone}).\n\nIssuer: ${i.name}\nInvestor: ${v.name}\nLocation: ${m.location || 'To be confirmed'}\n\nA meeting-specific calendar attachment will accompany this draft.\n\nBest regards,\n${user.name}`,
     },
@@ -200,6 +206,10 @@ export async function command(user: User, type: string, input: unknown): Promise
         body: z.string().min(1).max(50000),
         conferenceId: z.string().optional(),
         issuerId: z.string().optional(),
+        source: z.enum(['manual', 'outlook']).default('manual'),
+        graphId: z.string().max(500).optional(),
+        receivedAt: z.string().datetime().optional(),
+        skipUnrelated: z.boolean().default(false),
       })
       .parse(input);
     if (await db.email.findUnique({ where: { messageId: p.messageId } }))
@@ -210,6 +220,8 @@ export async function command(user: User, type: string, input: unknown): Promise
       investors: await db.investor.findMany(),
     };
     const e = await extractEmail(p.body, p.subject, ctx, p);
+    // Personal mail that has nothing to do with a conference is never stored.
+    if (p.skipUnrelated && e.category === 'Unrelated Email') return null;
     if (
       e.conferenceId &&
       e.issuerId &&
@@ -248,6 +260,9 @@ export async function command(user: User, type: string, input: unknown): Promise
           investorId: e.investorId,
           category: e.category,
           status: e.needsReview ? 'Pending review' : 'Ignored',
+          source: p.source,
+          graphId: p.graphId,
+          ...(p.receivedAt ? { receivedAt: new Date(p.receivedAt) } : {}),
         },
       });
       if (e.needsReview) {
@@ -747,18 +762,28 @@ export async function command(user: User, type: string, input: unknown): Promise
           const i = await tx.issuer.findUniqueOrThrow({ where: { id: m.issuerId } }),
             v = await tx.investor.findUniqueOrThrow({ where: { id: m.investorId } }),
             bankers = await tx.user.findMany({ where: { role: 'BANKER' } });
-          const allowed = [i.contactEmail, v.contactEmail, ...bankers.map((b) => b.email)];
-          if ([...p.to, ...p.cc].some((x) => !allowed.includes(x)))
+          const source = m.sourceEmailId
+            ? await tx.email.findUnique({ where: { id: m.sourceEmailId } })
+            : null;
+          const allowed = [
+            i.contactEmail,
+            v.contactEmail,
+            ...bankers.map((b) => b.email),
+            ...d.historicalParticipants,
+            ...(source ? [source.sender, ...source.to, ...source.cc] : []),
+          ].map((x) => x.toLowerCase());
+          if ([...p.to, ...p.cc].some((x) => !allowed.includes(x.toLowerCase())))
             throw new Error(
-              'Meeting attachment recipients must be the meeting contacts or internal bankers.',
+              'Meeting attachment recipients must be on the email chain, the meeting contacts, or internal bankers.',
             );
           await tx.meeting.update({
             where: { id: m.id },
             data: { approvedRecipients: [...p.to, ...p.cc] },
           });
         }
-        await new SimulatedOutlook().deliver();
       }
+      let delivery: { mode: 'outlook' | 'simulated'; receipt: string } | null = null;
+      if (p.send) delivery = await deliverDraft(tx, user, d, p);
       const updated = await tx.draft.update({
         where: { id: d.id },
         data: {
@@ -766,26 +791,88 @@ export async function command(user: User, type: string, input: unknown): Promise
           cc: p.cc,
           subject: p.subject,
           body: p.body,
-          ...(p.send
-            ? { status: 'Simulated sent', approvedBy: user.id, simulatedSentAt: new Date() }
+          ...(delivery
+            ? {
+                status: delivery.mode === 'outlook' ? 'Sent' : 'Simulated sent',
+                approvedBy: user.id,
+                simulatedSentAt: new Date(),
+                deliveryMode: delivery.mode,
+                deliveryReceipt: delivery.receipt,
+              }
             : {}),
         },
       });
       await audit(
         tx,
         user,
-        p.send ? 'Delivery approved and simulated' : 'Draft saved',
+        delivery?.mode === 'outlook'
+          ? 'Sent through Outlook'
+          : p.send
+            ? 'Delivery approved and simulated'
+            : 'Draft saved',
         'Draft',
         d.id,
         d,
         updated,
       );
       return updated;
-    });
+    }, { timeout: 30000, maxWait: 10000 });
+  }
+  if (type === 'parseRequest') {
+    const p = z.object({ text: z.string().min(3).max(500), conferenceId: z.string() }).parse(input);
+    const c = await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } });
+    const [issuers, investors] = await Promise.all([db.issuer.findMany(), db.investor.findMany()]);
+    const parsed = parseRequestText(p.text, { conference: c, issuers, investors });
+    let proposal: { start: string; end: string; status: string; alternatives: { start: Date | string; end: Date | string }[] } | null = null;
+    if (parsed.issuerId && parsed.investorId && parsed.date && parsed.windowStart) {
+      const { windows, busy } = await resources(db, c.id, parsed.issuerId, parsed.investorId);
+      const winStart = conferenceTime(parsed.date, parsed.windowStart, c.timezone);
+      const winEnd = parsed.windowEnd
+        ? conferenceTime(parsed.date, parsed.windowEnd, c.timezone)
+        : addMinutes(winStart, parsed.duration);
+      // Best slot = first open slot inside the window the sales person asked for.
+      const inWindow = availableSlots(windows, busy, parsed.duration, c.slotMinutes).find(
+        (s) => +new Date(s.start) >= +winStart && +new Date(s.end) <= +winEnd,
+      );
+      const start = inWindow ? new Date(inWindow.start) : winStart;
+      const slot = { start, end: addMinutes(start, parsed.duration) };
+      const result = evaluate(slot, windows, busy, parsed.duration, c.slotMinutes);
+      proposal = { start: slot.start.toISOString(), end: slot.end.toISOString(), ...result };
+    }
+    return { parsed, proposal };
   }
   const resourceResult = await handleResourceCommand(user, type, input);
   if (resourceResult !== undefined) return resourceResult;
   throw new Error('Unknown command.');
+}
+async function deliverDraft(
+  tx: Tx,
+  user: User,
+  d: { id: string; meetingId: string | null; emailId: string | null },
+  p: { to: string[]; cc: string[]; subject: string; body: string },
+): Promise<{ mode: 'outlook' | 'simulated'; receipt: string }> {
+  const token = await accessTokenFor(user.id);
+  if (!token) return new SimulatedOutlook().deliver();
+  if (d.meetingId) {
+    const m = await tx.meeting.findUniqueOrThrow({ where: { id: d.meetingId } });
+    const [c, i, v] = await Promise.all([
+      tx.conference.findUniqueOrThrow({ where: { id: m.conferenceId } }),
+      tx.issuer.findUniqueOrThrow({ where: { id: m.issuerId } }),
+      tx.investor.findUniqueOrThrow({ where: { id: m.investorId } }),
+    ]);
+    await sendMail(token, {
+      ...p,
+      ics: { name: 'meeting.ics', text: meetingIcs(m, i.name, v.name, c) },
+    });
+    return { mode: 'outlook', receipt: `outlook:sendMail:${new Date().toISOString()}` };
+  }
+  const source = d.emailId ? await tx.email.findUnique({ where: { id: d.emailId } }) : null;
+  if (source?.graphId) {
+    await replyInThread(token, source.graphId, p);
+    return { mode: 'outlook', receipt: `outlook:reply:${source.graphId}` };
+  }
+  await sendMail(token, p);
+  return { mode: 'outlook', receipt: `outlook:sendMail:${new Date().toISOString()}` };
 }
 async function applyAvailability(
   tx: Tx,
@@ -921,8 +1008,10 @@ export async function getState(user: User) {
       });
     }
   const resourceState = await resourceStatePromise;
+  const outlook = user.role === 'BANKER' ? await outlookStatus(user.id) : null;
   return {
     user,
+    outlook,
     conferences,
     issuers: issuers.map((i) =>
       user.role === 'BANKER'

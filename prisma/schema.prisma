@@ -54,6 +54,8 @@ model Email {
   investorId String?
   category String
   status String @default("Pending review")
+  source String @default("manual")
+  graphId String?
   proposal Proposal?
 }
 model Proposal {
@@ -147,6 +149,8 @@ model Draft {
   status String @default("Draft")
   approvedBy String?
   simulatedSentAt DateTime?
+  deliveryMode String?
+  deliveryReceipt String?
   createdAt DateTime @default(now())
 }
 model AuditLog {
@@ -283,4 +287,18 @@ model AllocationProposal {
   updatedAt DateTime @updatedAt
   @@unique([allocationRunId, meetingId])
   @@index([meetingId])
+}
+
+model OutlookAccount {
+  id String @id @default(cuid())
+  userId String @unique
+  email String
+  displayName String @default("")
+  refreshToken String
+  deltaLink String?
+  lastSyncAt DateTime?
+  lastSyncCount Int @default(0)
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
