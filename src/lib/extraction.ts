@@ -134,9 +134,24 @@ export function mockExtract(
       }
       const clock = (hour: string, minute: string | undefined, meridiem: string) =>
         `${String((Number(hour) % 12) + (meridiem.toUpperCase() === 'PM' ? 12 : 0)).padStart(2, '0')}:${minute || '00'}`;
-      if (!match[3]) {
+      // Compact ranges like "2–4pm" (2pm–4pm) or "11-1pm" (11am–1pm) take AM/PM from the end.
+      // Spelled-out ranges ("between 3 and 5 PM") still go to manual review.
+      let startMeridiem = match[3];
+      const compact = /^\d{1,2}(?::\d{2})?\s*[–-]/.test(match[0]);
+      if (!startMeridiem && !compact) {
         uncertainties.push(`Missing AM/PM for range start: “${match[0]}”`);
         continue;
+      }
+      if (!startMeridiem) {
+        const toMinutes = (h: string, m: string | undefined, mer: string) =>
+          ((Number(h) % 12) + (mer.toUpperCase() === 'PM' ? 12 : 0)) * 60 + Number(m || 0);
+        const endMinutes = toMinutes(match[4], match[5], match[6]);
+        startMeridiem =
+          toMinutes(match[1], match[2], match[6]) < endMinutes ? match[6] : 'AM';
+        if (toMinutes(match[1], match[2], startMeridiem) >= endMinutes) {
+          uncertainties.push(`Missing AM/PM for range start: “${match[0]}”`);
+          continue;
+        }
       }
       if (
         [Number(match[1]), Number(match[4])].some((h) => h < 1 || h > 12) ||
@@ -147,7 +162,7 @@ export function mockExtract(
       }
       const start = conferenceTime(
           dates[0],
-          clock(match[1], match[2], match[3]),
+          clock(match[1], match[2], startMeridiem),
           conference.timezone,
         ),
         end = conferenceTime(dates[0], clock(match[4], match[5], match[6]), conference.timezone);

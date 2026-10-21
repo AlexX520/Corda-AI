@@ -92,3 +92,12 @@ test('short conference names resolve to one calendar and mixed weekdays remain u
   assert.equal(mixed.windows.length, 0);
   assert(mixed.uncertainties.some((u) => u.includes('Multiple days')));
 });
+test('a range like "2–4pm" takes the end time\'s PM for its start', () => {
+  const e = mockExtract('Hi, Bayview is available Tuesday Oct 20, 2–4pm for investor meetings at ABS East.', 'Availability', ctx);
+  assert.equal(e.windows.length, 1);
+  assert.equal(e.windows[0].start, '2026-10-20T18:00:00.000Z');
+  assert.equal(e.windows[0].end, '2026-10-20T20:00:00.000Z');
+  assert(!e.uncertainties.some((s) => s.includes('AM/PM')));
+  const morning = mockExtract('Bayview is available Monday 11-1pm at ABS East.', 'Availability', ctx);
+  assert.equal(morning.windows[0].start, '2026-10-19T15:00:00.000Z');
+});
