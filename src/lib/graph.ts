@@ -11,8 +11,13 @@ const loginBase = () => process.env.MS_LOGIN_BASE || 'https://login.microsoftonl
 const graphBase = () => process.env.MS_GRAPH_BASE || 'https://graph.microsoft.com/v1.0';
 const tenant = () => process.env.MS_TENANT || 'consumers';
 
+/**
+ * Only the client ID is required. Without MS_CLIENT_SECRET the app signs in as a public
+ * client (Azure platform "Mobile and desktop applications") using PKCE, so no secret has to
+ * be created, copied or stored. With a secret it behaves as a confidential web app.
+ */
 export function outlookConfigured() {
-  return Boolean(process.env.MS_CLIENT_ID && process.env.MS_CLIENT_SECRET);
+  return Boolean(process.env.MS_CLIENT_ID);
 }
 
 /** Must match the redirect URI registered in Azure exactly. */
@@ -62,7 +67,7 @@ type TokenResponse = { access_token: string; refresh_token?: string; expires_in:
 async function tokenRequest(params: Record<string, string>): Promise<TokenResponse> {
   const body = new URLSearchParams({
     client_id: process.env.MS_CLIENT_ID || '',
-    client_secret: process.env.MS_CLIENT_SECRET || '',
+    ...(process.env.MS_CLIENT_SECRET ? { client_secret: process.env.MS_CLIENT_SECRET } : {}),
     scope: graphScopes.join(' '),
     ...params,
   });

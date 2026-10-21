@@ -1010,18 +1010,18 @@ export function Workspace() {
                   Open <code>portal.azure.com</code> → <b>App registrations</b> → <b>New registration</b>.
                 </li>
                 <li>
-                  Account type: <b>Personal Microsoft accounts only</b>. Redirect URI (Web):{' '}
+                  Account type: <b>Personal Microsoft accounts only</b>. Redirect URI:{' '}
                   <code>http://localhost:3000/api/outlook/callback</code>
                 </li>
                 <li>
-                  <b>Certificates &amp; secrets</b> → New client secret. Copy the value.
+                  Platform: <b>Mobile and desktop applications</b> (no client secret needed).
                 </li>
                 <li>
                   <b>API permissions</b> → Microsoft Graph → Delegated: <code>Mail.Read</code>, <code>Mail.Send</code>,{' '}
                   <code>User.Read</code>, <code>offline_access</code>.
                 </li>
                 <li>
-                  Put <code>MS_CLIENT_ID</code>, <code>MS_CLIENT_SECRET</code> and <code>MS_TENANT=consumers</code> in{' '}
+                  Put <code>MS_CLIENT_ID</code> and <code>MS_TENANT=consumers</code> in{' '}
                   <code>.env</code>, restart, then click Connect.
                 </li>
               </ol>

@@ -79,12 +79,13 @@ Corda reads a mailbox through Microsoft Graph with delegated sign-in: the banker
 
 One-time setup (about 5 minutes) for a personal Outlook.com account:
 
-1. Go to portal.azure.com → Microsoft Entra ID → App registrations → New registration.
-2. Name: Corda AI. Supported account types: **Personal Microsoft accounts only**.
-3. Redirect URI: platform **Web**, `http://localhost:3000/api/outlook/callback`.
-4. Certificates & secrets → New client secret → copy the **Value**.
-5. API permissions → Microsoft Graph → Delegated: `User.Read`, `Mail.Read`, `Mail.Send`, `offline_access`.
-6. In `.env` set `MS_CLIENT_ID` (Application (client) ID) and `MS_CLIENT_SECRET`, restart `npm run dev`, then click **Connect Outlook** at the bottom of the sidebar.
+1. Go to portal.azure.com → Microsoft Entra ID → App registrations → New registration. (Microsoft no longer lets a personal account register apps without a directory; if you see "creating applications outside of a directory has been deprecated", start the free Azure sign-up from that page first. It creates a Default Directory.)
+2. Name: Corda AI. Supported account types: **Personal Microsoft accounts only** (or "any organizational directory and personal accounts").
+3. Redirect URI: platform **Public client/native (mobile & desktop)**, `http://localhost:3000/api/outlook/callback`.
+4. API permissions → Microsoft Graph → Delegated: `User.Read`, `Mail.Read`, `Mail.Send`, `offline_access`.
+5. In `.env` set `MS_CLIENT_ID` to the Application (client) ID and `MS_TENANT=consumers`, restart `npm run dev`, then click **Connect Outlook** at the bottom of the sidebar.
+
+No client secret is needed: sign-in uses PKCE as a public client. If you prefer a confidential web app, register the redirect URI under **Web** instead and also set `MS_CLIENT_SECRET`.
 
 For a company Microsoft 365 mailbox, set `MS_TENANT` to the tenant ID and have the tenant admin approve the app; no code changes.
 
@@ -128,7 +129,7 @@ See `.env.example` for all variables.
 | `LLM_BASE_URL`   | OpenAI-compatible `/v1` endpoint                                                   |
 | `LLM_MODEL`      | Model name for extraction and optional request draft generation                    |
 | `MS_CLIENT_ID`   | Azure app (client) ID for the Outlook connection; empty = simulated mail           |
-| `MS_CLIENT_SECRET` | Azure client secret value                                                        |
+| `MS_CLIENT_SECRET` | Optional. Only for a Web-platform (confidential) registration                   |
 | `MS_TENANT`      | `consumers` for Outlook.com, or a Microsoft 365 tenant ID                          |
 | `MS_REDIRECT_URI` | Optional; defaults to `http://localhost:3000/api/outlook/callback`                |
 
