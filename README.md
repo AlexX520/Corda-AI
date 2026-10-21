@@ -133,7 +133,7 @@ See `.env.example` for all variables.
 | `MS_TENANT`      | `consumers` for Outlook.com, or a Microsoft 365 tenant ID                          |
 | `MS_REDIRECT_URI` | Optional; defaults to `http://localhost:3000/api/outlook/callback`                |
 
-No LLM calls occur without a key. With a key, only newly ingested email content and known conference/entity context are sent to the configured provider. Invalid JSON, unknown associations, and fabricated evidence are rejected. Provider errors leave ingestion uncommitted so it can be retried. Generated drafts always require review. The mock parser intentionally supports explicit English weekday/AM-PM ranges; unsupported phrasing is flagged for manual review, not guessed.
+No LLM calls occur without a key. With a key, only newly ingested email content and known conference/entity context are sent to the configured provider. Invalid JSON, unknown associations, and fabricated evidence are rejected. If the provider fails or its answer is rejected, the email is read with the built-in parser instead and the review card says so, so no Outlook message is lost. Reasoning models (o-series, gpt-5) work too; Corda omits the temperature setting for them. Generated drafts always require review. The mock parser intentionally supports explicit English weekday/AM-PM ranges; unsupported phrasing is flagged for manual review, not guessed.
 
 ## Architecture
 

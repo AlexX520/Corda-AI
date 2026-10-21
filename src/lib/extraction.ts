@@ -215,6 +215,27 @@ export async function extractEmail(
   hints?: { conferenceId?: string; issuerId?: string },
 ) {
   if (!process.env.LLM_API_KEY) return mockExtract(body, subject, ctx, hints);
+  try {
+    return await llmExtract(body, subject, ctx, hints);
+  } catch (e) {
+    // Outlook sync moves past each message once, so a provider outage must not drop the email.
+    // Fall back to the built-in parser and say so; the banker still reviews everything.
+    const fallback = mockExtract(body, subject, ctx, hints);
+    fallback.uncertainties.push(
+      `AI model unavailable (${e instanceof Error ? e.message : 'error'}); read with the built-in parser.`,
+    );
+    fallback.needsReview = fallback.category !== 'Unrelated Email';
+    return fallback;
+  }
+}
+/** Reasoning models (o-series, gpt-5) reject a temperature setting. */
+const tuning = (model: string) => (/^(o\d|gpt-5)/i.test(model) ? {} : { temperature: 0 });
+async function llmExtract(
+  body: string,
+  subject: string,
+  ctx: Context,
+  hints?: { conferenceId?: string; issuerId?: string },
+) {
   const content = newEmailContent(body);
   const response = await fetch(
     `${process.env.LLM_BASE_URL || 'https://api.openai.com/v1'}/chat/completions`,
@@ -227,7 +248,7 @@ export async function extractEmail(
       },
       body: JSON.stringify({
         model: process.env.LLM_MODEL || 'gpt-4.1-mini',
-        temperature: 0,
+        ...tuning(process.env.LLM_MODEL || 'gpt-4.1-mini'),
         response_format: { type: 'json_object' },
         messages: [
           {
@@ -239,8 +260,10 @@ export async function extractEmail(
       }),
     },
   );
-  if (!response.ok)
-    throw new Error('LLM extraction failed; email was not ingested. Retry or use mock mode.');
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(`LLM ${response.status}: ${detail?.error?.message?.slice(0, 120) || response.statusText}`);
+  }
   const payload = await response.json();
   const parsed = extractionSchema.parse(JSON.parse(payload.choices[0].message.content));
   if (
