@@ -77,16 +77,24 @@ Seed: ABS East 2026 (October 19–21, America/New_York), a second conference in 
 7. **Schedule & allocation → Schedules.** Switch calendar/table views and filter by banker, issuer, investor, or meeting cube. Banker schedules use an Outlook-style conference week. Download role-authorized Excel or PDF schedules. Meeting details also offer `.ics` calendar downloads.
 8. **Audit trail.** Inspect before/after state for approved changes, allocation runs, and simulated deliveries.
 
-## Hosted demo (Render)
+## Hosted demo
 
-`render.yaml` deploys the app and a Postgres database on Render's free plan.
+### Vercel + Neon (free, always on)
 
-1. Render dashboard → **New → Blueprint** → choose this repository (branch `v3`).
-2. When asked, fill in `ACCESS_CODE` (a password for the demo link), `MS_CLIENT_ID` (the Azure app ID), and optionally `LLM_API_KEY`. Leave `LLM_API_KEY` empty to use the built-in parser.
-3. After the first deploy, open the Azure app → **Authentication** → add `https://<service>.onrender.com/api/outlook/callback` under *Mobile and desktop applications*.
-4. Share the `https://<service>.onrender.com` link and the access code. The browser asks for it once (any user name, the code as password).
+1. Vercel → **Add New → Project** → import this repository. Set the production branch to `v3` if it is not the default.
+2. In the project, **Storage → Create → Neon (Postgres)** and connect it. Vercel adds `DATABASE_URL` and `DATABASE_URL_UNPOOLED` automatically.
+3. **Settings → Environment Variables**: `DEMO_MODE=true`, `MS_CLIENT_ID=<Azure app ID>`, `MS_TENANT=common`, `ACCESS_CODE=<demo password>`, optionally `LLM_API_KEY`. Redeploy.
+4. Azure app → **Authentication** → add `https://<project>.vercel.app/api/outlook/callback` under *Mobile and desktop applications*.
 
-Notes: free services sleep after 15 minutes idle, so the first visit takes about a minute. Render's free database expires after 30 days. The Outlook connection belongs to the demo profile that connected it, so share the link only with people who may see that inbox. Work or school Microsoft accounts from other organizations may need their admin to approve the app; personal Outlook.com accounts work directly.
+The build (`vercel.json`) runs migrations and the seed. No `SESSION_SECRET` is needed on Vercel; it is derived from the database URL. Neon's free database pauses after 5 idle minutes and wakes on the next request; data does not expire.
+
+### Render (alternative)
+
+`render.yaml` deploys the app and a Postgres database: **New → Blueprint** → this repository, fill in `ACCESS_CODE`, `MS_CLIENT_ID`, optional `LLM_API_KEY`, then add `https://<service>.onrender.com/api/outlook/callback` in Azure. The free plan sleeps after 15 idle minutes and its database expires after 30 days; the Starter plan stays on.
+
+### Either way
+
+Share the link and the access code. The browser asks for it once (any user name, the code as password). The Outlook connection belongs to the demo profile that connected it, so share the link only with people who may see that inbox. Work or school Microsoft accounts from other organizations may need their admin to approve the app; personal Outlook.com accounts work directly.
 
 ## Connect Outlook
 
