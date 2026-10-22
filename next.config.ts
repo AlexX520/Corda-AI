@@ -4,6 +4,6 @@ const config: NextConfig = {
   poweredByHeader: false,
   // pdfkit reads its font files from disk at runtime; keep it unbundled and ship its data folder.
   serverExternalPackages: ['pdfkit'],
-  outputFileTracingIncludes: { '/api/export': ['./node_modules/pdfkit/js/data/**'] },
+  outputFileTracingIncludes: { '/api/export': ['./node_modules/pdfkit/js/**'] },
 };
 export default config;
