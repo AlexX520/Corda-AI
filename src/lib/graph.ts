@@ -22,7 +22,11 @@ export function outlookConfigured() {
 
 /** Must match the redirect URI registered in Azure exactly. */
 export function redirectUri() {
-  return process.env.MS_REDIRECT_URI || 'http://localhost:3000/api/outlook/callback';
+  if (process.env.MS_REDIRECT_URI) return process.env.MS_REDIRECT_URI;
+  // On Render the public URL is provided automatically.
+  if (process.env.RENDER_EXTERNAL_URL)
+    return `${process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '')}/api/outlook/callback`;
+  return 'http://localhost:3000/api/outlook/callback';
 }
 
 type PendingAuth = { userId: string; verifier: string; appOrigin: string; at: number };

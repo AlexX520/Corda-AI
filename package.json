@@ -13,7 +13,8 @@
     "setup": "prisma generate && prisma migrate deploy && tsx prisma/seed.ts",
     "test": "node --import tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "test:integration": "RUN_INTEGRATION=true node --import tsx --test tests/integration.test.ts"
+    "test:integration": "RUN_INTEGRATION=true node --import tsx --test tests/integration.test.ts",
+    "start:hosted": "prisma migrate deploy && tsx prisma/seed.ts && next start --hostname 0.0.0.0 --port ${PORT:-3000}"
   },
   "dependencies": {
     "@kenjiuno/msgreader": "^1.28.0",

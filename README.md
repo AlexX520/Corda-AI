@@ -77,6 +77,17 @@ Seed: ABS East 2026 (October 19–21, America/New_York), a second conference in 
 7. **Schedule & allocation → Schedules.** Switch calendar/table views and filter by banker, issuer, investor, or meeting cube. Banker schedules use an Outlook-style conference week. Download role-authorized Excel or PDF schedules. Meeting details also offer `.ics` calendar downloads.
 8. **Audit trail.** Inspect before/after state for approved changes, allocation runs, and simulated deliveries.
 
+## Hosted demo (Render)
+
+`render.yaml` deploys the app and a Postgres database on Render's free plan.
+
+1. Render dashboard → **New → Blueprint** → choose this repository (branch `v3`).
+2. When asked, fill in `ACCESS_CODE` (a password for the demo link), `MS_CLIENT_ID` (the Azure app ID), and optionally `LLM_API_KEY`. Leave `LLM_API_KEY` empty to use the built-in parser.
+3. After the first deploy, open the Azure app → **Authentication** → add `https://<service>.onrender.com/api/outlook/callback` under *Mobile and desktop applications*.
+4. Share the `https://<service>.onrender.com` link and the access code. The browser asks for it once (any user name, the code as password).
+
+Notes: free services sleep after 15 minutes idle, so the first visit takes about a minute. Render's free database expires after 30 days. The Outlook connection belongs to the demo profile that connected it, so share the link only with people who may see that inbox. Work or school Microsoft accounts from other organizations may need their admin to approve the app; personal Outlook.com accounts work directly.
+
 ## Connect Outlook
 
 Corda reads a mailbox through Microsoft Graph with delegated sign-in: the banker signs in once; while the workspace is open Corda pulls new Inbox mail every 2 minutes (or on **Sync Outlook**) and sends only the drafts the banker approves. Mail that has nothing to do with a conference is skipped and never stored.
@@ -135,7 +146,8 @@ See `.env.example` for all variables.
 | `MS_CLIENT_ID`   | Azure app (client) ID for the Outlook connection; empty = simulated mail           |
 | `MS_CLIENT_SECRET` | Optional. Only for a Web-platform (confidential) registration                   |
 | `MS_TENANT`      | `consumers` for Outlook.com, or a Microsoft 365 tenant ID                          |
-| `MS_REDIRECT_URI` | Optional; defaults to `http://localhost:3000/api/outlook/callback`                |
+| `MS_REDIRECT_URI` | Optional; defaults to `$RENDER_EXTERNAL_URL/api/outlook/callback` on Render, else `http://localhost:3000/api/outlook/callback` |
+| `ACCESS_CODE`    | Optional; when set, every page asks for this code (use it on a hosted demo)        |
 
 No LLM calls occur without a key. With a key, only newly ingested email content and known conference/entity context are sent to the configured provider. Invalid JSON, unknown associations, and fabricated evidence are rejected. If the provider fails or its answer is rejected, the email is read with the built-in parser instead and the review card says so, so no Outlook message is lost. Reasoning models (o-series, gpt-5) work too; Corda omits the temperature setting for them. Generated drafts always require review. The mock parser intentionally supports explicit English weekday/AM-PM ranges; unsupported phrasing is flagged for manual review, not guessed.
 
