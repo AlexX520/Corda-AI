@@ -4,6 +4,8 @@
  * Endpoints are overridable (MS_LOGIN_BASE / MS_GRAPH_BASE) so tests can run against a fake server.
  */
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { db } from './db';
+import { appSecret } from './secret';
 
 export const graphScopes = ['offline_access', 'User.Read', 'Mail.Read', 'Mail.Send'];
 
@@ -23,24 +25,29 @@ export function outlookConfigured() {
 /** Must match the redirect URI registered in Azure exactly. */
 export function redirectUri() {
   if (process.env.MS_REDIRECT_URI) return process.env.MS_REDIRECT_URI;
-  // On Render the public URL is provided automatically.
+  // Hosting platforms tell us the public address.
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL)
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}/api/outlook/callback`;
   if (process.env.RENDER_EXTERNAL_URL)
     return `${process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '')}/api/outlook/callback`;
   return 'http://localhost:3000/api/outlook/callback';
 }
 
-type PendingAuth = { userId: string; verifier: string; appOrigin: string; at: number };
-const pending: Map<string, PendingAuth> = ((
-  globalThis as { __cordaAuth?: Map<string, PendingAuth> }
-).__cordaAuth ??= new Map());
-export function rememberAuth(state: string, p: Omit<PendingAuth, 'at'>) {
-  for (const [k, v] of pending) if (Date.now() - v.at > 600_000) pending.delete(k);
-  pending.set(state, { ...p, at: Date.now() });
+type PendingAuth = { userId: string; verifier: string; appOrigin: string };
+const TEN_MINUTES = 600_000;
+export async function rememberAuth(state: string, p: PendingAuth) {
+  await db.outlookAuthState.deleteMany({
+    where: { createdAt: { lt: new Date(Date.now() - TEN_MINUTES) } },
+  });
+  await db.outlookAuthState.create({ data: { state, ...p, verifier: seal(p.verifier) } });
 }
-export function takeAuth(state: string) {
-  const p = pending.get(state);
-  pending.delete(state);
-  return p && Date.now() - p.at < 600_000 ? p : null;
+export async function takeAuth(state: string): Promise<PendingAuth | null> {
+  if (!state) return null;
+  const row = await db.outlookAuthState.findUnique({ where: { state } });
+  if (!row) return null;
+  await db.outlookAuthState.delete({ where: { state } });
+  if (Date.now() - +row.createdAt > TEN_MINUTES) return null;
+  return { userId: row.userId, verifier: unseal(row.verifier), appOrigin: row.appOrigin };
 }
 
 const b64url = (buf: Buffer) => buf.toString('base64url');
@@ -102,9 +109,7 @@ export const refreshAccess = (refreshToken: string) =>
 
 /** Refresh tokens are stored encrypted with a key derived from SESSION_SECRET. */
 function key() {
-  return createHash('sha256')
-    .update(`outlook:${process.env.SESSION_SECRET || ''}`)
-    .digest();
+  return createHash('sha256').update(`outlook:${appSecret()}`).digest();
 }
 export function seal(text: string) {
   const iv = randomBytes(12);

@@ -302,3 +302,12 @@ model OutlookAccount {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+/// One-time Outlook sign-in handshake (state + PKCE verifier). Kept in the database so it
+/// survives serverless hosts where the callback may hit a different instance.
+model OutlookAuthState {
+  state String @id
+  userId String
+  verifier String
+  appOrigin String
+  createdAt DateTime @default(now())
+}

@@ -1,11 +1,8 @@
 import { cookies } from 'next/headers';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { db } from './db';
-const secret = () => {
-  if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32)
-    throw new Error('SESSION_SECRET must be at least 32 characters.');
-  return process.env.SESSION_SECRET;
-};
+import { appSecret } from './secret';
+const secret = appSecret;
 export function sessionToken(id: string) {
   const payload = `${id}.${Date.now() + 86400000}`;
   return `${payload}.${createHmac('sha256', secret()).update(payload).digest('hex')}`;

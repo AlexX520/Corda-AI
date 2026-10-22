@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { currentUser, errorResponse, sameOrigin } from '@/lib/auth';
 import { command } from '@/lib/service';
+export const maxDuration = 60;
 export async function POST(req: Request) {
   try {
     sameOrigin(req);

@@ -3,9 +3,10 @@ import { redirectUri, takeAuth } from '@/lib/graph';
 import { command } from '@/lib/service';
 import { connectOutlook, syncOutlook } from '@/lib/outlook-service';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const pending = takeAuth(url.searchParams.get('state') || '');
+  const pending = await takeAuth(url.searchParams.get('state') || '').catch(() => null);
   const home = pending?.appOrigin || new URL(redirectUri()).origin;
   const back = (status: string, message?: string) =>
     Response.redirect(

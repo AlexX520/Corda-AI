@@ -13,9 +13,9 @@ export async function GET(req: Request) {
       req.headers.get('x-forwarded-proto') || new URL(req.url).protocol.replace(':', '');
     const appOrigin = `${proto}://${host}`;
     const { verifier, challenge, state } = newAuthRequest();
-    // The callback may arrive on a different host name (localhost vs 127.0.0.1), so the
-    // sign-in is matched by its one-time state, not by a cookie.
-    rememberAuth(state, { userId: user.id, verifier, appOrigin });
+    // The callback may arrive on a different host name (localhost vs 127.0.0.1) or server
+    // instance, so the sign-in is matched by its one-time state stored in the database.
+    await rememberAuth(state, { userId: user.id, verifier, appOrigin });
     return Response.redirect(authorizeUrl(state, challenge), 302);
   } catch (e) {
     return errorResponse(e);

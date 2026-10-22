@@ -2,6 +2,7 @@ import ExcelJS from 'exceljs';
 import { banker, currentUser, errorResponse, sameOrigin } from '@/lib/auth';
 import { parseEmailFile } from '@/lib/email-file';
 import { command } from '@/lib/service';
+export const maxDuration = 60;
 export async function POST(req: Request) {
   try {
     sameOrigin(req);

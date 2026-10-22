@@ -4,6 +4,7 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { currentUser, errorResponse } from '@/lib/auth';
 import { db } from '@/lib/db';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 const safe = (s: string) => (/^[=+@-]/.test(s) ? `'${s}` : s);
 const icsText = (s: string) =>
   s.replace(/\\/g, '\\\\').replace(/\r?\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
