@@ -29,7 +29,11 @@ export function Sheet({
           <header className="sheet-head">
             <div>
               <DialogPrimitive.Title className="sheet-title">{title}</DialogPrimitive.Title>
-              {description && <DialogPrimitive.Description className="sheet-desc">{description}</DialogPrimitive.Description>}
+              {description && (
+                <DialogPrimitive.Description className="sheet-desc">
+                  {description}
+                </DialogPrimitive.Description>
+              )}
             </div>
             <DialogPrimitive.Close className="sheet-close" aria-label="Close">
               <X size={18} />

@@ -17,8 +17,20 @@ export type ParsedRequest = {
 };
 
 const GENERIC = new Set([
-  'capital', 'financial', 'credit', 'management', 'mortgage', 'price', 'group', 'partners',
-  'investments', 'asset', 'bank', 'the', 'and', 'of',
+  'capital',
+  'financial',
+  'credit',
+  'management',
+  'mortgage',
+  'price',
+  'group',
+  'partners',
+  'investments',
+  'asset',
+  'bank',
+  'the',
+  'and',
+  'of',
 ]);
 
 /** Names people actually type: full name, name without generic suffixes, first distinctive word. */
@@ -109,12 +121,18 @@ export function parseRequestText(
   if (dayWord) date = days.find((d) => DAYS[parseISO(d).getDay()] === dayWord[1]) || null;
   const numeric = lower.match(/\b(\d{1,2})\/(\d{1,2})\b/);
   if (!date && numeric)
-    date = days.find((d) => Number(d.slice(5, 7)) === +numeric[1] && Number(d.slice(8)) === +numeric[2]) || null;
-  const named = lower.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b/);
+    date =
+      days.find(
+        (d) => Number(d.slice(5, 7)) === +numeric[1] && Number(d.slice(8)) === +numeric[2],
+      ) || null;
+  const named = lower.match(
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b/,
+  );
   if (!date && named)
     date =
       days.find(
-        (d) => format(parseISO(d), 'MMM').toLowerCase() === named[1] && Number(d.slice(8)) === +named[2],
+        (d) =>
+          format(parseISO(d), 'MMM').toLowerCase() === named[1] && Number(d.slice(8)) === +named[2],
       ) || null;
   if (!date && /\b(day one|day 1|first day)\b/.test(lower)) date = days[0];
   if (!date && days.length === 1) date = days[0];
@@ -131,7 +149,9 @@ export function parseRequestText(
     // "11-1pm": the start inherited PM it should not have.
     if (!range[2] && windowStart > windowEnd) windowStart = parseClock(range[1], 'am');
   } else {
-    const single = lower.match(/\b(?:at\s+)?(\d{1,2}(?::\d{2})?)\s*(am|pm)\b|\bat\s+(\d{1,2}(?::\d{2})?)\b/);
+    const single = lower.match(
+      /\b(?:at\s+)?(\d{1,2}(?::\d{2})?)\s*(am|pm)\b|\bat\s+(\d{1,2}(?::\d{2})?)\b/,
+    );
     if (single) windowStart = parseClock(single[1] || single[3], single[2]);
   }
   const morning = /\bmorning\b/.test(lower),

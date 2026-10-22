@@ -13,6 +13,10 @@ npm install
 cp .env.example .env
 ```
 
+### Windows: one double-click
+
+Double-click `start-windows.bat`. It installs packages on the first run, starts the embedded database in a second window, applies migrations and seed data, and opens http://localhost:3000. Keep both windows open. If the system drive is nearly full, put the project on another drive before the first run (the install needs about 2 GB).
+
 ### Option A — Docker PostgreSQL (recommended)
 
 ```bash
@@ -38,7 +42,7 @@ npm run setup
 npm run dev
 ```
 
-Open **http://127.0.0.1:3000**. In demo mode the app opens as Alex Morgan. Use the profile selector at the bottom of the sidebar to switch identity. The first build may take a few seconds. Stop the development server before running `npm run build`; both use `.next`.
+Open **http://localhost:3000** (use `localhost` rather than `127.0.0.1` if you connect Outlook, so the sign-in returns to the same address). In demo mode the app opens as Alex Morgan. Use the profile selector at the bottom of the sidebar to switch identity. The first build may take a few seconds. Stop the development server before running `npm run build`; both use `.next`.
 
 For an optimized build:
 

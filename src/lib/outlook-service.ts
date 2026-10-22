@@ -16,13 +16,19 @@ const cache = new Map<string, { token: string; expires: number }>();
 
 export async function connectOutlook(userId: string, code: string, verifier: string) {
   const t = await exchangeCode(code, verifier);
-  if (!t.refresh_token) throw new Error('Microsoft did not return offline access. Try connecting again.');
+  if (!t.refresh_token)
+    throw new Error('Microsoft did not return offline access. Try connecting again.');
   const profile = await me(t.access_token);
   const email = (profile.mail || profile.userPrincipalName || '').toLowerCase();
   cache.set(userId, { token: t.access_token, expires: Date.now() + (t.expires_in - 120) * 1000 });
   await db.outlookAccount.upsert({
     where: { userId },
-    create: { userId, email, displayName: profile.displayName || '', refreshToken: seal(t.refresh_token) },
+    create: {
+      userId,
+      email,
+      displayName: profile.displayName || '',
+      refreshToken: seal(t.refresh_token),
+    },
     update: {
       email,
       displayName: profile.displayName || '',
@@ -42,7 +48,10 @@ export async function accessTokenFor(userId: string) {
   const t = await refreshAccess(unseal(account.refreshToken));
   cache.set(userId, { token: t.access_token, expires: Date.now() + (t.expires_in - 120) * 1000 });
   if (t.refresh_token)
-    await db.outlookAccount.update({ where: { userId }, data: { refreshToken: seal(t.refresh_token) } });
+    await db.outlookAccount.update({
+      where: { userId },
+      data: { refreshToken: seal(t.refresh_token) },
+    });
   return t.access_token;
 }
 

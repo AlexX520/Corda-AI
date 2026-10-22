@@ -8,7 +8,6 @@ import { fmt, names, Run } from './shared';
 
 type Action = AppState['actions'][number];
 
-
 /** Generic uncertainty the parser adds when it could not pick the meeting/request itself.
  *  Picking it in the card resolves it, so it is not shown as a separate warning. */
 const SELECT_UNCERTAINTY = 'Select and verify the existing meeting or request';
@@ -28,7 +27,9 @@ type DraftRow = AppState['drafts'][number];
 async function newestDraft(match: (d: DraftRow) => boolean) {
   try {
     const s = (await (await fetch('/api/state', { cache: 'no-store' })).json()) as AppState;
-    return s.drafts.filter((d) => d.status === 'Draft' && match(d)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    return s.drafts
+      .filter((d) => d.status === 'Draft' && match(d))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   } catch {
     return undefined;
   }
@@ -48,7 +49,11 @@ export function describe(a: Action, data: AppState) {
     const waiting = email.proposal?.status === 'Clarification requested';
     return {
       who,
-      what: waiting ? 'Waiting on issuer reply' : e ? verbs[e.operation] || e.category : email.subject,
+      what: waiting
+        ? 'Waiting on issuer reply'
+        : e
+          ? verbs[e.operation] || e.category
+          : email.subject,
       when: fmt(email.receivedAt, zone, 'MMM d'),
       attention: !waiting && realUncertainties(e).length > 0,
     };
@@ -58,7 +63,11 @@ export function describe(a: Action, data: AppState) {
     const drafted = data.drafts.some((d) => d.requestId === request.id && d.status === 'Draft');
     return {
       who,
-      what: drafted ? 'Draft to issuer ready' : conflict ? 'Requested time is taken' : `Meeting request · ${fmt(request.start, zone, 'EEE h:mm a')}`,
+      what: drafted
+        ? 'Draft to issuer ready'
+        : conflict
+          ? 'Requested time is taken'
+          : `Meeting request · ${fmt(request.start, zone, 'EEE h:mm a')}`,
       when: 'Request',
       attention: conflict,
     };
@@ -97,7 +106,11 @@ export function DecisionCard(props: {
           variant="ghost"
           onClick={() =>
             props
-              .run('action', { id: action.id, status: 'Resolved' }, 'Marked as done. No schedule change applied.')
+              .run(
+                'action',
+                { id: action.id, status: 'Resolved' },
+                'Marked as done. No schedule change applied.',
+              )
               .then((ok) => ok && props.onDone())
           }
         >
@@ -124,7 +137,8 @@ export function EmailDecision({
   const n = names(data);
   const proposal = email.proposal;
   const original = proposal?.extraction as unknown as Extraction | undefined;
-  const zone = data.conferences.find((c) => c.id === email.conferenceId)?.timezone || 'America/New_York';
+  const zone =
+    data.conferences.find((c) => c.id === email.conferenceId)?.timezone || 'America/New_York';
   const [json, setJson] = useState(JSON.stringify(original, null, 2));
   const [showEmail, setShowEmail] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
@@ -155,14 +169,18 @@ export function EmailDecision({
   const [meetingId, setMeetingId] = useState(
     e?.meetingId || (meetingCandidates.length === 1 ? meetingCandidates[0].id : ''),
   );
-  const [requestId, setRequestId] = useState(requestCandidates.length === 1 ? requestCandidates[0].id : '');
+  const [requestId, setRequestId] = useState(
+    requestCandidates.length === 1 ? requestCandidates[0].id : '',
+  );
   const meeting = data.meetings.find((m) => m.id === meetingId);
   const req = data.requests.find((r) => r.id === requestId);
   const issues = realUncertainties(e);
   const needsMeeting = ['cancel', 'reschedule'].includes(op);
   const needsRequest = op === 'confirm';
   const needsConsent = needsMeeting || needsRequest;
-  const hasSelectUncertainty = (e?.uncertainties || []).some((u) => u.startsWith(SELECT_UNCERTAINTY));
+  const hasSelectUncertainty = (e?.uncertainties || []).some((u) =>
+    u.startsWith(SELECT_UNCERTAINTY),
+  );
   const waiting = proposal?.status === 'Clarification requested';
   const draft = data.drafts.find((d) => d.emailId === email.id && d.status === 'Draft');
   const [openNewDraft, setOpenNewDraft] = useState(false);
@@ -174,10 +192,15 @@ export function EmailDecision({
   }, [openNewDraft, draft, onOpenDraft]);
   const newWindows = (e?.windows || []).filter((w) => w.kind === 'availability');
   const current = data.availability.filter(
-    (a) => a.conferenceId === e?.conferenceId && a.issuerId === e?.issuerId && a.kind === 'Available',
+    (a) =>
+      a.conferenceId === e?.conferenceId && a.issuerId === e?.issuerId && a.kind === 'Available',
   );
   const issuer = n.issuer(e?.issuerId || email.issuerId);
-  const investor = e?.investorId ? n.investor(e.investorId) : meeting ? n.investor(meeting.investorId) : '';
+  const investor = e?.investorId
+    ? n.investor(e.investorId)
+    : meeting
+      ? n.investor(meeting.investorId)
+      : '';
   const quote = email.newContent.replace(/\s+/g, ' ').trim();
 
   const headline =
@@ -214,7 +237,10 @@ export function EmailDecision({
         : req && needsRequest
           ? `Verified request: ${n.investor(req.investorId)} · ${fmt(req.start, zone)}`
           : '';
-    const finalNote = decision === 'approve' ? [note.trim(), hasSelectUncertainty ? autoNote : ''].filter(Boolean).join('\n') : note;
+    const finalNote =
+      decision === 'approve'
+        ? [note.trim(), hasSelectUncertainty ? autoNote : ''].filter(Boolean).join('\n')
+        : note;
     setBusy(true);
     const ok = await run(
       'review',
@@ -243,8 +269,7 @@ export function EmailDecision({
       const d = await newestDraft((x) => x.emailId === email.id);
       if (d) onOpenDraft(d.id);
       else setOpenNewDraft(true);
-    }
-    else if (ok && decision !== 'edit') onDone();
+    } else if (ok && decision !== 'edit') onDone();
   }
 
   return (
@@ -258,7 +283,11 @@ export function EmailDecision({
         <div className="dc-waiting">
           <p>You asked the issuer to clarify. Nothing changes on the schedule until you approve.</p>
           <div className="dc-actions">
-            {draft && <Button onClick={() => onOpenDraft(draft.id)}><Mail size={14} /> Review draft to issuer</Button>}
+            {draft && (
+              <Button onClick={() => onOpenDraft(draft.id)}>
+                <Mail size={14} /> Review draft to issuer
+              </Button>
+            )}
             <Button variant="outline" disabled={busy} onClick={() => setConfirming(true)}>
               Approve anyway
             </Button>
@@ -315,7 +344,13 @@ export function EmailDecision({
           ) : newWindows.length ? (
             newWindows.map((w, i) => (
               <strong key={i}>
-                {op === 'remove' ? 'Removes ' : op === 'reschedule' ? 'Moves to ' : op === 'replace' ? 'Only ' : 'Adds '}
+                {op === 'remove'
+                  ? 'Removes '
+                  : op === 'reschedule'
+                    ? 'Moves to '
+                    : op === 'replace'
+                      ? 'Only '
+                      : 'Adds '}
                 {fmt(w.start, zone, 'EEE h:mm a')} – {fmt(w.end, zone, 'h:mm a')}
               </strong>
             ))
@@ -377,7 +412,9 @@ export function EmailDecision({
         </button>
         {showEmail && (
           <div className="dc-email">
-            <span>From {email.sender} · To {email.to.join(', ')}</span>
+            <span>
+              From {email.sender} · To {email.to.join(', ')}
+            </span>
             <pre>{email.body}</pre>
           </div>
         )}
@@ -385,8 +422,10 @@ export function EmailDecision({
 
       {error && <p className="error">{error}</p>}
 
-      {!waiting && proposal && proposal.status === 'Pending' && (
-        confirming ? (
+      {!waiting &&
+        proposal &&
+        proposal.status === 'Pending' &&
+        (confirming ? (
           <ConfirmStrip
             text={
               needsConsent
@@ -404,7 +443,11 @@ export function EmailDecision({
                 <Button disabled={busy} onClick={() => decide('clarify')}>
                   <Mail size={14} /> Ask issuer
                 </Button>
-                <Button variant="outline" disabled={busy || !canApprove} onClick={() => setConfirming(true)}>
+                <Button
+                  variant="outline"
+                  disabled={busy || !canApprove}
+                  onClick={() => setConfirming(true)}
+                >
                   <Check size={14} /> Approve
                 </Button>
               </>
@@ -422,8 +465,7 @@ export function EmailDecision({
               Reject
             </Button>
           </div>
-        )
-      )}
+        ))}
       {waiting && confirming && (
         <ConfirmStrip
           text={`I checked this with ${issuer} and they approved the change.`}
@@ -433,9 +475,18 @@ export function EmailDecision({
         />
       )}
 
-      <details className="dc-more" open={showEditor} onToggle={(ev) => setShowEditor((ev.target as HTMLDetailsElement).open)}>
+      <details
+        className="dc-more"
+        open={showEditor}
+        onToggle={(ev) => setShowEditor((ev.target as HTMLDetailsElement).open)}
+      >
         <summary>Edit what the AI extracted</summary>
-        <textarea rows={12} value={json} onChange={(ev) => setJson(ev.target.value)} aria-label="Extracted details (JSON)" />
+        <textarea
+          rows={12}
+          value={json}
+          onChange={(ev) => setJson(ev.target.value)}
+          aria-label="Extracted details (JSON)"
+        />
         <Button size="sm" variant="outline" disabled={busy} onClick={() => decide('edit')}>
           Save edits
         </Button>
@@ -497,8 +548,14 @@ export function RequestDecision({
       <div className="dc-diff">
         <div className="dc-before">
           <span className="dc-label">Requested</span>
-          {conflict ? <s>{fmt(r.start, c.timezone, 'EEE, MMM d · h:mm a')}</s> : <span>{fmt(r.start, c.timezone, 'EEE, MMM d · h:mm a')}</span>}
-          <span>{r.duration} min · {conflict ? 'that time is taken' : 'open on both calendars'}</span>
+          {conflict ? (
+            <s>{fmt(r.start, c.timezone, 'EEE, MMM d · h:mm a')}</s>
+          ) : (
+            <span>{fmt(r.start, c.timezone, 'EEE, MMM d · h:mm a')}</span>
+          )}
+          <span>
+            {r.duration} min · {conflict ? 'that time is taken' : 'open on both calendars'}
+          </span>
         </div>
         <ArrowRight className="dc-arrow" size={18} aria-hidden="true" />
         <div className="dc-after">
@@ -519,15 +576,25 @@ export function RequestDecision({
         <div className="dc-slots">
           <span>Open times for both sides</span>
           <div>
-            {[...r.alternatives].sort((x, y) => x.start.localeCompare(y.start)).slice(0, 6).map((s) => (
-              <button
-                key={s.start}
-                disabled={busy}
-                onClick={() => go('alternative', { id: r.id, start: s.start }, 'Time updated. Confirm when the issuer agrees.', false)}
-              >
-                {fmt(s.start, c.timezone, 'EEE h:mm a')}
-              </button>
-            ))}
+            {[...r.alternatives]
+              .sort((x, y) => x.start.localeCompare(y.start))
+              .slice(0, 6)
+              .map((s) => (
+                <button
+                  key={s.start}
+                  disabled={busy}
+                  onClick={() =>
+                    go(
+                      'alternative',
+                      { id: r.id, start: s.start },
+                      'Time updated. Confirm when the issuer agrees.',
+                      false,
+                    )
+                  }
+                >
+                  {fmt(s.start, c.timezone, 'EEE h:mm a')}
+                </button>
+              ))}
           </div>
         </div>
       )}
@@ -535,7 +602,11 @@ export function RequestDecision({
       {!conflict && (
         <label className="dc-pick">
           <span>Room</span>
-          <input placeholder="Optional, e.g. Ocean Tower · 201" value={location} onChange={(ev) => setLocation(ev.target.value)} />
+          <input
+            placeholder="Optional, e.g. Ocean Tower · 201"
+            value={location}
+            onChange={(ev) => setLocation(ev.target.value)}
+          />
         </label>
       )}
       {drafts[0] && (
@@ -551,7 +622,13 @@ export function RequestDecision({
           text={`${issuer} agreed to this time.`}
           busy={busy}
           onCancel={() => setConfirming(false)}
-          onConfirm={() => go('confirm', { id: r.id, location, consent: true }, 'Meeting confirmed and added to the schedule.')}
+          onConfirm={() =>
+            go(
+              'confirm',
+              { id: r.id, location, consent: true },
+              'Meeting confirmed and added to the schedule.',
+            )
+          }
         />
       ) : (
         <div className="dc-actions">
@@ -566,12 +643,24 @@ export function RequestDecision({
             onClick={() => {
               if (drafts[0]) return onOpenDraft(drafts[0].id);
               setOpenNewDraft(true);
-              void go('requestDraft', { id: r.id, purpose: conflict ? 'Alternative time proposal' : 'Availability inquiry' }, 'Draft ready. Review it before sending.', false);
+              void go(
+                'requestDraft',
+                {
+                  id: r.id,
+                  purpose: conflict ? 'Alternative time proposal' : 'Availability inquiry',
+                },
+                'Draft ready. Review it before sending.',
+                false,
+              );
             }}
           >
             <Mail size={14} /> {drafts[0] ? 'Open draft to issuer' : 'Email issuer'}
           </Button>
-          <Button variant="ghost" disabled={busy} onClick={() => go('cancelRequest', { id: r.id }, 'Request cancelled.')}>
+          <Button
+            variant="ghost"
+            disabled={busy}
+            onClick={() => go('cancelRequest', { id: r.id }, 'Request cancelled.')}
+          >
             Decline
           </Button>
         </div>

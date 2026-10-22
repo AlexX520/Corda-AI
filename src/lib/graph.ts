@@ -26,8 +26,9 @@ export function redirectUri() {
 }
 
 type PendingAuth = { userId: string; verifier: string; appOrigin: string; at: number };
-const pending: Map<string, PendingAuth> = ((globalThis as { __cordaAuth?: Map<string, PendingAuth> }).__cordaAuth ??=
-  new Map());
+const pending: Map<string, PendingAuth> = ((
+  globalThis as { __cordaAuth?: Map<string, PendingAuth> }
+).__cordaAuth ??= new Map());
 export function rememberAuth(state: string, p: Omit<PendingAuth, 'at'>) {
   for (const [k, v] of pending) if (Date.now() - v.at > 600_000) pending.delete(k);
   pending.set(state, { ...p, at: Date.now() });
@@ -97,7 +98,9 @@ export const refreshAccess = (refreshToken: string) =>
 
 /** Refresh tokens are stored encrypted with a key derived from SESSION_SECRET. */
 function key() {
-  return createHash('sha256').update(`outlook:${process.env.SESSION_SECRET || ''}`).digest();
+  return createHash('sha256')
+    .update(`outlook:${process.env.SESSION_SECRET || ''}`)
+    .digest();
 }
 export function seal(text: string) {
   const iv = randomBytes(12);
@@ -125,7 +128,8 @@ async function graph<T>(token: string, path: string, init: RequestInit = {}): Pr
   });
   if (r.status === 202 || r.status === 204) return undefined as T;
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`Outlook error ${r.status}: ${data?.error?.message || 'request failed'}`);
+  if (!r.ok)
+    throw new Error(`Outlook error ${r.status}: ${data?.error?.message || 'request failed'}`);
   return data as T;
 }
 
@@ -149,7 +153,12 @@ export type GraphMessage = {
  * One sync round: follows nextLinks until a deltaLink comes back (or the page cap is hit).
  * First run looks back `sinceDays` so a new connection picks up the conference thread so far.
  */
-export async function inboxDelta(token: string, deltaLink: string | null, sinceDays = 30, maxPages = 10) {
+export async function inboxDelta(
+  token: string,
+  deltaLink: string | null,
+  sinceDays = 30,
+  maxPages = 10,
+) {
   let url =
     deltaLink ||
     `/me/mailFolders/inbox/messages/delta?$select=subject,from,toRecipients,ccRecipients,body,receivedDateTime,internetMessageId,conversationId&$filter=receivedDateTime%20ge%20${new Date(
@@ -157,10 +166,11 @@ export async function inboxDelta(token: string, deltaLink: string | null, sinceD
     ).toISOString()}`;
   const messages: GraphMessage[] = [];
   for (let page = 0; page < maxPages; page++) {
-    const data = await graph<{ value: GraphMessage[]; '@odata.nextLink'?: string; '@odata.deltaLink'?: string }>(
-      token,
-      url,
-    );
+    const data = await graph<{
+      value: GraphMessage[];
+      '@odata.nextLink'?: string;
+      '@odata.deltaLink'?: string;
+    }>(token, url);
     messages.push(...data.value.filter((m) => !m['@removed']));
     if (data['@odata.deltaLink']) return { messages, deltaLink: data['@odata.deltaLink'] };
     if (!data['@odata.nextLink']) break;
@@ -174,7 +184,13 @@ const recipients = (list: string[]) => list.map((address) => ({ emailAddress: { 
 
 export async function sendMail(
   token: string,
-  m: { to: string[]; cc: string[]; subject: string; body: string; ics?: { name: string; text: string } },
+  m: {
+    to: string[];
+    cc: string[];
+    subject: string;
+    body: string;
+    ics?: { name: string; text: string };
+  },
 ) {
   await graph(token, '/me/sendMail', {
     method: 'POST',
@@ -216,7 +232,8 @@ export async function replyInThread(
 }
 
 export function toIngest(m: GraphMessage, fallbackTo: string) {
-  const addr = (x?: { emailAddress?: { address?: string } }) => x?.emailAddress?.address?.toLowerCase() || '';
+  const addr = (x?: { emailAddress?: { address?: string } }) =>
+    x?.emailAddress?.address?.toLowerCase() || '';
   const valid = (s: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
   const to = (m.toRecipients || []).map(addr).filter(valid);
   return {

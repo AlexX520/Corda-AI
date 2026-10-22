@@ -122,21 +122,17 @@ async function makeConfirmationDraft(tx: Tx, user: User, meetingId: string) {
   const email = m.sourceEmailId
     ? await tx.email.findUnique({ where: { id: m.sourceEmailId } })
     : null;
-  const internal = new Set((await tx.user.findMany()).map((u) => u.email.toLowerCase()));
-  const to = [...new Set([i.contactEmail, v.contactEmail].filter(Boolean))];
-  // Everyone else on the email chain is copied; the banker reviews before anything is sent.
+  // Recipients are never pre-filled: everyone on the chain is offered as a suggestion and the
+  // banker adds them deliberately (see "Contacts to review" in the draft editor).
   const chain = email ? [email.sender, ...email.to, ...email.cc] : [];
-  const cc = [...new Set(chain.map((x) => x.toLowerCase()))].filter(
-    (x) => !to.includes(x) && !internal.has(x) && x !== user.email.toLowerCase(),
-  );
   return tx.draft.create({
     data: {
       meetingId: m.id,
       emailId: email?.id,
       createdBy: user.id,
       sender: user.email,
-      to,
-      cc,
+      to: [],
+      cc: [],
       historicalParticipants: [...new Set([i.contactEmail, v.contactEmail, ...chain])],
       subject: `${c.name} | ${i.name} × ${v.name} — meeting confirmation`,
       body: `Hello,\n\nYour meeting is confirmed for ${formatInTimeZone(m.start, c.timezone, 'EEEE, MMMM d, h:mm a')}–${formatInTimeZone(m.end, c.timezone, 'h:mm a')} (${c.timezone}).\n\nIssuer: ${i.name}\nInvestor: ${v.name}\nLocation: ${m.location || 'To be confirmed'}\n\nA meeting-specific calendar attachment will accompany this draft.\n\nBest regards,\n${user.name}`,
@@ -762,19 +758,13 @@ export async function command(user: User, type: string, input: unknown): Promise
           const i = await tx.issuer.findUniqueOrThrow({ where: { id: m.issuerId } }),
             v = await tx.investor.findUniqueOrThrow({ where: { id: m.investorId } }),
             bankers = await tx.user.findMany({ where: { role: 'BANKER' } });
-          const source = m.sourceEmailId
-            ? await tx.email.findUnique({ where: { id: m.sourceEmailId } })
-            : null;
-          const allowed = [
-            i.contactEmail,
-            v.contactEmail,
-            ...bankers.map((b) => b.email),
-            ...d.historicalParticipants,
-            ...(source ? [source.sender, ...source.to, ...source.cc] : []),
-          ].map((x) => x.toLowerCase());
+          // The calendar attachment only goes to the meeting's own contacts and internal bankers.
+          const allowed = [i.contactEmail, v.contactEmail, ...bankers.map((b) => b.email)].map((x) =>
+            x.toLowerCase(),
+          );
           if ([...p.to, ...p.cc].some((x) => !allowed.includes(x.toLowerCase())))
             throw new Error(
-              'Meeting attachment recipients must be on the email chain, the meeting contacts, or internal bankers.',
+              'Meeting attachment recipients must be the meeting contacts or internal bankers.',
             );
           await tx.meeting.update({
             where: { id: m.id },
