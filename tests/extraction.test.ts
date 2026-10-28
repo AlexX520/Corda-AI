@@ -101,3 +101,36 @@ test('a range like "2–4pm" takes the end time\'s PM for its start', () => {
   const morning = mockExtract('Bayview is available Monday 11-1pm at ABS East.', 'Availability', ctx);
   assert.equal(morning.windows[0].start, '2026-10-19T15:00:00.000Z');
 });
+test('times the issuer says do not work become unavailable windows', () => {
+  const e = mockExtract(
+    'Bayview: Monday 10am-1pm does not work for our CFO, but 2-4pm works for ABS East.',
+    'Re: investor request',
+    ctx,
+  );
+  assert.equal(e.category, 'Issuer Availability Update');
+  assert.deepEqual(
+    e.windows.map((w) => [w.kind, w.start]),
+    [
+      ['unavailable', '2026-10-19T14:00:00.000Z'],
+      ['availability', '2026-10-19T18:00:00.000Z'],
+    ],
+  );
+});
+test('a block with no offered time is still recorded', () => {
+  const e = mockExtract(
+    'Unfortunately the Bayview CFO is not available Monday 10am-1pm at ABS East.',
+    'Re: request',
+    ctx,
+  );
+  assert.equal(e.windows.length, 1);
+  assert.equal(e.windows[0].kind, 'unavailable');
+});
+test('"no longer" with a new offered time adds that time instead of removing it', () => {
+  const e = mockExtract(
+    'Bayview can no longer do Tuesday morning. We can take meetings Tuesday 2–4pm instead at ABS East.',
+    'Day 2',
+    ctx,
+  );
+  assert.equal(e.operation, 'add');
+  assert.equal(e.windows[0].kind, 'availability');
+});

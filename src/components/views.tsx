@@ -575,7 +575,7 @@ export function AvailabilityView({
                             {fmt(a.start, c.timezone, 'h:mm a')} –{' '}
                             {fmt(a.end, c.timezone, 'h:mm a')}
                           </strong>
-                          <small>{a.kind === 'Available' ? 'Approved availability' : a.kind}</small>
+                          <small>{a.kind === 'Available' ? 'Approved availability' : a.kind === 'Blocked' ? 'Not available (from email)' : a.kind}</small>
                         </div>
                         {data.user.role === 'BANKER' && (
                           <button

@@ -444,6 +444,8 @@ export async function command(user: User, type: string, input: unknown): Promise
         );
         if (e.uncertainties.length && (!p.uncertaintyResolved || p.note.trim().length < 10))
           throw new Error('Document how every uncertainty was resolved before approval.');
+        // Times the email says do not work become issuer blocks, even with no meeting booked.
+        const blocks = e.windows.filter((w) => w.kind === 'unavailable');
         if (e.category === 'New Meeting Request') {
           if (!e.investorId)
             throw new Error('Select an investor in the structured extraction first.');
@@ -499,13 +501,16 @@ export async function command(user: User, type: string, input: unknown): Promise
             undefined,
             request,
           );
-        } else if (e.operation === 'inquiry')
-          throw new Error(
-            'This inquiry has no schedule change. Request clarification or resolve the action.',
-          );
+        } else if (e.operation === 'inquiry') {
+          if (!blocks.length)
+            throw new Error(
+              'This inquiry has no schedule change. Request clarification or resolve the action.',
+            );
+        }
         else if (['add', 'remove', 'replace'].includes(e.operation)) {
           const windows = e.windows.filter((w) => w.kind === 'availability');
-          if (!windows.length) throw new Error('Add an explicit verified time window first.');
+          if (!windows.length && !blocks.length)
+            throw new Error('Add an explicit verified time window first.');
           if (e.operation === 'replace' && !p.replaceConfirmed)
             throw new Error('Explicit replacement confirmation required.');
           for (const w of windows) validateInterval(w, c);
@@ -608,6 +613,34 @@ export async function command(user: User, type: string, input: unknown): Promise
             data: { status: 'Superseded' },
           });
           if (e.operation === 'reschedule') await makeConfirmationDraft(tx, user, m.id);
+        }
+        for (const w of blocks) {
+          validateInterval(w, c);
+          const where = { conferenceId: c.id, issuerId: e.issuerId };
+          // Trim any offered window that overlaps, then record the block once.
+          await applyAvailability(tx, user, {
+            ...w,
+            ...where,
+            operation: 'remove',
+            kind: 'Available',
+            replaceConfirmed: false,
+            sourceEmailId: proposal.emailId,
+          });
+          const exists = await tx.availability.findFirst({
+            where: { ...where, kind: 'Blocked', start: new Date(w.start), end: new Date(w.end) },
+          });
+          if (!exists)
+            await tx.availability.create({
+              data: {
+                ...where,
+                start: new Date(w.start),
+                end: new Date(w.end),
+                kind: 'Blocked',
+                approvedBy: user.id,
+                sourceEmailId: proposal.emailId,
+              },
+            });
+          await audit(tx, user, 'Issuer unavailable time recorded', 'Availability', e.issuerId, null, w);
         }
         await refresh(tx, c.id);
       }

@@ -63,7 +63,7 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
   }
   return <>
     <div className="page-heading">
-      <div><h1>Coverage & resources</h1><p>{unresolved} items need review</p></div>
+      <div><h1>Allocation</h1><p>Bankers and meeting cubes · {unresolved} items need review</p></div>
       <Button onClick={() => run('optimizeConference', { conferenceId }, 'New allocation proposal generated.')}><Play size={16}/>Run allocation</Button>
     </div>
     <div className="stats-grid resource-stats">

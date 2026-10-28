@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
 import {
   Activity,
@@ -12,6 +12,7 @@ import {
   Check,
   CheckCheck,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
   CircleHelp,
@@ -46,10 +47,76 @@ import { ResourceAllocationView } from './resources';
 const menu = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'queue', label: 'Action queue', icon: CheckCheck },
-  { id: 'availability', label: 'Issuer availability', icon: Clock3 },
   { id: 'requests', label: 'Meeting requests', icon: Users },
-  { id: 'schedule', label: 'Schedule & allocation', icon: CalendarDays },
+  { id: 'schedule', label: 'Schedule', icon: CalendarDays },
+  { id: 'allocation', label: 'Allocation', icon: SlidersHorizontal },
 ];
+
+/* Every action is one of four schedule changes (how bankers talk about them) or "other". */
+type KindId = 'new' | 'reschedule' | 'availability' | 'cancel' | 'other';
+const kindOrder: KindId[] = ['new', 'reschedule', 'availability', 'cancel', 'other'];
+const kindLabel: Record<KindId, string> = {
+  new: 'New request',
+  reschedule: 'Reschedule',
+  availability: 'Availability',
+  cancel: 'Cancel',
+  other: 'Other',
+};
+type Action = AppState['actions'][number];
+function actionKind(a: Action, data?: AppState): { id: KindId; label: string } {
+  const t = a.type;
+  const x = data?.emails.find((e) => e.id === a.emailId)?.proposal?.extraction as
+    | { windows?: { kind: string }[] }
+    | undefined;
+  if (/inquiry/i.test(t) && x?.windows?.some((w) => w.kind === 'unavailable'))
+    return { id: 'availability', label: 'Availability' };
+  if (/reschedul/i.test(t)) return { id: 'reschedule', label: 'Reschedule' };
+  if (/cancel/i.test(t)) return { id: 'cancel', label: 'Cancel' };
+  if (/availability/i.test(t)) return { id: 'availability', label: 'Availability' };
+  if (/resource/i.test(t)) return { id: 'other', label: 'Rooms' };
+  if (/confirmation/i.test(t)) return { id: 'other', label: 'Confirmation' };
+  if (/inquiry/i.test(t)) return { id: 'other', label: 'Question' };
+  if (/request|alternative/i.test(t) || a.requestId) return { id: 'new', label: 'New request' };
+  return { id: 'other', label: t };
+}
+/** The meeting time an action is about: the request's slot or the earliest window in the email proposal. */
+function actionWhen(a: Action, data: AppState): string | null {
+  const r = data.requests.find((x) => x.id === a.requestId);
+  if (r) return r.start;
+  const e = data.emails.find((x) => x.id === a.emailId);
+  const w = (e?.proposal?.extraction as { windows?: { start: string }[] } | undefined)?.windows || [];
+  return w.length ? [...w].sort((x, y) => x.start.localeCompare(y.start))[0].start : null;
+}
+function actionReceived(a: Action, data: AppState): string {
+  return data.emails.find((x) => x.id === a.emailId)?.receivedAt || a.createdAt;
+}
+type SortMode = 'soonest' | 'received' | 'type';
+function sortActions(list: Action[], data: AppState, mode: SortMode) {
+  const far = '9999';
+  return [...list].sort((a, b) => {
+    if (mode === 'received') return actionReceived(b, data).localeCompare(actionReceived(a, data));
+    if (mode === 'type') {
+      const d = kindOrder.indexOf(actionKind(a, data).id) - kindOrder.indexOf(actionKind(b, data).id);
+      if (d) return d;
+    }
+    return (actionWhen(a, data) || far).localeCompare(actionWhen(b, data) || far);
+  });
+}
+function SortToggle({ value, onChange }: { value: SortMode; onChange: (m: SortMode) => void }) {
+  return (
+    <div className="sort-toggle" role="group" aria-label="Sort decisions">
+      {([
+        ['soonest', 'Meeting time'],
+        ['received', 'Newest email'],
+        ['type', 'Type'],
+      ] as const).map(([id, label]) => (
+        <button key={id} className={value === id ? 'active' : ''} aria-pressed={value === id} onClick={() => onChange(id)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
 function CordaMark() {
   return (
     <div className="brand-mark" aria-hidden="true">
@@ -74,12 +141,13 @@ export function Workspace() {
     [reviewId, setReviewId] = useState<string | null>(null),
     [draftId, setDraftId] = useState<string | null>(null),
     [queueSection, setQueueSection] = useState<'tasks' | 'emails' | 'drafts'>('tasks'),
-    [scheduleSection, setScheduleSection] = useState<'schedule' | 'allocation'>('schedule'),
+    [scheduleSection, setScheduleSection] = useState<'schedule' | 'availability'>('schedule'),
+    [queueFocus, setQueueFocus] = useState<'all' | KindId>('all'),
+    [overviewSort, setOverviewSort] = useState<SortMode>('soonest'),
     [help, setHelp] = useState(false),
     [busy, setBusy] = useState(false),
     [sheetRequestId, setSheetRequestId] = useState<string | null>(null),
     [outlookOpen, setOutlookOpen] = useState(false),
-    [agendaDay, setAgendaDay] = useState<string | null>(null),
     [mobile, setMobile] = useState(false);
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
@@ -193,10 +261,13 @@ export function Workspace() {
     } else if (id === 'planner') {
       setPage('schedule');
       setScheduleSection('schedule');
-    } else if (id === 'resources') {
+    } else if (id === 'availability') {
       setPage('schedule');
-      setScheduleSection('allocation');
+      setScheduleSection('availability');
+    } else if (id === 'resources') {
+      setPage('allocation');
     } else {
+      if (id === 'queue') setQueueSection('tasks');
       setPage(id);
     }
     setSearch('');
@@ -251,16 +322,6 @@ export function Workspace() {
     outlook = data.outlook,
     draft = data.drafts.find((d) => d.id === draftId);
   const confirmed = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed');
-  const days: string[] = [];
-  for (let d = new Date(`${c.startDate}T12:00:00Z`); d <= new Date(`${c.endDate}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + 1))
-    days.push(d.toISOString().slice(0, 10));
-  const shownDay =
-    agendaDay && days.includes(agendaDay)
-      ? agendaDay
-      : days.find((d) => confirmed.some((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === d)) || c.startDate;
-  const dayMeetings = confirmed
-    .filter((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === shownDay)
-    .sort((a, b) => a.start.localeCompare(b.start));
   function actionClick(a: AppState['actions'][number]) {
     if (a.emailId) setReviewId(a.emailId);
     else if (a.requestId) setSheetRequestId(a.requestId);
@@ -294,7 +355,7 @@ export function Workspace() {
         <div className="nav-label">WORKSPACE</div>
         <nav>
           {menu
-            .filter((m) => banker || m.id !== 'queue')
+            .filter((m) => banker || !['queue', 'allocation'].includes(m.id))
             .map((m) => (
               <button
                 key={m.id}
@@ -458,10 +519,10 @@ export function Workspace() {
               <strong>{queueSection === 'emails' ? 'Email reviews' : 'Draft communications'}</strong>
             </div>
           )}
-          {page === 'schedule' && banker && (
-            <div className="workspace-subnav" aria-label="Schedule and allocation sections">
-              <button className={scheduleSection === 'schedule' ? 'active' : ''} onClick={() => setScheduleSection('schedule')}>Schedules</button>
-              <button className={scheduleSection === 'allocation' ? 'active' : ''} onClick={() => setScheduleSection('allocation')}>Coverage & resources</button>
+          {page === 'schedule' && (
+            <div className="workspace-subnav" aria-label="Schedule sections">
+              <button className={scheduleSection === 'schedule' ? 'active' : ''} onClick={() => setScheduleSection('schedule')}>Meetings</button>
+              <button className={scheduleSection === 'availability' ? 'active' : ''} onClick={() => setScheduleSection('availability')}>Issuer availability</button>
             </div>
           )}
           {page === 'overview' && (
@@ -491,161 +552,127 @@ export function Workspace() {
                   }
                   foot={banker ? 'AI has done the groundwork' : 'Subject to banker approval'}
                   cta={banker ? 'Start reviewing' : 'See requests'}
-                  onClick={() => navigate(banker ? 'queue' : 'requests')}
+                  onClick={() => {
+                    setQueueFocus('all');
+                    navigate(banker ? 'queue' : 'requests');
+                  }}
                   tone="amber"
                 />
-                <Stat
-                  icon={Users}
-                  label="Open meeting requests"
-                  value={
-                    data.requests.filter(
-                      (r) =>
-                        r.conferenceId === conferenceId &&
-                        !['Confirmed', 'Cancelled'].includes(r.status),
-                    ).length
-                  }
-                  foot="Investor conversations in motion"
-                  cta="Open requests"
-                  onClick={() => navigate('requests')}
-                  tone="blue"
-                />
+                {banker ? (
+                  <Stat
+                    icon={Users}
+                    label="New meeting requests"
+                    value={openActions.filter((a) => actionKind(a, data).id === 'new').length}
+                    foot="Investors and issuers asking to meet"
+                    cta="Review new requests"
+                    onClick={() => {
+                      setQueueFocus('new');
+                      navigate('queue');
+                    }}
+                    tone="blue"
+                  />
+                ) : (
+                  <Stat
+                    icon={Users}
+                    label="Open meeting requests"
+                    value={
+                      data.requests.filter(
+                        (r) => r.conferenceId === conferenceId && !['Confirmed', 'Cancelled'].includes(r.status),
+                      ).length
+                    }
+                    foot="Investor conversations in motion"
+                    cta="Open requests"
+                    onClick={() => navigate('requests')}
+                    tone="blue"
+                  />
+                )}
                 <Stat
                   icon={CalendarDays}
                   label="Confirmed meetings"
-                  value={
-                    data.meetings.filter(
-                      (m) => m.conferenceId === conferenceId && m.status === 'Confirmed',
-                    ).length
-                  }
+                  value={confirmed.length}
                   foot="Approved and on the planner"
                   cta="Open schedule"
                   onClick={() => navigate('planner')}
                   tone="green"
                 />
               </div>
-              <div className="overview-columns">
+              {banker ? (
+                <div className="panel decide-panel">
+                  <div className="panel-heading">
+                    <div>
+                      <h3>
+                        Needs your decision <span className="count-pill">{openActions.length}</span>
+                      </h3>
+                    </div>
+                    <div className="decide-tools">
+                      <SortToggle value={overviewSort} onChange={setOverviewSort} />
+                      <button
+                        className="text-button"
+                        onClick={() => {
+                          setQueueFocus('all');
+                          navigate('queue');
+                        }}
+                      >
+                        View all <ArrowUpRight size={14} />
+                      </button>
+                    </div>
+                  </div>
+                  <DecisionStrip
+                    actions={sortActions(
+                      openActions.filter((a) =>
+                        `${a.title} ${a.type} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`
+                          .toLowerCase()
+                          .includes(search.toLowerCase()),
+                      ),
+                      data,
+                      overviewSort,
+                    )}
+                    data={data}
+                    zone={c.timezone}
+                    onClick={actionClick}
+                  />
+                </div>
+              ) : (
                 <div className="panel">
                   <div className="panel-heading">
                     <div>
                       <h3>
-                        {banker ? 'Your action queue' : 'Your recent requests'}{' '}
+                        Your recent requests{' '}
                         <span className="count-pill">
-                          {banker
-                            ? openActions.length
-                            : data.requests.filter((r) => r.conferenceId === conferenceId).length}
+                          {data.requests.filter((r) => r.conferenceId === conferenceId).length}
                         </span>
                       </h3>
                     </div>
-                    <button
-                      className="text-button"
-                      onClick={() => navigate(banker ? 'queue' : 'requests')}
-                    >
+                    <button className="text-button" onClick={() => navigate('requests')}>
                       View all <ArrowUpRight size={14} />
                     </button>
                   </div>
-                  {banker ? (
-                    <ActionList
-                      actions={openActions
-                        .filter((a) =>
-                          `${a.title} ${a.type}`.toLowerCase().includes(search.toLowerCase()),
-                        )
-                        .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority))
-                        .slice(0, 4)}
-                      data={data}
-                      onClick={actionClick}
-                    />
-                  ) : (
-                    <div className="recent-requests">
-                      {data.requests
-                        .filter((r) => r.conferenceId === conferenceId)
-                        .slice(0, 5)
-                        .map((r) => (
-                          <button key={r.id} onClick={() => navigate('requests')}>
-                            <Avatar
-                              name={n.issuer(r.issuerId)}
-                              color={data.issuers.find((i) => i.id === r.issuerId)?.color}
-                            />
-                            <div>
-                              <strong>{n.issuer(r.issuerId)}</strong>
-                              <small>{n.investor(r.investorId)}</small>
-                            </div>
-                            <Badge>{r.status}</Badge>
-                          </button>
-                        ))}
-                      {!data.requests.some((r) => r.conferenceId === conferenceId) && (
-                        <Empty
-                          title="Start a conversation"
-                          description="Create your first meeting request for this conference."
-                        />
-                      )}
-                    </div>
-                  )}
-                </div>
-                <div className="panel schedule-preview">
-                  <div className="panel-heading">
-                    <div>
-                      <h3>On the agenda</h3>
-                      <p>{fmt(`${shownDay}T12:00:00Z`, c.timezone, 'EEEE, MMMM d')}</p>
-                    </div>
-                    <button
-                      className="text-button"
-                      onClick={() => navigate('planner')}
-                      aria-label="Open conference planner"
-                    >
-                      <ArrowUpRight size={17} />
-                    </button>
-                  </div>
-                  <div className="day-tabs" role="tablist" aria-label="Conference day">
-                    {days.map((d) => (
-                      <button
-                        key={d}
-                        role="tab"
-                        aria-selected={d === shownDay}
-                        className={d === shownDay ? 'active' : ''}
-                        onClick={() => setAgendaDay(d)}
-                      >
-                        {fmt(`${d}T12:00:00Z`, c.timezone, 'EEE d')}
-                        <small>{confirmed.filter((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === d).length}</small>
-                      </button>
-                    ))}
-                  </div>
-                  <div className="agenda">
-                    {dayMeetings.slice(0, 5).map((m) => (
-                      <button key={m.id} onClick={() => navigate('planner')} className="agenda-item">
-                        <span className="agenda-time">
-                          {fmt(m.start, c.timezone, 'h:mm')}
-                          <small>{fmt(m.start, c.timezone, 'a')}</small>
-                        </span>
-                        <div
-                          className="agenda-detail"
-                          style={{
-                            borderLeftColor: data.issuers.find((i) => i.id === m.issuerId)?.color,
-                          }}
-                        >
-                          <strong>
-                            {n.issuer(m.issuerId)} <span>×</span> {n.investor(m.investorId)}
-                          </strong>
-                          <p>
-                            <MapPin size={11} />
-                            {m.location || 'Room to be confirmed'}
-                          </p>
-                          <Badge tone="green">Confirmed</Badge>
-                        </div>
-                      </button>
-                    ))}
-                    {!dayMeetings.length && (
+                  <div className="recent-requests">
+                    {data.requests
+                      .filter((r) => r.conferenceId === conferenceId)
+                      .slice(0, 5)
+                      .map((r) => (
+                        <button key={r.id} onClick={() => navigate('requests')}>
+                          <Avatar
+                            name={n.issuer(r.issuerId)}
+                            color={data.issuers.find((i) => i.id === r.issuerId)?.color}
+                          />
+                          <div>
+                            <strong>{n.issuer(r.issuerId)}</strong>
+                            <small>{n.investor(r.investorId)}</small>
+                          </div>
+                          <Badge>{r.status}</Badge>
+                        </button>
+                      ))}
+                    {!data.requests.some((r) => r.conferenceId === conferenceId) && (
                       <Empty
-                        title="Nothing confirmed this day"
-                        description="Confirmed meetings appear here as soon as you approve them."
+                        title="Start a conversation"
+                        description="Create your first meeting request for this conference."
                       />
                     )}
                   </div>
-                  <button className="full-width-link" onClick={() => navigate('planner')}>
-                    {dayMeetings.length > 5 ? `See all ${dayMeetings.length} meetings` : 'Open conference planner'}{' '}
-                    <ArrowRight size={14} />
-                  </button>
                 </div>
-              </div>
+              )}
               <div className="panel issuer-overview">
                 <div className="panel-heading">
                   <div>
@@ -746,6 +773,8 @@ export function Workspace() {
               run={run}
               onOpenEmails={() => setQueueSection('emails')}
               onOpenDrafts={() => setQueueSection('drafts')}
+              focus={queueFocus}
+              setFocus={setQueueFocus}
             />
           )}
           {page === 'requests' && (
@@ -758,7 +787,7 @@ export function Workspace() {
               onOpen={setSheetRequestId}
             />
           )}
-          {page === 'availability' && (
+          {page === 'schedule' && scheduleSection === 'availability' && (
             <AvailabilityView
               key={conferenceId}
               data={data}
@@ -776,7 +805,7 @@ export function Workspace() {
               search={search}
             />
           )}
-          {page === 'schedule' && scheduleSection === 'allocation' && banker && (
+          {page === 'allocation' && banker && (
             <ResourceAllocationView
               key={conferenceId}
               data={data}
@@ -1121,16 +1150,19 @@ function Stat({
     </button>
   );
 }
-const priorityRank = (p: string) => (p === 'Urgent' ? 0 : p === 'High' ? 1 : 2);
-function ActionList({
+function DecisionStrip({
   actions,
   data,
+  zone,
   onClick,
 }: {
-  actions: AppState['actions'];
+  actions: Action[];
   data: AppState;
-  onClick: (a: AppState['actions'][number]) => void;
+  zone: string;
+  onClick: (a: Action) => void;
 }) {
+  const track = useRef<HTMLDivElement>(null);
+  const n = names(data);
   if (!actions.length)
     return (
       <Empty
@@ -1138,28 +1170,38 @@ function ActionList({
         description="New email proposals and meeting requests will appear here."
       />
     );
+  const scroll = (dir: number) =>
+    track.current?.scrollBy({ left: dir * Math.max(280, track.current.clientWidth * 0.8), behavior: 'smooth' });
   return (
-    <div className="action-list">
-      {actions.map((a) => (
-        <button className="action-row" key={a.id} onClick={() => onClick(a)}>
-          <div
-            className={`action-icon ${a.type.includes('Reschedule') ? 'amber' : a.type.includes('Confirmation') ? 'green' : a.type.includes('request') ? 'blue' : ''}`}
-          >
-            {a.emailId ? <Mail size={17} /> : <Users size={17} />}
-          </div>
-          <div className="action-row-content">
-            <strong>{a.title}</strong>
-            <p>{a.recommendation}</p>
-            <span>
-              {a.type} <i /> {names(data).user(a.assignedTo)}
-            </span>
-          </div>
-          <div className="action-row-end">
-            <Badge>{a.priority}</Badge>
-            <ChevronRight size={15} />
-          </div>
-        </button>
-      ))}
+    <div className="decide-strip">
+      <button className="strip-arrow left" aria-label="Previous decisions" onClick={() => scroll(-1)}>
+        <ChevronLeft size={16} />
+      </button>
+      <div className="decide-track" ref={track}>
+        {actions.map((a) => {
+          const kind = actionKind(a, data);
+          const email = data.emails.find((e) => e.id === a.emailId);
+          const when = actionWhen(a, data);
+          const issuer = n.issuer(a.issuerId);
+          const investor = n.investor(a.investorId);
+          const what = email ? proposalLine(email, zone) : when ? fmt(when, zone, 'EEE, MMM d \u00b7 h:mm a') : null;
+          return (
+            <button className={`decide-card kind-${kind.id}`} key={a.id} onClick={() => onClick(a)}>
+              <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
+              <strong>{issuer === 'Unassociated' ? a.title : issuer}</strong>
+              {issuer !== 'Unassociated' && investor !== '—' && <span className="decide-with">with {investor}</span>}
+              <span className="decide-what">{what || a.recommendation}</span>
+              <span className="decide-foot">
+                <span>{fmt(actionReceived(a, data), zone, 'MMM d, h:mm a')}</span>
+                <ChevronRight size={14} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <button className="strip-arrow right" aria-label="More decisions" onClick={() => scroll(1)}>
+        <ChevronRight size={16} />
+      </button>
     </div>
   );
 }
@@ -1194,6 +1236,17 @@ function proposalLine(e: EmailItem, zone: string) {
   if (!x) return null;
   const w = x.windows || [];
   const when = w.length === 1 ? fmt(w[0].start, zone, 'EEE h:mm a') : w.length ? `${w.length} time windows` : '';
+  const blocked = w.filter((v) => v.kind === 'unavailable');
+  const offered = w.filter((v) => v.kind !== 'unavailable');
+  const notOk = blocked.length
+    ? `Not available ${fmt(blocked[0].start, zone, 'EEE h:mm a')}${blocked.length > 1 ? ` +${blocked.length - 1}` : ''}`
+    : '';
+  if (blocked.length && (x.operation === 'inquiry' || !offered.length))
+    return x.uncertainties?.length ? `${notOk} · 1 thing to check` : notOk;
+  if (blocked.length && offered.length) {
+    const ok = `${operationText[x.operation] || x.operation} ${offered.length === 1 ? fmt(offered[0].start, zone, 'EEE h:mm a') : `${offered.length} windows`}`;
+    return `${notOk} · ${ok}`;
+  }
   const verb = operationText[x.operation] || x.operation;
   const base = x.operation === 'inquiry' ? verb : `${verb}${when ? ` ${when}` : ''}`;
   return x.uncertainties?.length ? `${base} · 1 thing to check` : base;
@@ -1370,6 +1423,8 @@ function QueueView({
   run,
   onOpenEmails,
   onOpenDrafts,
+  focus,
+  setFocus,
 }: {
   data: AppState;
   conferenceId: string;
@@ -1378,9 +1433,11 @@ function QueueView({
   run: Run;
   onOpenEmails: () => void;
   onOpenDrafts: () => void;
+  focus: 'all' | KindId;
+  setFocus: (f: 'all' | KindId) => void;
 }) {
   const [status, setStatus] = useState('Open');
-  const [focus, setFocus] = useState<'all' | 'priority' | 'requests' | 'email'>('all');
+  const [sort, setSort] = useState<SortMode>('soonest');
   const [expanded, setExpanded] = useState<string | null>(null);
   const n = names(data);
   const conference = data.conferences.find((item) => item.id === conferenceId)!;
@@ -1388,25 +1445,23 @@ function QueueView({
     (email) => email.conferenceId === conferenceId && email.status === 'Pending review',
   ).length;
   const draftCount = data.drafts.filter((draft) => draft.status === 'Draft').length;
-  const actions = data.actions
-    .filter(
+  const actions = sortActions(
+    data.actions.filter(
       (a) =>
         (a.conferenceId === conferenceId || !a.conferenceId) &&
         (status === 'All' || a.status === status) &&
-        (focus === 'all' ||
-          (focus === 'priority' && ['Urgent', 'High'].includes(a.priority)) ||
-          (focus === 'requests' && (a.requestId || /request|alternative/i.test(a.type))) ||
-          (focus === 'email' && Boolean(a.emailId))) &&
-        `${a.title} ${a.recommendation}`.toLowerCase().includes(search.toLowerCase()),
-    )
-    .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority));
+        (focus === 'all' || actionKind(a, data).id === focus) &&
+        `${a.title} ${a.recommendation} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`
+          .toLowerCase()
+          .includes(search.toLowerCase()),
+    ),
+    data,
+    sort,
+  );
   const openForConference = data.actions.filter(
     (a) => (a.conferenceId === conferenceId || !a.conferenceId) && a.status === 'Open',
   );
-  const priorityCount = openForConference.filter((a) => ['Urgent', 'High'].includes(a.priority)).length;
-  const requestCount = openForConference.filter(
-    (a) => a.requestId || /request|alternative/i.test(a.type),
-  ).length;
+  const kindCount = (k: KindId) => openForConference.filter((a) => actionKind(a, data).id === k).length;
   const primaryLabel = (a: AppState['actions'][number]) => {
     if (a.type === 'Resource allocation') return 'Review allocation';
     if (a.requestId || /request|alternative/i.test(a.type)) return 'Review request';
@@ -1431,61 +1486,64 @@ function QueueView({
         </div>
       </div>
       <div className="decision-summary">
-        <div className={priorityCount ? 'attention' : ''}>
-          <strong>{priorityCount}</strong>
-          <span>Priority decisions</span>
+        <div>
+          <strong>{kindCount('new')}</strong>
+          <span>New requests</span>
         </div>
         <div>
-          <strong>{requestCount}</strong>
-          <span>Investor requests</span>
+          <strong>{kindCount('reschedule')}</strong>
+          <span>Reschedules</span>
         </div>
         <div>
-          <strong>{emailCount}</strong>
-          <span>Email updates</span>
+          <strong>{kindCount('availability') + kindCount('cancel')}</strong>
+          <span>Availability & cancellations</span>
         </div>
         <p><ShieldCheck size={14} /> No schedule changes without your approval</p>
       </div>
       <div className="panel decision-panel">
         <div className="decision-toolbar">
           <div className="decision-filters" aria-label="Filter action queue">
-            {([
-              ['all', 'All', openForConference.length],
-              ['priority', 'Priority', priorityCount],
-              ['requests', 'Requests', requestCount],
-              ['email', 'Email updates', emailCount],
-            ] as const).map(([id, label, count]) => (
-              <button key={id} className={focus === id ? 'active' : ''} onClick={() => setFocus(id)}>
-                {label} <span>{count}</span>
-              </button>
-            ))}
+            {(['all', ...kindOrder] as const).map((id) => {
+              const count = id === 'all' ? openForConference.length : kindCount(id);
+              if (id === 'other' && !count) return null;
+              return (
+                <button key={id} className={focus === id ? 'active' : ''} onClick={() => setFocus(id)}>
+                  {id === 'all' ? 'All' : kindLabel[id]} <span>{count}</span>
+                </button>
+              );
+            })}
           </div>
-          <select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>
-            {['Open', 'Resolved', 'Rejected', 'All'].map((s) => <option key={s}>{s}</option>)}
-          </select>
+          <div className="decision-toolbar-right">
+            <SortToggle value={sort} onChange={setSort} />
+            <select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>
+              {['Open', 'Resolved', 'Rejected', 'All'].map((s) => <option key={s}>{s}</option>)}
+            </select>
+          </div>
         </div>
         <div className="decision-list">
           {actions.map((a) => {
-            const request = data.requests.find((item) => item.id === a.requestId);
             const issuer = n.issuer(a.issuerId);
             const investor = n.investor(a.investorId);
-            const isPriority = ['Urgent', 'High'].includes(a.priority);
+            const kind = actionKind(a, data);
+            const when = actionWhen(a, data);
+            const email = data.emails.find((x) => x.id === a.emailId);
+            const summary = (email && proposalLine(email, conference.timezone)) || a.recommendation;
             return (
-              <div className={`decision-row ${isPriority ? 'is-priority' : ''}`} key={a.id}>
+              <div className={`decision-row kind-${kind.id}`} key={a.id}>
                 <span className="decision-priority-mark" />
                 <div className="decision-main">
                   <div className="decision-kicker">
-                    {isPriority && <strong>{a.priority}</strong>}
-                    <span>{a.type}</span>
+                    <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
                   </div>
                   <h3>
                     {issuer === 'Unassociated' ? a.title : issuer}
                     {issuer !== 'Unassociated' && investor !== '—' && <><i>with</i>{investor}</>}
                   </h3>
-                  <p>{a.recommendation}</p>
+                  <p>{summary}</p>
                   <div className="decision-meta">
-                    {request && <span><Clock3 size={12} /> {fmt(request.start, conference.timezone, 'EEE, h:mm a')}</span>}
+                    {when && <span><Clock3 size={12} /> {fmt(when, conference.timezone, 'EEE, h:mm a')}</span>}
                     <span>{n.user(a.assignedTo)}</span>
-                    <span>{fmt(a.createdAt, undefined, 'MMM d')}</span>
+                    <span>Received {fmt(actionReceived(a, data), conference.timezone, 'MMM d, h:mm a')}</span>
                   </div>
                 </div>
                 <div className="decision-primary-action">

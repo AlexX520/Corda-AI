@@ -191,6 +191,7 @@ export function EmailDecision({
     }
   }, [openNewDraft, draft, onOpenDraft]);
   const newWindows = (e?.windows || []).filter((w) => w.kind === 'availability');
+  const blockedWindows = (e?.windows || []).filter((w) => w.kind === 'unavailable');
   const current = data.availability.filter(
     (a) =>
       a.conferenceId === e?.conferenceId && a.issuerId === e?.issuerId && a.kind === 'Available',
@@ -212,7 +213,9 @@ export function EmailDecision({
           ? `${issuer} confirmed the ${investor || 'investor'} meeting`
           : ['add', 'remove', 'replace'].includes(op)
             ? `${issuer} sent new availability`
-            : email.subject;
+            : blockedWindows.length
+              ? `${issuer} said some times don’t work`
+              : email.subject;
 
   const canApprove =
     !!proposal &&
@@ -354,9 +357,14 @@ export function EmailDecision({
                 {fmt(w.start, zone, 'EEE h:mm a')} – {fmt(w.end, zone, 'h:mm a')}
               </strong>
             ))
-          ) : (
+          ) : blockedWindows.length ? null : (
             <span>No explicit time in the email</span>
           )}
+          {blockedWindows.map((w, i) => (
+            <strong key={`b${i}`} className="dc-blocked">
+              Not available {fmt(w.start, zone, 'EEE h:mm a')} – {fmt(w.end, zone, 'h:mm a')}
+            </strong>
+          ))}
         </div>
       </div>
 
