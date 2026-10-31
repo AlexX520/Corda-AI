@@ -1,0 +1,703 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Corda AI — AI that runs investment bank conference schedules</title>
+<meta name="description" content="Corda reads the email between companies, investors and banks, decides who meets whom, and keeps every conference schedule right. Bankers just approve.">
+<meta name="theme-color" content="#0b2a23">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Corda AI">
+<meta property="og:description" content="AI that runs investment bank conference schedules from the inbox. Bankers just approve.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b2a23'/%3E%3Cpath d='M22.5 9.1a9.4 9.4 0 1 0 0 13.8' stroke='%2374c3a6' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3Ccircle cx='23.1' cy='9.1' r='2.15' fill='%23e6f06b'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Corda AI. Structure borrowed from the best finance-AI sites (Rogo, Model ML):
+   a near-full-screen hero with one huge serif line, then one product demo,
+   a sticky scroll-through of four capabilities, the roadmap, and one closing CTA.
+   Short copy everywhere; the animations carry the explanation. */
+:root {
+  --paper: #f3f4ee; --card: #ffffff; --ink: #0f1a15; --muted: #56625b; --rule: #d9ded6;
+  --green: #174f43; --mint: #74c3a6; --green-soft: #e3ece6; --mark: #e6f06b; --on-mark: #0f1a15;
+  --deep: #0b2a23; --on-deep: #eef3ee; --on-deep-muted: #a7bcb1; --deep-rule: rgba(238,243,238,.12);
+  --serif: 'Instrument Serif', 'Times New Roman', Georgia, serif;
+  --body: 'Hanken Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+  --max: 1180px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --paper: #0c120f; --card: #141c18; --ink: #e6ede8; --muted: #9aa79f; --rule: #25302a; --green: #74c3a6; --green-soft: #18291f; --mark: #dbe55c; --deep: #071d18; color-scheme: dark; }
+}
+:root[data-theme="dark"] { --paper: #0c120f; --card: #141c18; --ink: #e6ede8; --muted: #9aa79f; --rule: #25302a; --green: #74c3a6; --green-soft: #18291f; --mark: #dbe55c; --deep: #071d18; color-scheme: dark; }
+* { box-sizing: border-box; }
+html { background: var(--deep); scroll-behavior: smooth; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 400 17px/1.6 var(--body); -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 20; background: var(--deep); }
+.past-hero body::before { background: var(--paper); }
+a { color: inherit; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--mint); outline-offset: 3px; border-radius: 8px; }
+.wrap { max-width: var(--max); margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { margin: 0; font-weight: 400; text-wrap: balance; }
+h1, h2 { font-family: var(--serif); letter-spacing: -0.015em; }
+p { margin: 0; }
+.label { font-family: var(--mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.js .rv { opacity: 0; transform: translateY(24px); transition: opacity .8s ease, transform .8s cubic-bezier(.2,.7,.2,1); transition-delay: var(--d, 0ms); }
+.js .rv.in { opacity: 1; transform: none; }
+
+.btn { display: inline-flex; align-items: center; gap: 8px; font: 600 15px/1 var(--body); padding: 14px 20px; border-radius: 999px; text-decoration: none; border: 1px solid transparent; cursor: pointer; transition: background .2s, color .2s, border-color .2s, transform .2s; }
+.btn:hover { transform: translateY(-1px); }
+.btn .arr { transition: transform .2s; }
+.btn:hover .arr { transform: translateX(3px); }
+.btn.hi { background: var(--mark); color: var(--on-mark); }
+.btn.hi:hover { background: #f1f88f; }
+.btn.line { border-color: rgba(238,243,238,.35); color: var(--on-deep); }
+.btn.line:hover { border-color: var(--on-deep); }
+
+/* header */
+header.top { position: fixed; top: env(safe-area-inset-top, 0px); left: 0; right: 0; z-index: 10; color: var(--on-deep); transition: background .3s, color .3s, box-shadow .3s; }
+.past-hero header.top { background: color-mix(in srgb, var(--paper) 88%, transparent); color: var(--ink); backdrop-filter: blur(12px); box-shadow: 0 1px 0 var(--rule); }
+.nav { display: flex; align-items: center; gap: 28px; padding-block: 16px; }
+.brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; font: 700 20px/1 var(--body); letter-spacing: -0.02em; }
+.brand svg { width: 28px; height: 28px; color: var(--mint); }
+.past-hero .brand svg { color: var(--green); }
+.nav nav { display: flex; gap: 28px; margin-left: auto; font-size: 15px; }
+.nav nav a { text-decoration: none; opacity: .75; }
+.nav nav a:hover { opacity: 1; }
+.nav .btn { padding: 11px 16px; font-size: 14px; }
+.past-hero .nav .btn.hi { background: var(--ink); color: var(--paper); }
+@media (max-width: 760px) { .nav nav { display: none; } .nav .btn { margin-left: auto; } }
+
+/* hero */
+.hero { position: relative; isolation: isolate; overflow: hidden; background: var(--deep); color: var(--on-deep); min-height: min(100svh, 940px); display: flex; flex-direction: column; justify-content: center; text-align: center; padding: 120px 0 72px; }
+#bg { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -2; }
+.hero::before { content: ""; position: absolute; inset: 0; z-index: -1; background: radial-gradient(48% 50% at 50% 52%, var(--deep) 0%, color-mix(in srgb, var(--deep) 88%, transparent) 45%, color-mix(in srgb, var(--deep) 40%, transparent) 75%, transparent 100%), linear-gradient(180deg, transparent 70%, var(--deep)); }
+.hero::after { content: ""; position: absolute; inset: 0; z-index: -1; opacity: .08; mix-blend-mode: overlay; pointer-events: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
+.pill { display: inline-flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--on-deep-muted); border: 1px solid var(--deep-rule); background: rgba(255,255,255,.03); border-radius: 999px; padding: 7px 14px; }
+@media (max-width: 520px) { .pill { font-size: 9.5px; letter-spacing: .05em; padding: 7px 11px; } }
+.pill i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--mark); animation: ping 2.4s infinite; }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(230,240,107,.55); } 70%, 100% { box-shadow: 0 0 0 9px rgba(230,240,107,0); } }
+.hero h1 { font-size: clamp(54px, 10.5vw, 148px); line-height: .9; margin-top: 28px; letter-spacing: -0.03em; }
+.hero h1 .w { display: inline-block; }
+.hero h1 em { color: var(--mark); }
+.hero .lede { font-size: clamp(17px, 1.6vw, 20px); color: var(--on-deep-muted); max-width: 34em; margin: 30px auto 0; }
+.hero .ctas { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 36px; }
+.hero .works { margin-top: 44px; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 26px; font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--on-deep-muted); }
+.hero .works span::before { content: "✓"; color: var(--mark); margin-right: 8px; }
+.cue { position: absolute; left: 50%; bottom: 22px; transform: translateX(-50%); width: 22px; height: 34px; border: 1.5px solid var(--deep-rule); border-radius: 12px; }
+.cue::after { content: ""; position: absolute; left: 50%; top: 7px; width: 3px; height: 7px; margin-left: -1.5px; border-radius: 2px; background: var(--on-deep-muted); animation: cue 1.8s infinite; }
+@keyframes cue { 0% { transform: translateY(0); opacity: 1; } 70% { transform: translateY(10px); opacity: 0; } 100% { opacity: 0; } }
+.w { animation: rise 1s cubic-bezier(.2,.7,.2,1) both; animation-delay: calc(var(--i) * 90ms + 100ms); }
+@keyframes rise { from { opacity: 0; transform: translateY(.35em); filter: blur(6px); } to { opacity: 1; transform: none; filter: none; } }
+.fade-in { animation: fadeUp .9s cubic-bezier(.2,.7,.2,1) both; animation-delay: var(--d, 0ms); }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+
+/* sections */
+section.block { padding-block: 120px; }
+.center-head { text-align: center; max-width: 820px; margin: 0 auto 56px; }
+.center-head h2 { font-size: clamp(38px, 5.4vw, 68px); line-height: 1; margin-top: 14px; }
+.center-head h2 em { color: var(--green); }
+.center-head p { color: var(--muted); margin-top: 18px; font-size: 18px; }
+@media (max-width: 760px) { section.block { padding-block: 80px; } .center-head { margin-bottom: 36px; } }
+
+/* demo */
+.demo { position: relative; max-width: 760px; margin: 0 auto; background: var(--card); color: var(--ink); border-radius: 18px; overflow: hidden; box-shadow: 0 50px 100px -40px rgba(11,42,35,.45), 0 0 0 1px var(--rule); }
+.demo-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--rule); }
+.demo-head > .label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.demo-head .right { display: flex; align-items: center; gap: 10px; flex: none; }
+.pp { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--rule); background: transparent; color: var(--muted); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.pp:hover { color: var(--ink); border-color: var(--muted); }
+.pp svg { width: 10px; height: 10px; }
+.stages { list-style: none; margin: 0; padding: 12px 18px 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.stages li { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.stages li.on, .stages li.done { color: var(--ink); }
+.stages .bar { display: block; height: 3px; border-radius: 3px; background: var(--rule); margin-top: 6px; overflow: hidden; }
+.stages .bar span { display: block; height: 100%; width: 0; background: var(--green); }
+.stages li.done .bar span { width: 100%; }
+.stages li.on .bar span { animation: fill var(--dur, 2s) linear forwards; }
+.demo.paused .stages li.on .bar span { animation-play-state: paused; }
+@keyframes fill { to { width: 100%; } }
+.dbody { position: relative; transition: opacity .45s; }
+.dbody.fade { opacity: 0; }
+.pane { padding: 16px 20px; }
+.pane + .pane { border-top: 1px solid var(--rule); }
+.mail .meta { display: flex; align-items: center; gap: 10px; }
+.mail .av { width: 32px; height: 32px; border-radius: 50%; background: #d7e7f6; color: #1d4b78; display: grid; place-items: center; font-weight: 700; font-size: 13px; flex: none; }
+.mail .from { font-size: 13px; color: var(--muted); line-height: 1.35; min-width: 0; overflow-wrap: anywhere; }
+.mail .from b { color: var(--ink); font-weight: 600; }
+.mail .subj { font-weight: 600; margin-top: 10px; font-size: 15px; }
+.mail .text { margin-top: 6px; font-size: 15px; line-height: 1.55; min-height: 3.2em; }
+.caret { display: inline-block; width: 1.5px; height: 1.05em; background: var(--ink); vertical-align: -2px; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.hl { background-image: linear-gradient(var(--mark), var(--mark)); background-repeat: no-repeat; background-size: 0% 100%; transition: background-size .7s cubic-bezier(.6,0,.2,1); padding: 0 1px; }
+.hl.on { background-size: 100% 100%; color: var(--on-mark); }
+.old { text-decoration: underline wavy transparent; text-underline-offset: 3px; transition: text-decoration-color .5s .3s; }
+.old.on { text-decoration-color: #c0675a; }
+.prop { min-height: 168px; opacity: 0; transform: translateY(10px); transition: opacity .5s, transform .5s cubic-bezier(.2,.7,.2,1); }
+.prop.show { opacity: 1; transform: none; }
+.prop .reading { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: var(--muted); }
+.shim { flex: 1; height: 10px; border-radius: 6px; background: linear-gradient(90deg, var(--rule) 0%, var(--green-soft) 50%, var(--rule) 100%); background-size: 200% 100%; animation: shim 1.1s linear infinite; }
+@keyframes shim { from { background-position: 200% 0; } to { background-position: 0 0; } }
+.prop .content { display: none; }
+.prop.ready .reading { display: none; }
+.prop.ready .content { display: block; animation: fadeUp .5s cubic-bezier(.2,.7,.2,1) both; }
+.kind { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; color: var(--green); background: var(--green-soft); padding: 3px 7px; border-radius: 4px; }
+.prop .what { font-weight: 600; margin-top: 8px; }
+.diff { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; font-family: var(--mono); font-size: 12.5px; }
+.diff s { color: var(--muted); }
+.diff .to { background: var(--mark); color: var(--on-mark); padding: 2px 7px; border-radius: 4px; font-weight: 500; }
+.prop .note { font-size: 13.5px; color: var(--muted); margin-top: 6px; }
+.acts { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.chip { position: relative; overflow: hidden; font: 600 13px/1 var(--body); padding: 9px 13px; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink); }
+.chip.go { background: var(--ink); border-color: var(--ink); color: var(--paper); transition: background .25s, border-color .25s, transform .15s; }
+.chip.go.press { transform: scale(.94); }
+.chip.go.ok { background: var(--green); border-color: var(--green); }
+.chip.go::after { content: ""; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px; border-radius: 50%; background: rgba(255,255,255,.5); transform: scale(0); opacity: 0; }
+.chip.go.ok::after { animation: ripple .6s ease-out; }
+@keyframes ripple { from { transform: scale(0); opacity: 1; } to { transform: scale(14); opacity: 0; } }
+.sched .head { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.sched .head b { font-weight: 600; }
+.sched .head span { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.tl { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 0 10px; margin-top: 12px; }
+.tl .rl { font-family: var(--mono); font-size: 10.5px; color: var(--muted); height: 36px; display: flex; align-items: center; }
+.tl .rl + .rl { margin-top: 10px; }
+.tracks { position: relative; grid-row: 1 / 3; grid-column: 2; height: 82px; }
+.row { position: absolute; left: 0; right: 0; height: 36px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.row.pm { top: 46px; }
+.row .s { border: 1px dashed var(--rule); border-radius: 6px; font-family: var(--mono); font-size: 10px; color: var(--muted); display: flex; align-items: flex-end; padding: 0 0 3px 6px; transition: background .5s; }
+.row.am.blocked .s { background: repeating-linear-gradient(135deg, transparent 0 5px, color-mix(in srgb, var(--muted) 18%, transparent) 5px 6px); }
+.blk { position: absolute; top: 0; height: 36px; width: calc(25% - 3px); border-radius: 6px; background: var(--green); color: #fff; font-size: 11.5px; font-weight: 600; padding: 0 7px; display: flex; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: transform .8s cubic-bezier(.6,0,.2,1), background .4s .6s, color .4s .6s; }
+.blk.b1 { left: 0; } .blk.b2 { left: calc(25% + 1px); } .blk.b3 { left: calc(50% + 2px); }
+.blk.moved { transform: translateY(46px); background: var(--mark); color: var(--on-mark); }
+.toast { position: absolute; left: 50%; bottom: 14px; transform: translate(-50%, 16px); opacity: 0; background: var(--ink); color: var(--paper); font-size: 12.5px; padding: 9px 14px; border-radius: 999px; white-space: nowrap; transition: opacity .4s, transform .4s cubic-bezier(.2,.7,.2,1); max-width: calc(100% - 24px); overflow: hidden; text-overflow: ellipsis; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast b { color: var(--mark); }
+.cursor { position: absolute; left: 0; top: 0; width: 20px; height: 20px; pointer-events: none; opacity: 0; z-index: 3; transition: transform .85s cubic-bezier(.5,0,.2,1), opacity .3s; filter: drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
+.cursor.on { opacity: 1; }
+.cursor.snap { transition: none; }
+.demo-foot { display: flex; justify-content: space-between; gap: 10px; padding: 10px 18px; border-top: 1px solid var(--rule); font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+@media (max-width: 520px) { .stages li { font-size: 9.5px; letter-spacing: .04em; } .blk { font-size: 10.5px; padding: 0 5px; } .demo-head .right .label { display: none; } }
+
+/* sticky features */
+#product-features { background: var(--card); border-block: 1px solid var(--rule); }
+.feat-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 72px; }
+.feat { min-height: 62vh; display: flex; flex-direction: column; justify-content: center; opacity: .28; transition: opacity .4s; }
+.feat.act { opacity: 1; }
+.feat .n { font-family: var(--mono); font-size: 12px; color: var(--green); letter-spacing: .08em; }
+.feat h3 { font: 400 clamp(36px, 4.2vw, 54px)/1 var(--serif); letter-spacing: -0.015em; margin-top: 12px; }
+.feat p { color: var(--muted); font-size: 18px; margin-top: 16px; max-width: 24em; }
+.feat .vis-inline { display: none; }
+.stick { position: sticky; top: calc(50vh - 240px); height: 480px; align-self: start; margin-top: calc(31vh - 240px); }
+.vis { position: absolute; inset: 0; border-radius: 20px; background: var(--deep); overflow: hidden; display: grid; place-items: center; opacity: 0; transform: scale(.97); transition: opacity .5s, transform .5s cubic-bezier(.2,.7,.2,1); }
+.vis.act { opacity: 1; transform: none; }
+.vis::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(var(--deep-rule) 1px, transparent 1px), linear-gradient(90deg, var(--deep-rule) 1px, transparent 1px); background-size: 34px 34px; opacity: .5; -webkit-mask-image: radial-gradient(70% 70% at 50% 50%, #000, transparent); mask-image: radial-gradient(70% 70% at 50% 50%, #000, transparent); }
+.panel { position: relative; width: min(84%, 400px); background: var(--card); color: var(--ink); border-radius: 14px; padding: 18px; box-shadow: 0 30px 60px -25px rgba(0,0,0,.6); }
+.panel .label { font-size: 10.5px; }
+/* v1 inbox */
+.inbox { display: grid; gap: 8px; margin-top: 12px; }
+.inbox div { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--rule); font-size: 13.5px; }
+.inbox div span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inbox em { font-style: normal; font-family: var(--mono); font-size: 10px; letter-spacing: .06em; padding: 3px 7px; border-radius: 4px; background: var(--green-soft); color: var(--green); opacity: 0; transform: translateX(6px); transition: opacity .4s, transform .4s; }
+.inbox em.skip { background: transparent; color: var(--muted); border: 1px solid var(--rule); }
+.act .inbox em { opacity: 1; transform: none; }
+.act .inbox div:nth-child(2) em { transition-delay: .35s; } .act .inbox div:nth-child(3) em { transition-delay: .7s; } .act .inbox div:nth-child(4) em { transition-delay: 1.05s; }
+/* v2 propose */
+.big-diff { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; font-family: var(--mono); font-size: 15px; }
+.big-diff .a { position: relative; color: var(--muted); }
+.big-diff .a::after { content: ""; position: absolute; left: 0; right: 0; top: 52%; height: 1.5px; background: #c0675a; transform: scaleX(0); transform-origin: left; transition: transform .5s .3s; }
+.act .big-diff .a::after { transform: scaleX(1); }
+.big-diff .b { background: var(--mark); color: var(--on-mark); padding: 4px 9px; border-radius: 6px; opacity: 0; transform: scale(.85); transition: opacity .4s .8s, transform .4s .8s cubic-bezier(.3,1.5,.5,1); }
+.act .big-diff .b { opacity: 1; transform: none; }
+.checks { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 8px; font-size: 13.5px; }
+.checks li { display: flex; gap: 8px; opacity: 0; transition: opacity .4s; }
+.checks li::before { content: "✓"; color: var(--green); font-weight: 700; }
+.act .checks li { opacity: 1; } .act .checks li:nth-child(1) { transition-delay: 1.2s; } .act .checks li:nth-child(2) { transition-delay: 1.5s; } .act .checks li:nth-child(3) { transition-delay: 1.8s; }
+/* v2 allocate */
+.alloc { display: grid; gap: 6px; margin-top: 12px; }
+.alloc div { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; align-items: center; padding: 6px 12px; border-radius: 10px; border: 1px solid var(--rule); opacity: 0; transform: translateY(6px); transition: opacity .4s, transform .4s; }
+.alloc b { display: block; font-size: 13.5px; font-weight: 600; }
+.alloc i { display: block; font-style: normal; font-size: 11.5px; color: var(--muted); }
+.alloc em { font-style: normal; font-family: var(--mono); font-size: 11px; padding: 3px 8px; border-radius: 4px; background: var(--mark); color: var(--on-mark); white-space: nowrap; }
+.alloc em.grp { background: var(--green-soft); color: var(--green); }
+.alloc em.wait { background: transparent; color: var(--muted); border: 1px solid var(--rule); }
+.act .alloc div { opacity: 1; transform: none; }
+.act .alloc div:nth-child(2) { transition-delay: .2s; } .act .alloc div:nth-child(3) { transition-delay: .4s; } .act .alloc div:nth-child(4) { transition-delay: .6s; } .act .alloc div:nth-child(5) { transition-delay: .8s; }
+.panel .why { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.dev { display: inline-block; margin-top: 14px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--green); border: 1px solid var(--green); border-radius: 999px; padding: 3px 9px; align-self: flex-start; }
+.log s { color: var(--muted); text-decoration-color: #c0675a; }
+/* v3 approve */
+.appr-wrap { display: grid; place-items: center; gap: 14px; padding: 10px 0; text-align: center; }
+.ring svg { width: 84px; height: 84px; }
+.ring circle { stroke: var(--green); stroke-dasharray: 220; stroke-dashoffset: 220; transition: stroke-dashoffset .9s .2s cubic-bezier(.6,0,.2,1); }
+.ring path { stroke: var(--green); stroke-dasharray: 60; stroke-dashoffset: 60; transition: stroke-dashoffset .5s 1s; }
+.act .ring circle, .act .ring path { stroke-dashoffset: 0; }
+.appr-wrap .who { font-weight: 600; }
+.appr-wrap .sent { font-size: 13.5px; color: var(--muted); opacity: 0; transition: opacity .4s 1.4s; }
+.act .appr-wrap .sent { opacity: 1; }
+/* v4 audit */
+.log { display: grid; gap: 0; margin-top: 10px; font-size: 13px; }
+.log div { display: grid; grid-template-columns: 44px minmax(0,1fr); gap: 10px; padding: 9px 0; border-top: 1px solid var(--rule); opacity: 0; transform: translateY(6px); transition: opacity .4s, transform .4s; }
+.log div span:first-child { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.act .log div { opacity: 1; transform: none; }
+.act .log div:nth-child(2) { transition-delay: .25s; } .act .log div:nth-child(3) { transition-delay: .5s; } .act .log div:nth-child(4) { transition-delay: .75s; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+.badges span { font-family: var(--mono); font-size: 10px; letter-spacing: .05em; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--rule); color: var(--muted); }
+@media (max-width: 860px) {
+  .feat-grid { grid-template-columns: 1fr; gap: 0; }
+  .stick { display: none; }
+  .feat { min-height: 0; opacity: 1; padding-block: 28px; }
+  .feat .vis-inline { display: block; position: relative; margin-top: 24px; }
+  .feat .vis-inline .vis { position: relative; inset: auto; min-height: 300px; padding: 28px 0; opacity: 1; transform: none; }
+}
+
+/* roadmap */
+.road { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px; padding-top: 34px; }
+.road::before { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 2px; background: var(--rule); }
+.road::after { content: ""; position: absolute; left: 0; right: 0; top: 7px; height: 2px; background: var(--green); transform: scaleX(0); transform-origin: left; transition: transform 1.6s cubic-bezier(.6,0,.2,1) .2s; }
+.road.in::after { transform: scaleX(1); }
+.road > div { position: relative; z-index: 1; }
+.road > div::before { content: ""; position: absolute; top: -34px; left: 0; width: 16px; height: 16px; border-radius: 50%; background: var(--paper); border: 2px solid var(--green); }
+.road > div.now::before { background: var(--mark); border-color: var(--ink); box-shadow: 0 0 0 6px color-mix(in srgb, var(--mark) 40%, transparent); }
+.road .n { font-family: var(--mono); font-size: 11.5px; color: var(--muted); letter-spacing: .08em; text-transform: uppercase; }
+.road .now .n { color: var(--ink); }
+.road .now .n b { background: var(--mark); color: var(--on-mark); padding: 2px 6px; border-radius: 4px; font-weight: 500; margin-left: 6px; }
+.road h3 { font: 400 30px/1.05 var(--serif); margin-top: 10px; }
+.road p { color: var(--muted); font-size: 15.5px; margin-top: 8px; }
+@media (max-width: 860px) {
+  .road { grid-template-columns: 1fr; gap: 30px; padding: 0 0 0 34px; }
+  .road::before, .road::after { left: 7px; right: auto; top: 0; bottom: 0; width: 2px; height: auto; }
+  .road::after { transform: scaleY(0); transform-origin: top; }
+  .road.in::after { transform: scaleY(1); }
+  .road > div::before { top: 4px; left: -34px; }
+}
+
+/* cta + team */
+.cta { position: relative; overflow: hidden; isolation: isolate; background: var(--deep); color: var(--on-deep); border-radius: 26px; padding: 88px 56px 56px; text-align: center; }
+.cta::before { content: ""; position: absolute; inset: -40px; z-index: -1; opacity: .55; background-image: linear-gradient(var(--deep-rule) 1px, transparent 1px), linear-gradient(90deg, var(--deep-rule) 1px, transparent 1px); background-size: 40px 40px; -webkit-mask-image: radial-gradient(60% 70% at 50% 0%, #000, transparent 75%); mask-image: radial-gradient(60% 70% at 50% 0%, #000, transparent 75%); animation: drift 18s linear infinite; }
+@keyframes drift { to { transform: translate(40px, 40px); } }
+.cta h2 { font-size: clamp(42px, 6.4vw, 84px); line-height: .95; }
+.cta h2 em { color: var(--mark); }
+.cta p.sub { color: var(--on-deep-muted); margin: 20px auto 0; max-width: 30em; font-size: 18px; }
+.mailrow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: space-between; max-width: 480px; margin: 34px auto 0; border: 1px solid var(--deep-rule); background: rgba(255,255,255,.05); border-radius: 999px; padding: 6px 6px 6px 22px; text-align: left; }
+.mailrow .addr { font-family: var(--mono); font-size: 15px; user-select: all; min-width: 0; overflow-wrap: anywhere; }
+.lead { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; max-width: 640px; margin: 36px auto 0; text-align: left; }
+.lead .f { display: grid; gap: 6px; min-width: 0; }
+.lead .wide { grid-column: 1 / -1; }
+.lead label { font-size: 13px; font-weight: 600; color: var(--on-deep); }
+.lead label span { font-weight: 400; color: var(--on-deep-muted); margin-left: 6px; }
+.lead input, .lead select, .lead textarea { width: 100%; font: 400 15px/1.4 var(--body); color: var(--on-deep); background: rgba(255,255,255,.05); border: 1px solid var(--deep-rule); border-radius: 10px; padding: 12px 14px; transition: border-color .2s, background .2s; }
+.lead textarea { resize: vertical; min-height: 84px; }
+.lead select { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--on-deep-muted) 50%), linear-gradient(135deg, var(--on-deep-muted) 50%, transparent 50%); background-position: calc(100% - 20px) 52%, calc(100% - 15px) 52%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 36px; }
+.lead select option { color: #0f1a15; }
+.lead input::placeholder, .lead textarea::placeholder { color: color-mix(in srgb, var(--on-deep-muted) 70%, transparent); }
+.lead input:focus, .lead select:focus, .lead textarea:focus { outline: none; border-color: var(--mint); background: rgba(255,255,255,.08); }
+.lead .bad { border-color: #e48a7c; }
+.lead .send { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; margin-top: 4px; }
+.lead .send .btn[aria-disabled="true"] { opacity: .55; }
+.lead .hint { font-size: 13.5px; color: var(--on-deep-muted); flex: 1; min-width: 200px; }
+.linkish { background: none; border: 0; padding: 0; font: 400 13px/1.4 var(--body); color: var(--on-deep-muted); text-decoration: underline; cursor: pointer; }
+.linkish:hover { color: var(--on-deep); }
+@media (max-width: 600px) { .lead { grid-template-columns: 1fr; } }
+.cta .demo-link { display: inline-block; margin-top: 16px; font-size: 14.5px; color: var(--on-deep-muted); }
+.cta .demo-link:hover { color: var(--on-deep); }
+.cta small { display: block; margin-top: 6px; font-size: 12.5px; color: var(--on-deep-muted); opacity: .8; }
+.team { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 64px; padding-top: 34px; border-top: 1px solid var(--deep-rule); text-align: left; }
+.team .label { color: var(--on-deep-muted); grid-column: 1 / -1; }
+.person { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 16px; align-items: center; }
+.avatar { width: 52px; height: 52px; border-radius: 50%; background: var(--mark); color: var(--on-mark); display: grid; place-items: center; font: 400 24px/1 var(--serif); }
+.person b { font: 400 26px/1.1 var(--serif); display: block; }
+.person span { font-size: 14.5px; color: var(--on-deep-muted); }
+@media (max-width: 760px) { .cta { padding: 56px 20px 36px; border-radius: 18px; } .team { grid-template-columns: 1fr; } .mailrow { border-radius: 16px; padding: 12px; } }
+
+footer { padding-block: 36px 48px; color: var(--muted); font-size: 13px; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  .js .rv { opacity: 1; transform: none; }
+  html { scroll-behavior: auto; }
+}
+</style>
+
+</head>
+<body>
+<script>document.documentElement.classList.add('js');</script>
+
+<header class="top">
+  <div class="wrap nav">
+    <a class="brand" href="#top" aria-label="Corda AI home">
+      <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M22.5 9.1a9.4 9.4 0 1 0 0 13.8" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M19.3 12.1a5.4 5.4 0 1 0 0 7.8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" opacity=".7"/><circle cx="23.1" cy="9.1" r="2.15" fill="currentColor"/><circle cx="23.1" cy="22.9" r="2.15" fill="currentColor" opacity=".7"/></svg>
+      Corda
+    </a>
+    <nav aria-label="Sections">
+      <a href="#product">Product</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#partner">Contact</a>
+    </nav>
+    <a class="btn hi" href="#partner">Request access</a>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero" id="hero">
+    <canvas id="bg" aria-hidden="true"></canvas>
+    <div class="wrap">
+      <div class="pill fade-in"><i></i>The AI operations layer for capital markets meetings</div>
+      <h1 aria-label="Capital markets run on meetings."><span class="w" style="--i:0">Capital</span> <span class="w" style="--i:1">markets</span> <span class="w" style="--i:2">run</span> <span class="w" style="--i:3">on</span> <span class="w" style="--i:4"><em>meetings.</em></span></h1>
+      <p class="lede fade-in" style="--d:600ms">Corda reads the email between companies, investors and banks, decides who meets whom, and keeps every schedule right. Bankers just approve.</p>
+      <div class="ctas fade-in" style="--d:750ms">
+        <a class="btn hi" href="#partner">Become a design partner <span class="arr">→</span></a>
+        <a class="btn line" href="#product">See it work <span class="arr">↓</span></a>
+      </div>
+      <div class="works fade-in" style="--d:900ms"><span>Inside Outlook</span><span>Banker approves every change</span><span>Excel &amp; PDF planners</span></div>
+    </div>
+    <div class="cue" aria-hidden="true"></div>
+  </section>
+
+  <section class="block" id="product">
+    <div class="wrap">
+      <div class="center-head rv">
+        <div class="label">One conference · 5,000 to 15,000 one-on-ones</div>
+        <h2>One email in. <em>One approved change out.</em></h2>
+      </div>
+      <figure class="demo rv" id="demo" aria-label="Animated example: an issuer email becomes an approved schedule change" style="margin-top:0;margin-bottom:0">
+        <div class="demo-head">
+          <span class="label">Day 2 · Fall Credit Conference</span>
+          <div class="right">
+            <span class="label">Illustrative</span>
+            <button class="pp" id="pp" type="button" aria-label="Pause animation"><svg viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1" width="2.4" height="8" fill="currentColor"/><rect x="6.1" y="1" width="2.4" height="8" fill="currentColor"/></svg></button>
+          </div>
+        </div>
+        <ol class="stages" id="stages">
+          <li>Email<span class="bar"><span></span></span></li>
+          <li>Read<span class="bar"><span></span></span></li>
+          <li>Approve<span class="bar"><span></span></span></li>
+          <li>Updated<span class="bar"><span></span></span></li>
+        </ol>
+        <div class="dbody" id="dbody">
+          <div class="pane mail">
+            <div class="meta"><div class="av" aria-hidden="true">D</div><div class="from"><b>Dana Ruiz</b> · Harbor Point Auto Finance<br>ir@harborpointauto.example · 8:12 AM</div></div>
+            <div class="subj">Re: Day 2 availability</div>
+            <p class="text" id="mailText">Hi Sam, our CFO can <span class="old">no longer do Tuesday morning</span>. We can take meetings <span class="hl">Tuesday 2–4pm</span> instead. Thanks, Dana</p>
+          </div>
+          <div class="pane prop" id="prop">
+            <div class="reading"><span>Corda is reading the thread</span><span class="shim"></span></div>
+            <div class="content">
+              <span class="kind">RESCHEDULE · ISSUER</span>
+              <div class="what">Move Harbor Point to the afternoon</div>
+              <div class="diff"><s>Tue 9:00–11:00 AM</s><span aria-hidden="true">→</span><span class="to">Tue 2:00–4:00 PM</span></div>
+              <p class="note">3 booked investors move with them. No clashes found.</p>
+              <div class="acts"><span class="chip go" id="appr">Approve</span><span class="chip">Ask issuer</span><span class="chip">Edit</span></div>
+            </div>
+          </div>
+          <div class="pane sched">
+            <div class="head"><b>Harbor Point Auto · Tue</b><span>Tower B · 214</span></div>
+            <div class="tl">
+              <div class="rl">AM</div>
+              <div class="rl">PM</div>
+              <div class="tracks">
+                <div class="row am" id="amRow"><div class="s">9:00</div><div class="s">9:30</div><div class="s">10:00</div><div class="s">10:30</div></div>
+                <div class="row pm"><div class="s">2:00</div><div class="s">2:30</div><div class="s">3:00</div><div class="s">3:30</div></div>
+                <div class="blk b1">Northgate</div><div class="blk b2">Pinecrest</div><div class="blk b3">Linden &amp; Co.</div>
+              </div>
+            </div>
+          </div>
+          <div class="toast" id="toast"><b>✓</b> Grid, planner and reply to Dana updated</div>
+          <svg class="cursor" id="cursor" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 2l13 7.2-5.6 1.4L8 16z" fill="#0f1a15" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="demo-foot"><span id="foot">Waiting for a banker</span><span>Audit log on</span></div>
+      </figure>
+    </div>
+  </section>
+
+  <section class="block" id="product-features">
+    <div class="wrap">
+      <div class="center-head rv" style="margin-bottom:24px">
+        <div class="label">How Corda works</div>
+        <h2>Language models read the mess. <em>A solver makes the decisions.</em> A banker approves.</h2>
+      </div>
+    </div>
+    <div class="wrap feat-grid">
+      <div class="feats">
+        <div class="feat" data-v="0">
+          <div class="n">01 · READ</div>
+          <h3>Reads the inbox you already use.</h3>
+          <p>Requests, reschedules and cancellations are picked out of Outlook the moment they land.</p>
+          <div class="vis-inline"></div>
+        </div>
+        <div class="feat" data-v="1">
+          <div class="n">02 · ALLOCATE</div>
+          <h3>Decides who meets whom.</h3>
+          <p>A constraint solver weighs client priority, preferences, bankers and rooms, and explains every call.</p>
+          <span class="dev">Investor allocation in development</span>
+          <div class="vis-inline"></div>
+        </div>
+        <div class="feat" data-v="2">
+          <div class="n">03 · APPROVE</div>
+          <h3>A banker approves. Corda does the rest.</h3>
+          <p>Planners, replies in the same thread and the audit log update together.</p>
+          <div class="vis-inline"></div>
+        </div>
+        <div class="feat" data-v="3">
+          <div class="n">04 · RE-PLAN</div>
+          <h3>One cancellation, minimal disruption.</h3>
+          <p>A freed slot refills from the waitlist without moving anyone else.</p>
+          <span class="dev">In development</span>
+          <div class="vis-inline"></div>
+        </div>
+      </div>
+      <div class="stick" id="stick" aria-hidden="true">
+        <div class="vis act">
+          <div class="panel">
+            <div class="label">Shared inbox · conference</div>
+            <div class="inbox">
+              <div><span>Re: Day 2 availability</span><em>RESCHEDULE</em></div>
+              <div><span>Northgate request: Harbor Point</span><em>REQUEST</em></div>
+              <div><span>Linden — can't make Wed</span><em>CANCEL</em></div>
+              <div><span>Quarterly newsletter</span><em class="skip">SKIPPED</em></div>
+            </div>
+          </div>
+        </div>
+        <div class="vis">
+          <div class="panel">
+            <div class="label">Harbor Point · Tue 2–4 PM · 4 slots, 5 requests</div>
+            <div class="alloc">
+              <div><span><b>Northgate</b><i>Tier 1 · 1st choice</i></span><em>2:00</em></div>
+              <div><span><b>Pinecrest</b><i>Tier 1 · 2nd choice</i></span><em>2:30</em></div>
+              <div><span><b>Linden &amp; Co.</b><i>Tier 2 · 1st choice</i></span><em>3:00</em></div>
+              <div><span><b>Ashby Partners</b><i>Tier 2 · 3rd choice</i></span><em class="grp">Group 3:30</em></div>
+              <div><span><b>Merrow Capital</b><i>Tier 3 · 2nd choice</i></span><em class="wait">Waitlist #1</em></div>
+            </div>
+            <p class="why">Banker S. Chen (primary) · Room Tower B 214 · no clashes</p>
+          </div>
+        </div>
+        <div class="vis">
+          <div class="panel">
+            <div class="appr-wrap">
+              <div class="ring"><svg viewBox="0 0 80 80" fill="none"><circle cx="40" cy="40" r="34" stroke-width="3"/><path d="M26 41l10 10 19-21" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+              <div class="who">Approved by S. Chen</div>
+              <div class="sent">5 replies drafted · planners updated · logged</div>
+            </div>
+            <div class="badges" style="justify-content:center"><span>Microsoft 365 sign-in</span><span>Your choice of model</span><span>No training on your email</span></div>
+          </div>
+        </div>
+        <div class="vis">
+          <div class="panel">
+            <div class="label">Re-plan · 1 email in</div>
+            <div class="log">
+              <div><span>9:02</span><span><s>Linden &amp; Co. cancels 3:00</s></span></div>
+              <div><span>9:02</span><span>Ashby Partners moves from group to 3:00</span></div>
+              <div><span>9:02</span><span>Merrow Capital joins the 3:30 group</span></div>
+              <div><span>9:02</span><span><b>No other meeting moved</b></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="roadmap">
+    <div class="wrap">
+      <div class="center-head rv">
+        <div class="label">Where Corda goes</div>
+        <h2>We start with the conference. <em>We end with the network.</em></h2>
+        <p>Every meeting between a public company and its investors, arranged through Corda.</p>
+      </div>
+      <div class="road rv" id="road">
+        <div class="now"><div class="n">01<b>Now</b></div><h3>Conferences</h3><p>Inbox changes, allocation and re-planning for sell-side conferences.</p></div>
+        <div><div class="n">02</div><h3>Roadshows &amp; NDRs</h3><p>The same loop for every corporate access event.</p></div>
+        <div><div class="n">03</div><h3>Issuer IR</h3><p>The company side: every bank's invitations in one view.</p></div>
+        <div><div class="n">04</div><h3>The network</h3><p>Companies, investors and banks on one schedule.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="partner" style="padding-top:0">
+    <div class="wrap">
+      <div class="cta rv">
+        <div class="label" style="color:var(--mark)">Design partners</div>
+        <h2 style="margin-top:16px">Run your next conference <em>on Corda.</em></h2>
+        <p class="sub">We are onboarding a few corporate access teams. Tell us about your next event; we run it with you.</p>
+        <form class="lead" id="lead" novalidate>
+          <div class="f"><label for="f-name">Name</label><input id="f-name" name="name" autocomplete="name" required></div>
+          <div class="f"><label for="f-email">Work email</label><input id="f-email" name="email" type="email" autocomplete="email" placeholder="you@bank.com" required></div>
+          <div class="f"><label for="f-firm">Firm</label><input id="f-firm" name="firm" autocomplete="organization" required></div>
+          <div class="f"><label for="f-role">Role</label><select id="f-role" name="role"><option>Corporate access</option><option>Coverage banker</option><option>Sales</option><option>Investor relations</option><option>Investor</option><option>Other</option></select></div>
+          <div class="f wide"><label for="f-event">Next conference you run <span>optional</span></label><input id="f-event" name="event" placeholder="e.g. Fall credit conference, March 2027"></div>
+          <div class="f wide"><label for="f-msg">Anything we should know <span>optional</span></label><textarea id="f-msg" name="msg" rows="3"></textarea></div>
+          <div class="send wide">
+            <a class="btn hi" id="sendBtn" href="#" aria-disabled="true">Request access <span class="arr">→</span></a>
+            <span class="hint" id="hint" aria-live="polite">Opens your email app with the request filled in.</span>
+            <button class="linkish" id="copyReq" type="button">No email app? Copy the request</button>
+          </div>
+        </form>
+        <a class="demo-link" href="https://corda-ai-snowy.vercel.app" target="_blank" rel="noopener">Or open the live demo ↗</a>
+        <small>Synthetic data, shared with other visitors.</small>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="wrap"><footer><span>© 2026 Corda AI</span><span>Example names on this page are fictional.</span></footer></div>
+
+<script>
+(() => {
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+
+  /* design-partner form: builds a prefilled email to the team (address kept off the page) */
+  const TO = ['taoli.corda', 'outlook.com'].join('@');
+  const form = $('#lead'), send = $('#sendBtn'), hint = $('#hint'), copyReq = $('#copyReq');
+  const val = id => form.querySelector('#' + id).value.trim();
+  const required = ['f-name', 'f-email', 'f-firm'];
+  const ok = id => id === 'f-email' ? /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val(id)) : val(id).length > 0;
+  const body = () => [
+    `Name: ${val('f-name')}`, `Work email: ${val('f-email')}`, `Firm: ${val('f-firm')}`, `Role: ${val('f-role')}`,
+    `Next conference: ${val('f-event') || '-'}`, '', val('f-msg') || ''
+  ].join('\n');
+  const subject = () => `Corda design partner request: ${val('f-firm')}`;
+  function refresh() {
+    const valid = required.every(ok);
+    send.setAttribute('aria-disabled', String(!valid));
+    send.href = valid ? `mailto:${TO}?subject=${encodeURIComponent(subject())}&body=${encodeURIComponent(body())}` : '#';
+    required.forEach(id => { if (ok(id)) form.querySelector('#' + id).classList.remove('bad'); });
+    if (valid && hint.textContent.startsWith('Please')) hint.textContent = 'Opens your email app with the request filled in.';
+  }
+  form.addEventListener('input', refresh);
+  form.addEventListener('submit', e => e.preventDefault());
+  send.addEventListener('click', e => {
+    if (send.getAttribute('aria-disabled') === 'true') {
+      e.preventDefault();
+      required.forEach(id => form.querySelector('#' + id).classList.toggle('bad', !ok(id)));
+      hint.textContent = 'Please fill in your name, a valid work email and your firm.';
+      const first = required.find(id => !ok(id)); if (first) form.querySelector('#' + first).focus();
+      return;
+    }
+    hint.textContent = 'Your email app should open with the request ready. Just press send.';
+  });
+  copyReq.addEventListener('click', () => {
+    const text = `To: ${TO}\nSubject: ${subject()}\n\n${body()}`;
+    const done = () => { hint.textContent = 'Copied. Paste it into any email to ' + TO + '.'; };
+    try { navigator.clipboard.writeText(text).then(done, () => { hint.textContent = 'Send your details to ' + TO + '.'; }); } catch (e) { hint.textContent = 'Send your details to ' + TO + '.'; }
+  });
+  refresh();
+
+  /* header after hero */
+  const hero = $('#hero');
+  new IntersectionObserver(([e]) => document.documentElement.classList.toggle('past-hero', !e.isIntersecting), { rootMargin: '-70px 0px 0px 0px' }).observe(hero);
+
+  /* reveal */
+  const io = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }), { threshold: 0.15 });
+  $$('.rv').forEach(el => io.observe(el));
+
+  /* sticky features: clone visuals inline for mobile, switch active on scroll */
+  const visuals = $$('#stick .vis'), feats = $$('.feat');
+  feats.forEach((f, i) => { const c = visuals[i].cloneNode(true); c.classList.remove('act'); f.querySelector('.vis-inline').appendChild(c); });
+  const setFeat = i => { feats.forEach((f, j) => f.classList.toggle('act', j === i)); visuals.forEach((v, j) => v.classList.toggle('act', j === i)); };
+  setFeat(0);
+  const featIO = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) setFeat(+e.target.dataset.v); }), { rootMargin: '-45% 0px -45% 0px' });
+  feats.forEach(f => featIO.observe(f));
+  const inlineIO = new IntersectionObserver(es => es.forEach(e => e.target.classList.toggle('act', e.isIntersecting)), { threshold: 0.4 });
+  $$('.vis-inline .vis').forEach(v => inlineIO.observe(v));
+
+  /* hero background: a conference grid where meetings keep being moved */
+  const cv = $('#bg'), ctx = cv.getContext('2d');
+  const CELL = 36, PAD = 5;
+  let W = 0, H = 0, cols = 0, rows = 0, grid = null, meets = [], heroVisible = true, last = 0, nextMove = 0;
+  const rnd = n => Math.floor(Math.random() * n);
+  const rr = (g, x, y, w, h) => { g.beginPath(); g.roundRect ? g.roundRect(x, y, w, h, 4) : g.rect(x, y, w, h); };
+  function size() {
+    const r = cv.getBoundingClientRect(), dpr = Math.min(2, devicePixelRatio || 1);
+    W = r.width; H = r.height; cv.width = W * dpr; cv.height = H * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cols = Math.ceil(W / CELL) + 1; rows = Math.ceil(H / CELL) + 1;
+    grid = document.createElement('canvas'); grid.width = cv.width; grid.height = cv.height;
+    const g = grid.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.strokeStyle = 'rgba(238,243,238,0.07)';
+    for (let c = 0; c < cols; c++) for (let k = 0; k < rows; k++) { rr(g, c * CELL + PAD, k * CELL + PAD, CELL - PAD * 2, CELL - PAD * 2); g.stroke(); }
+    meets = [];
+    const n = Math.round(cols * rows * 0.06);
+    for (let i = 0; i < n; i++) { const c = rnd(cols), k = rnd(rows), len = 1 + rnd(3); meets.push({ x: c * CELL, y: k * CELL, tx: c * CELL, ty: k * CELL, len, flash: 0, a: 0.10 + Math.random() * 0.16 }); }
+    draw(0);
+  }
+  function move() {
+    for (let k = 0; k < 2; k++) {
+      const m = meets[rnd(meets.length)]; if (!m) return;
+      m.tx = Math.max(0, Math.min(cols - m.len, Math.round(m.tx / CELL) + (rnd(2) ? 1 : -1) * (1 + rnd(4)))) * CELL;
+      m.ty = Math.max(0, Math.min(rows - 1, Math.round(m.ty / CELL) + rnd(3) - 1)) * CELL;
+      m.flash = 1;
+    }
+  }
+  function draw(dt) {
+    ctx.clearRect(0, 0, W, H);
+    if (grid) ctx.drawImage(grid, 0, 0, W, H);
+    const k = Math.min(1, dt * 0.006);
+    for (const m of meets) {
+      m.x += (m.tx - m.x) * k; m.y += (m.ty - m.y) * k;
+      rr(ctx, m.x + PAD, m.y + PAD, m.len * CELL - PAD * 2, CELL - PAD * 2);
+      ctx.fillStyle = `rgba(116,195,166,${m.a})`; ctx.fill();
+      if (m.flash > 0) { ctx.fillStyle = `rgba(230,240,107,${m.flash * 0.75})`; ctx.fill(); m.flash = Math.max(0, m.flash - dt * 0.0006); }
+    }
+  }
+  function loop(t) {
+    const dt = last ? Math.min(64, t - last) : 16; last = t;
+    if (heroVisible && !document.hidden) { if (t > nextMove) { move(); nextMove = t + 600; } draw(dt); }
+    requestAnimationFrame(loop);
+  }
+  size();
+  let rT; addEventListener('resize', () => { clearTimeout(rT); rT = setTimeout(size, 150); });
+  new IntersectionObserver(([e]) => { heroVisible = e.isIntersecting; }).observe(hero);
+  if (!reduce) requestAnimationFrame(loop);
+
+  /* product demo timeline */
+  const demo = $('#demo'), dbody = $('#dbody'), stages = $$('#stages li');
+  const mailText = $('#mailText'), fullHTML = mailText.innerHTML, plain = mailText.textContent;
+  const prop = $('#prop'), appr = $('#appr'), blks = $$('.blk'), amRow = $('#amRow');
+  const toast = $('#toast'), cursor = $('#cursor'), pp = $('#pp'), foot = $('#foot');
+  let userPaused = false, offscreen = true;
+  const paused = () => userPaused || offscreen || document.hidden;
+  const wait = ms => new Promise(res => { let acc = 0, prev = performance.now(); const tick = now => { const d = now - prev; prev = now; if (!paused()) acc += d; if (acc >= ms) res(); else requestAnimationFrame(tick); }; requestAnimationFrame(tick); });
+  function setStage(i, dur) { stages.forEach((li, j) => { li.classList.toggle('done', j < i); li.classList.remove('on'); if (j === i) { li.style.setProperty('--dur', dur + 'ms'); void li.offsetWidth; li.classList.add('on'); } }); }
+  const placeCursor = (x, y, snap) => { cursor.classList.toggle('snap', !!snap); cursor.style.transform = `translate(${x}px, ${y}px)`; };
+  function finalState() {
+    mailText.innerHTML = fullHTML; mailText.querySelectorAll('.hl, .old').forEach(s => s.classList.add('on'));
+    prop.classList.add('show', 'ready'); appr.classList.add('ok'); appr.textContent = 'Approved ✓'; foot.textContent = 'Approved by S. Chen · 8:14 AM';
+    blks.forEach(b => b.classList.add('moved')); amRow.classList.add('blocked'); toast.classList.add('show');
+    stages.forEach(li => { li.classList.remove('on'); li.classList.add('done'); });
+  }
+  function reset() {
+    dbody.classList.remove('fade'); mailText.textContent = '';
+    prop.classList.remove('show', 'ready'); appr.classList.remove('ok', 'press'); appr.textContent = 'Approve'; foot.textContent = 'Waiting for a banker';
+    blks.forEach(b => b.classList.remove('moved')); amRow.classList.remove('blocked'); toast.classList.remove('show'); cursor.classList.remove('on');
+    const d = dbody.getBoundingClientRect(); placeCursor(d.width - 40, d.height - 40, true);
+  }
+  async function cycle() {
+    reset(); setStage(0, 3000); await wait(300);
+    for (let i = 1; i <= plain.length; i++) { mailText.innerHTML = plain.slice(0, i).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '<span class="caret"></span>'; await wait(plain[i - 1] === ' ' ? 14 : 20); }
+    mailText.innerHTML = fullHTML; await wait(250);
+    setStage(1, 2700); mailText.querySelector('.old').classList.add('on'); await wait(250);
+    mailText.querySelector('.hl').classList.add('on'); prop.classList.add('show'); await wait(1200);
+    prop.classList.add('ready'); await wait(1250);
+    setStage(2, 1900); cursor.classList.add('on'); await wait(150);
+    const b = appr.getBoundingClientRect(), d = dbody.getBoundingClientRect();
+    placeCursor(b.left - d.left + b.width * 0.55, b.top - d.top + b.height * 0.55); await wait(950);
+    appr.classList.add('press'); await wait(140); appr.classList.remove('press');
+    appr.classList.add('ok'); appr.textContent = 'Approved ✓'; foot.textContent = 'Approved by S. Chen · 8:14 AM'; await wait(650);
+    setStage(3, 3800); cursor.classList.remove('on');
+    for (const bl of blks) { bl.classList.add('moved'); await wait(140); }
+    await wait(700); amRow.classList.add('blocked'); toast.classList.add('show'); await wait(2700);
+    dbody.classList.add('fade'); await wait(500);
+  }
+  if (reduce) { finalState(); pp.hidden = true; }
+  else {
+    new IntersectionObserver(([e]) => { offscreen = !e.isIntersecting; demo.classList.toggle('paused', paused()); }, { threshold: 0.25 }).observe(demo);
+    pp.addEventListener('click', () => {
+      userPaused = !userPaused; demo.classList.toggle('paused', paused());
+      pp.setAttribute('aria-label', userPaused ? 'Play animation' : 'Pause animation');
+      pp.innerHTML = userPaused ? '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 1l7 4-7 4z" fill="currentColor"/></svg>' : '<svg viewBox="0 0 10 10" aria-hidden="true"><rect x="1.5" y="1" width="2.4" height="8" fill="currentColor"/><rect x="6.1" y="1" width="2.4" height="8" fill="currentColor"/></svg>';
+    });
+    (async () => { for (;;) await cycle(); })();
+  }
+})();
+</script>
+
+</body>
+</html>
