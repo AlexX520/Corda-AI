@@ -55,7 +55,7 @@ test(
         0,
         'proposals must not mutate approved availability',
       );
-      const proposal = await db.proposal.findUniqueOrThrow({ where: { emailId: mail.id } });
+      const proposal = await db.proposal.findUniqueOrThrow({ where: { emailId_askIndex: { emailId: mail.id, askIndex: 0 } } });
       ids.push(proposal.id);
       const extraction = extractionSchema.parse(proposal.extraction);
       assert.equal(extraction.windows.length, 1);
@@ -114,6 +114,21 @@ test(
             body: draft.body,
             send: true,
             recipientsApproved: true,
+          }),
+        /outside the registered/,
+      );
+      // Even with the second confirmation, a meeting attachment only goes to the meeting's contacts.
+      await assert.rejects(
+        () =>
+          command(banker, 'draft', {
+            id: draft.id,
+            to: ['unauthorized@example.com'],
+            cc: [],
+            subject: draft.subject,
+            body: draft.body,
+            send: true,
+            recipientsApproved: true,
+            outsideConfirmed: true,
           }),
         /recipients must/,
       );
@@ -174,7 +189,7 @@ test(
         issuerId: 'bayview',
       })) as { id: string };
       ids.push(ambiguous.id);
-      const p2 = await db.proposal.findUniqueOrThrow({ where: { emailId: ambiguous.id } });
+      const p2 = await db.proposal.findUniqueOrThrow({ where: { emailId_askIndex: { emailId: ambiguous.id, askIndex: 0 } } });
       ids.push(p2.id);
       await assert.rejects(
         () => command(banker, 'review', { id: p2.id, decision: 'approve' }),
@@ -214,15 +229,21 @@ test(
         { headers: { cookie } },
       );
       assert.match(await ics.text(), /BEGIN:VEVENT/);
-      const salesLogin = await fetch(`${url}/api/session`, {
+      const noOrigin = await fetch(`${url}/api/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: other.id }),
+      });
+      assert.equal(noOrigin.status, 403, 'state-changing routes refuse requests without Origin');
+      const salesLogin = await fetch(`${url}/api/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: url },
         body: JSON.stringify({ userId: other.id }),
       });
       const salesCookie = salesLogin.headers.get('set-cookie')!.split(';')[0];
       const denied = await fetch(`${url}/api/commands`, {
         method: 'POST',
-        headers: { cookie: salesCookie, 'Content-Type': 'application/json' },
+        headers: { cookie: salesCookie, 'Content-Type': 'application/json', Origin: url },
         body: JSON.stringify({ type: 'availability', data: {} }),
       });
       assert.equal(denied.status, 403);

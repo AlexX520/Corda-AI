@@ -10,6 +10,8 @@ model User {
   name String
   email String @unique
   role String
+  /// Bumped on sign-out so every earlier session token stops working.
+  sessionVersion Int @default(0)
 }
 model Conference {
   id String @id
@@ -56,18 +58,28 @@ model Email {
   status String @default("Pending review")
   source String @default("manual")
   graphId String?
-  proposal Proposal?
+  /// internal | verified | unverified — sender domain checked against registered contacts.
+  senderStatus String @default("unknown")
+  /// Human-readable warnings: links, credential requests, possible MNPI, embedded instructions.
+  securityFlags String[] @default([])
+  /// How the conference was chosen when the email did not name one.
+  contextNote String @default("")
+  proposals Proposal[]
 }
+/// One ask inside an email. A reply-all with three changes has three proposals.
 model Proposal {
   id String @id @default(cuid())
-  emailId String @unique
+  emailId String
   email Email @relation(fields:[emailId], references:[id])
+  askIndex Int @default(0)
+  summary String @default("")
   extraction Json
   status String @default("Pending")
   reviewerId String?
   reviewNote String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  @@unique([emailId, askIndex])
 }
 model Availability {
   id String @id @default(cuid())
@@ -95,6 +107,8 @@ model MeetingRequest {
   notes String @default("")
   priority String @default("Normal")
   status String
+  sourceEmailId String?
+  attendees Int?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   meeting Meeting?
@@ -127,12 +141,17 @@ model Action {
   issuerId String?
   investorId String?
   emailId String?
+  proposalId String?
   requestId String?
+  meetingId String?
   assignedTo String?
+  /// Also notified (e.g. the issuer owner on an escalation addressed to another banker).
+  ccUserIds String[] @default([])
   priority String @default("Normal")
   status String @default("Open")
   recommendation String
   createdAt DateTime @default(now())
+  @@index([proposalId])
 }
 model Draft {
   id String @id @default(cuid())

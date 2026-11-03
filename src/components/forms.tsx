@@ -21,17 +21,25 @@ export function RequestForm({
   run: Run;
 }) {
   const [conference, setConference] = useState(conferenceId),
-    [issuer, setIssuer] = useState(data.issuers[0].id),
-    [investor, setInvestor] = useState(data.investors[0].id),
+    [issuer, setIssuer] = useState(''),
+    [investor, setInvestor] = useState(''),
     [date, setDate] = useState(data.conferences.find((c) => c.id === conferenceId)!.startDate),
     [time, setTime] = useState('15:00'),
     [duration, setDuration] = useState(30),
     [priority, setPriority] = useState('Normal'),
     [notes, setNotes] = useState(''),
     [alternatives, setAlternatives] = useState(''),
+    [attendees, setAttendees] = useState(''),
+    [requester, setRequester] = useState(data.user.id),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const c = data.conferences.find((x) => x.id === conference)!;
+  const isBanker = data.user.role === 'BANKER';
+  const issuers = [...data.issuers].sort((a, b) => a.name.localeCompare(b.name));
+  // An investor that shares a name with an issuer (e.g. an issuer's investing arm) is labelled as such.
+  const investors = [...data.investors].sort((a, b) => a.name.localeCompare(b.name));
+  const investorLabel = (name: string) =>
+    data.issuers.some((i) => i.name === name) ? `${name} (investing arm)` : name;
   return (
     <Dialog
       open={open}
@@ -59,6 +67,8 @@ export function RequestForm({
                   duration,
                   priority,
                   notes,
+                  ...(attendees ? { attendees: Math.max(1, Math.round(+attendees)) } : {}),
+                  ...(requester !== data.user.id ? { salespersonId: requester } : {}),
                   alternativeDates: alternatives
                     .split(',')
                     .map((x) => x.trim())
@@ -91,20 +101,22 @@ export function RequestForm({
           </select>
         </Field>
         <div className="two-cols">
-          <Field label="Issuer">
-            <select value={issuer} onChange={(e) => setIssuer(e.target.value)}>
-              {data.issuers.map((i) => (
+          <Field label="Issuer (company presenting)">
+            <select required value={issuer} onChange={(e) => setIssuer(e.target.value)}>
+              <option value="">— Pick the issuer —</option>
+              {issuers.map((i) => (
                 <option key={i.id} value={i.id}>
                   {i.name}
                 </option>
               ))}
             </select>
           </Field>
-          <Field label="Investor">
-            <select value={investor} onChange={(e) => setInvestor(e.target.value)}>
-              {data.investors.map((i) => (
+          <Field label="Investor (account asking to meet)">
+            <select required value={investor} onChange={(e) => setInvestor(e.target.value)}>
+              <option value="">— Pick the investor —</option>
+              {investors.map((i) => (
                 <option key={i.id} value={i.id}>
-                  {i.name}
+                  {investorLabel(i.name)}
                 </option>
               ))}
             </select>
@@ -143,6 +155,9 @@ export function RequestForm({
             </select>
           </Field>
         </div>
+        <Field label="Attendees (investor side)" hint="Optional · used to pick a room that fits">
+          <input type="number" min={1} max={500} value={attendees} onChange={(e) => setAttendees(e.target.value)} placeholder="e.g. 3" />
+        </Field>
         <Field label="Alternative preferred dates" hint="Optional · comma-separated dates">
           <input
             placeholder="2026-10-20, 2026-10-21"
@@ -158,12 +173,31 @@ export function RequestForm({
             onChange={(e) => setNotes(e.target.value)}
           />
         </Field>
+        {isBanker ? (
+          <Field label="Requested by" hint="The salesperson who owns the client relationship, or you.">
+            <select value={requester} onChange={(e) => setRequester(e.target.value)}>
+              <option value={data.user.id}>{data.user.name} (banker)</option>
+              {data.users
+                .filter((u) => u.role === 'SALES')
+                .map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name} (sales)
+                  </option>
+                ))}
+            </select>
+          </Field>
+        ) : null}
         <div className="notice">
-          Requesting salesperson: <strong>{data.user.name}</strong>
-          <br />
-          Assigned banker:{' '}
-          {data.users.find((u) => u.id === data.issuers.find((i) => i.id === issuer)?.ownerId)
-            ?.name || 'Unassigned queue'}
+          {!isBanker && (
+            <>
+              Requested by: <strong>{data.user.name}</strong>
+              <br />
+            </>
+          )}
+          Coverage banker:{' '}
+          {issuer
+            ? data.users.find((u) => u.id === data.issuers.find((i) => i.id === issuer)?.ownerId)?.name || 'Unassigned queue'
+            : 'Pick an issuer'}
         </div>
         {error && <p className="error">{error}</p>}
         <Button disabled={busy} type="submit">

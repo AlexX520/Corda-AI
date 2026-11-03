@@ -156,8 +156,9 @@ See `.env.example` for all variables.
 | `MS_TENANT`      | `consumers` for Outlook.com, or a Microsoft 365 tenant ID                          |
 | `MS_REDIRECT_URI` | Optional; defaults to `$RENDER_EXTERNAL_URL/api/outlook/callback` on Render, else `http://localhost:3000/api/outlook/callback` |
 | `ACCESS_CODE`    | Optional; when set, every page asks for this code (use it on a hosted demo)        |
+| `INTERNAL_DOMAINS` | Comma-separated bank email domains (default `conferenceos.demo`). Used for sender verification and the outbound recipient allowlist |
 
-No LLM calls occur without a key. With a key, only newly ingested email content and known conference/entity context are sent to the configured provider. Invalid JSON, unknown associations, and fabricated evidence are rejected. If the provider fails or its answer is rejected, the email is read with the built-in parser instead and the review card says so, so no Outlook message is lost. Reasoning models (o-series, gpt-5) work too; Corda omits the temperature setting for them. Generated drafts always require review. The mock parser intentionally supports explicit English weekday/AM-PM ranges; unsupported phrasing is flagged for manual review, not guessed.
+No LLM calls occur without a key. With a key, only newly ingested email content and known conference/entity context are sent to the configured provider. Invalid JSON, unknown associations, and fabricated evidence are rejected. If the provider fails or its answer is rejected, the email is read with the built-in parser instead and the review card says so, so no Outlook message is lost. Reasoning models (o-series, gpt-5) work too; Corda omits the temperature setting for them. Generated drafts always require review. The built-in parser splits an email into its asks (numbered/bulleted items, else sentences that each carry their own operation), reads explicit weekdays/dates, AM/PM times and ranges, and converts stated time zones (ET/CT/PT/UK) to the conference zone; vague phrasing ("after lunch", "~4ish") is quoted back for a question, never guessed. See `docs/CHANGELOG-v4.md`.
 
 ## Architecture
 

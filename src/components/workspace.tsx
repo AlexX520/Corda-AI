@@ -19,7 +19,7 @@ import {
   Clock3,
   FileSpreadsheet,
   LayoutDashboard,
-  Leaf,
+  LogOut,
   Loader2,
   Mail,
   MapPin,
@@ -44,6 +44,9 @@ import { Sheet } from './ui/sheet';
 import { RequestDecision } from './decision';
 import { AvailabilityView, PlannerView, RequestDetail, RequestsView } from './views';
 import { ResourceAllocationView } from './resources';
+import { MeetingDrawer, MeetingForm } from './meeting';
+import { actionKind, askOf, askPosition, kindLabel, kindOrder, openWork, type KindId } from './queue-model';
+import { windowLabel } from '@/lib/review-rules';
 const menu = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'queue', label: 'Action queue', icon: CheckCheck },
@@ -52,40 +55,23 @@ const menu = [
   { id: 'allocation', label: 'Allocation', icon: SlidersHorizontal },
 ];
 
-/* Every action is one of four schedule changes (how bankers talk about them) or "other". */
-type KindId = 'new' | 'reschedule' | 'availability' | 'cancel' | 'other';
-const kindOrder: KindId[] = ['new', 'reschedule', 'availability', 'cancel', 'other'];
-const kindLabel: Record<KindId, string> = {
-  new: 'New request',
-  reschedule: 'Reschedule',
-  availability: 'Availability',
-  cancel: 'Cancel',
-  other: 'Other',
-};
 type Action = AppState['actions'][number];
-function actionKind(a: Action, data?: AppState): { id: KindId; label: string } {
-  const t = a.type;
-  const x = data?.emails.find((e) => e.id === a.emailId)?.proposal?.extraction as
-    | { windows?: { kind: string }[] }
-    | undefined;
-  if (/inquiry/i.test(t) && x?.windows?.some((w) => w.kind === 'unavailable'))
-    return { id: 'availability', label: 'Availability' };
-  if (/reschedul/i.test(t)) return { id: 'reschedule', label: 'Reschedule' };
-  if (/cancel/i.test(t)) return { id: 'cancel', label: 'Cancel' };
-  if (/availability/i.test(t)) return { id: 'availability', label: 'Availability' };
-  if (/resource/i.test(t)) return { id: 'other', label: 'Rooms' };
-  if (/confirmation/i.test(t)) return { id: 'other', label: 'Confirmation' };
-  if (/inquiry/i.test(t)) return { id: 'other', label: 'Question' };
-  if (/request|alternative/i.test(t) || a.requestId) return { id: 'new', label: 'New request' };
-  return { id: 'other', label: t };
-}
 /** The meeting time an action is about: the request's slot or the earliest window in the email proposal. */
 function actionWhen(a: Action, data: AppState): string | null {
   const r = data.requests.find((x) => x.id === a.requestId);
   if (r) return r.start;
-  const e = data.emails.find((x) => x.id === a.emailId);
-  const w = (e?.proposal?.extraction as { windows?: { start: string }[] } | undefined)?.windows || [];
-  return w.length ? [...w].sort((x, y) => x.start.localeCompare(y.start))[0].start : null;
+  const x = askOf(a, data).extraction;
+  if (x?.referenceTime) return x.referenceTime;
+  const w = x?.windows || [];
+  return w.length ? [...w].sort((p, q) => p.start.localeCompare(q.start))[0].start : null;
+}
+/** Readable time for the queue: the meeting the ask is about, or the window it adds/blocks. */
+function whenLabel(a: Action, data: AppState, zone: string) {
+  const x = askOf(a, data).extraction;
+  if (!x) return null;
+  if (x.referenceTime) return fmt(x.referenceTime, zone, 'EEE, h:mm a');
+  const w = [...(x.windows || [])].sort((p, q) => p.start.localeCompare(q.start))[0];
+  return w ? windowLabel(w, zone, false) : null;
 }
 function actionReceived(a: Action, data: AppState): string {
   return data.emails.find((x) => x.id === a.emailId)?.receivedAt || a.createdAt;
@@ -138,11 +124,15 @@ export function Workspace() {
     [error, setError] = useState(''),
     [emailOpen, setEmailOpen] = useState(false),
     [requestOpen, setRequestOpen] = useState(false),
-    [reviewId, setReviewId] = useState<string | null>(null),
+    [review, setReview] = useState<{ emailId: string; proposalId?: string | null } | null>(null),
+    [needsLogin, setNeedsLogin] = useState<{ id: string; name: string; role: string }[] | null>(null),
+    [bellOpen, setBellOpen] = useState(false),
+    [meetingId, setMeetingId] = useState<string | null>(null),
+    [newMeeting, setNewMeeting] = useState(false),
     [draftId, setDraftId] = useState<string | null>(null),
     [queueSection, setQueueSection] = useState<'tasks' | 'emails' | 'drafts'>('tasks'),
     [scheduleSection, setScheduleSection] = useState<'schedule' | 'availability'>('schedule'),
-    [queueFocus, setQueueFocus] = useState<'all' | KindId>('all'),
+    [queueFocus, setQueueFocus] = useState<'all' | 'triage' | KindId>('all'),
     [overviewSort, setOverviewSort] = useState<SortMode>('soonest'),
     [help, setHelp] = useState(false),
     [busy, setBusy] = useState(false),
@@ -152,23 +142,26 @@ export function Workspace() {
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
     const result = await response.json();
+    if (response.status === 401) {
+      // Signed out (or the session was revoked): show the profile picker instead of failing.
+      const s = await (await fetch('/api/session', { cache: 'no-store' })).json();
+      setData(null);
+      setNeedsLogin(s.profiles || []);
+      return;
+    }
     if (!response.ok) throw new Error(result.error);
+    setNeedsLogin(null);
     setData(result);
   }, []);
   useEffect(() => {
     let cancelled = false;
     async function init() {
       try {
-        const r = await fetch('/api/session'),
-          s = await r.json();
-        if (!s.user && s.demo && s.profiles?.length) {
-          await fetch('/api/session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: s.profiles.find((p: { role: string }) => p.role === 'BANKER')?.id,
-            }),
-          });
+        // No silent auto-login: without a session the person picks a profile explicitly.
+        const s = await (await fetch('/api/session', { cache: 'no-store' })).json();
+        if (!s.user) {
+          if (!cancelled) setNeedsLogin(s.profiles || []);
+          return;
         }
         if (!cancelled) await reload();
       } catch (e) {
@@ -177,7 +170,7 @@ export function Workspace() {
     }
     void init();
     const interval = setInterval(() => {
-      void reload().catch(() => {});
+      if (document.visibilityState === 'visible') void reload().catch(() => {});
     }, 10000);
     return () => {
       cancelled = true;
@@ -281,7 +274,7 @@ export function Workspace() {
         body: JSON.stringify({ userId: id }),
       });
       if (!response.ok) throw new Error('Could not switch demo profile.');
-      setReviewId(null);
+      setReview(null);
       setDraftId(null);
       setPage('overview');
       await reload();
@@ -289,6 +282,33 @@ export function Workspace() {
       setToast({ message: String(e), error: true });
     }
   }
+  async function signOut() {
+    await fetch('/api/session', { method: 'DELETE' });
+    setReview(null);
+    setDraftId(null);
+    setPage('overview');
+    await reload();
+  }
+  if (needsLogin)
+    return (
+      <LoginScreen
+        profiles={needsLogin}
+        onPick={async (id) => {
+          const r = await fetch('/api/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ userId: id }),
+          });
+          if (!r.ok) {
+            setError((await r.json()).error || 'Sign-in failed');
+            return;
+          }
+          setNeedsLogin(null);
+          await reload();
+        }}
+        error={error}
+      />
+    );
   if (!data)
     return (
       <main className="loading-screen">
@@ -311,20 +331,18 @@ export function Workspace() {
   const banker = data.user.role === 'BANKER',
     c = data.conferences.find((c) => c.id === conferenceId)!,
     n = names(data),
-    openActions = data.actions.filter(
-      (a) => a.status === 'Open' && a.conferenceId === conferenceId,
-    ),
-    pendingEmails = data.emails.filter(
-      (e) => e.status === 'Pending review' && e.conferenceId === conferenceId,
-    ),
-    reviewEmail = data.emails.find((e) => e.id === reviewId),
+    work = openWork(data, conferenceId),
+    openActions = [...work.triage, ...work.conference],
+    reviewEmail = data.emails.find((e) => e.id === review?.emailId),
+    drawerMeeting = data.meetings.find((m) => m.id === meetingId),
     sheetRequest = data.requests.find((r) => r.id === sheetRequestId),
     outlook = data.outlook,
     draft = data.drafts.find((d) => d.id === draftId);
   const confirmed = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed');
   function actionClick(a: AppState['actions'][number]) {
-    if (a.emailId) setReviewId(a.emailId);
+    if (a.emailId) setReview({ emailId: a.emailId, proposalId: a.proposalId });
     else if (a.requestId) setSheetRequestId(a.requestId);
+    else if (a.meetingId && data!.meetings.some((m) => m.id === a.meetingId)) setMeetingId(a.meetingId);
     else if (a.type === 'Resource allocation') navigate('resources');
     else navigate('availability');
   }
@@ -436,7 +454,9 @@ export function Workspace() {
                 ))}
               </select>
             )}
-            <ChevronsUpDown size={14} />
+            <button className="signout" onClick={signOut} title="Sign out" aria-label="Sign out">
+              <LogOut size={15} />
+            </button>
           </div>
         </div>
       </aside>
@@ -467,14 +487,29 @@ export function Workspace() {
               />
             </div>
             <span className="demo-badge">SYNTHETIC DATA</span>
-            <button
-              className="notification"
-              aria-label="Open action queue"
-              onClick={() => navigate(banker ? 'queue' : 'requests')}
-            >
-              <Bell size={18} />
-              {openActions.length > 0 && <i />}
-            </button>
+            {banker && (
+              <div className="bell-wrap">
+                <button
+                  className="notification"
+                  aria-label="Recent changes"
+                  aria-expanded={bellOpen}
+                  onClick={() => setBellOpen(!bellOpen)}
+                >
+                  <Bell size={18} />
+                  {data.auditLogs.length > 0 && <i />}
+                </button>
+                {bellOpen && (
+                  <RecentChanges
+                    data={data}
+                    onClose={() => setBellOpen(false)}
+                    onOpenAudit={() => {
+                      setBellOpen(false);
+                      navigate('audit');
+                    }}
+                  />
+                )}
+              </div>
+            )}
             <Avatar name={data.user.name} color="#436b5e" size="small" />
           </div>
         </header>
@@ -757,7 +792,7 @@ export function Workspace() {
               data={data}
               conferenceId={conferenceId}
               search={search}
-              onEmail={setReviewId}
+              onEmail={(id) => setReview({ emailId: id })}
               onAdd={() => setEmailOpen(true)}
               outlookConnected={Boolean(outlook?.connected)}
               onSync={syncOutlook}
@@ -794,7 +829,7 @@ export function Workspace() {
               conferenceId={conferenceId}
               search={search}
               run={run}
-              onEmail={setReviewId}
+              onEmail={(id) => setReview({ emailId: id })}
             />
           )}
           {page === 'schedule' && scheduleSection === 'schedule' && (
@@ -803,6 +838,8 @@ export function Workspace() {
               data={data}
               conferenceId={conferenceId}
               search={search}
+              onOpenMeeting={setMeetingId}
+              onNewMeeting={banker ? () => setNewMeeting(true) : undefined}
             />
           )}
           {page === 'allocation' && banker && (
@@ -878,7 +915,7 @@ export function Workspace() {
                     <tbody>
                       {data.auditLogs
                         .filter((a) =>
-                          `${a.action} ${a.entityType}`
+                          `${a.action} ${a.entityType} ${entityLabel(a, data)}`
                             .toLowerCase()
                             .includes(search.toLowerCase()),
                         )
@@ -889,13 +926,16 @@ export function Workspace() {
                             </td>
                             <td>{n.user(a.actorId)}</td>
                             <td>
-                              {a.entityType}
-                              <small>{a.entityId}</small>
+                              {entityLabel(a, data)}
+                              <small>{a.entityType.replace(/([a-z])([A-Z])/g, '$1 $2')}</small>
                             </td>
                             <td>{fmt(a.createdAt, c.timezone)}</td>
                             <td>
+                              {(a.after as { reason?: string } | null)?.reason && (
+                                <p className="audit-reason">“{(a.after as { reason: string }).reason}”</p>
+                              )}
                               <details>
-                                <summary>View history</summary>
+                                <summary>Raw before / after</summary>
                                 <pre className="audit-json">
                                   {JSON.stringify({ before: a.before, after: a.after }, null, 2)}
                                 </pre>
@@ -949,8 +989,9 @@ export function Workspace() {
         <EmailReview
           key={reviewEmail.id}
           email={reviewEmail}
+          proposalId={review?.proposalId}
           data={data}
-          close={() => setReviewId(null)}
+          close={() => setReview(null)}
           run={run}
           onOpenDraft={setDraftId}
         />
@@ -1062,6 +1103,20 @@ export function Workspace() {
           </p>
         </div>
       </Dialog>
+      {drawerMeeting && (
+        <MeetingDrawer key={drawerMeeting.id} meeting={drawerMeeting} data={data} run={run} close={() => setMeetingId(null)} />
+      )}
+      {newMeeting && (
+        <Sheet open onOpenChange={(v) => !v && setNewMeeting(false)} title="New meeting" description={`${c.name} · checked against availability, meetings, bankers and rooms`}>
+          <MeetingForm
+            data={data}
+            run={run}
+            conferenceId={conferenceId}
+            onCancel={() => setNewMeeting(false)}
+            onSaved={() => setNewMeeting(false)}
+          />
+        </Sheet>
+      )}
       {draft && (
         <DraftEditor
           key={draft.id}
@@ -1081,8 +1136,10 @@ export function Workspace() {
           <div className="notice">
             <strong>Demo identities</strong>
             <p>
-              Use the profile selector in the sidebar to switch between two bankers and two
-              salespeople. Sales can access only their own requests and authorized meetings.
+              Use the profile selector in the sidebar to switch between the{' '}
+              {data.users.filter((u) => u.role === 'BANKER').length} demo bankers and{' '}
+              {data.users.filter((u) => u.role === 'SALES').length} salespeople. Sales can access only their own
+              requests and authorized meetings. Sign out to pick another profile.
             </p>
           </div>
           <p>
@@ -1180,19 +1237,19 @@ function DecisionStrip({
       <div className="decide-track" ref={track}>
         {actions.map((a) => {
           const kind = actionKind(a, data);
-          const email = data.emails.find((e) => e.id === a.emailId);
           const when = actionWhen(a, data);
           const issuer = n.issuer(a.issuerId);
           const investor = n.investor(a.investorId);
-          const what = email ? proposalLine(email, zone) : when ? fmt(when, zone, 'EEE, MMM d \u00b7 h:mm a') : null;
+          const what = askLine(a, data, zone) || (when ? fmt(when, zone, 'EEE, MMM d · h:mm a') : null);
+          const pos = askPosition(a, data);
           return (
             <button className={`decide-card kind-${kind.id}`} key={a.id} onClick={() => onClick(a)}>
               <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
-              <strong>{issuer === 'Unassociated' ? a.title : issuer}</strong>
+              <strong>{issuer === 'Unassociated' ? 'Needs triage' : issuer}</strong>
               {issuer !== 'Unassociated' && investor !== '—' && <span className="decide-with">with {investor}</span>}
               <span className="decide-what">{what || a.recommendation}</span>
               <span className="decide-foot">
-                <span>{fmt(actionReceived(a, data), zone, 'MMM d, h:mm a')}</span>
+                <span>{pos || fmt(actionReceived(a, data), zone, 'MMM d, h:mm a')}</span>
                 <ChevronRight size={14} />
               </span>
             </button>
@@ -1208,10 +1265,16 @@ function DecisionStrip({
 const emailTabs = [
   { id: 'review', label: 'Needs review', match: (s: string) => s === 'Pending review' },
   { id: 'waiting', label: 'Waiting on reply', match: (s: string) => s === 'Clarification requested' },
-  { id: 'done', label: 'Done', match: (s: string) => ['Approved', 'Rejected', 'Ignored'].includes(s) },
+  {
+    id: 'done',
+    label: 'Done',
+    match: (s: string) => ['Approved', 'Rejected', 'Ignored', 'Resolved', 'Acknowledged'].includes(s),
+  },
   { id: 'all', label: 'All', match: () => true },
 ] as const;
 const shortCategory: Record<string, string> = {
+  'Escalation / complaint': 'Escalation',
+  'Multiple asks': 'Several asks',
   'Issuer Availability Update': 'Availability',
   'New Meeting Request': 'New request',
   'Meeting Confirmation': 'Confirmation',
@@ -1220,36 +1283,22 @@ const shortCategory: Record<string, string> = {
   'General Conference Inquiry': 'Question',
   'Unrelated Email': 'Unrelated',
 };
-const operationText: Record<string, string> = {
-  add: 'Add',
-  replace: 'Replace availability with',
-  remove: 'Remove',
-  confirm: 'Confirm',
-  reschedule: 'Move to',
-  cancel: 'Cancel',
-  inquiry: 'Answer a question',
-};
-function proposalLine(e: EmailItem, zone: string) {
-  const x = e.proposal?.extraction as
-    | { operation: string; windows: { start: string; kind: string }[]; uncertainties: string[] }
-    | undefined;
-  if (!x) return null;
-  const w = x.windows || [];
-  const when = w.length === 1 ? fmt(w[0].start, zone, 'EEE h:mm a') : w.length ? `${w.length} time windows` : '';
-  const blocked = w.filter((v) => v.kind === 'unavailable');
-  const offered = w.filter((v) => v.kind !== 'unavailable');
-  const notOk = blocked.length
-    ? `Not available ${fmt(blocked[0].start, zone, 'EEE h:mm a')}${blocked.length > 1 ? ` +${blocked.length - 1}` : ''}`
-    : '';
-  if (blocked.length && (x.operation === 'inquiry' || !offered.length))
-    return x.uncertainties?.length ? `${notOk} · 1 thing to check` : notOk;
-  if (blocked.length && offered.length) {
-    const ok = `${operationText[x.operation] || x.operation} ${offered.length === 1 ? fmt(offered[0].start, zone, 'EEE h:mm a') : `${offered.length} windows`}`;
-    return `${notOk} · ${ok}`;
-  }
-  const verb = operationText[x.operation] || x.operation;
-  const base = x.operation === 'inquiry' ? verb : `${verb}${when ? ` ${when}` : ''}`;
-  return x.uncertainties?.length ? `${base} · 1 thing to check` : base;
+/** One line about the ask behind an action (its stored summary, plus a hint when something is open). */
+function askLine(a: Action, data: AppState, zone: string) {
+  const { proposal, extraction } = askOf(a, data);
+  if (!proposal || !extraction) return null;
+  const open = extraction.uncertainties.filter((u) => !u.startsWith('Select and verify')).length;
+  const summary = proposal.summary || summaryFallback(extraction, zone);
+  return open && extraction.category !== 'Escalation / complaint' ? `${summary} · ${open} thing${open === 1 ? '' : 's'} to check` : summary;
+}
+function summaryFallback(x: { windows: { start: string; end: string; kind: string }[] }, zone: string) {
+  return x.windows.length ? x.windows.map((w) => windowLabel(w, zone)).join(', ') : '';
+}
+function emailLine(e: EmailItem) {
+  const open = e.proposals.filter((p) => ['Pending', 'Clarification requested'].includes(p.status));
+  if (!e.proposals.length) return null;
+  if (e.proposals.length === 1) return e.proposals[0].summary;
+  return `${e.proposals.length} asks${open.length < e.proposals.length ? ` (${open.length} open)` : ''} · ${e.proposals.map((p) => p.summary).join(' · ')}`;
 }
 function InboxView({
   data,
@@ -1270,18 +1319,17 @@ function InboxView({
   onSync: () => void;
   onConnect: () => void;
 }) {
-  const [tab, setTab] = useState<(typeof emailTabs)[number]['id']>('review'),
+  const [tab, setTab] = useState<(typeof emailTabs)[number]['id'] | 'triage'>('review'),
     [category, setCategory] = useState<string | null>(null),
     [issuer, setIssuer] = useState('All issuers');
   const n = names(data);
-  const zone = data.conferences.find((c) => c.id === conferenceId)?.timezone || 'America/New_York';
-  const base = data.emails.filter(
-    (e) =>
-      (e.conferenceId === conferenceId || !e.conferenceId) &&
-      (issuer === 'All issuers' || e.issuerId === issuer) &&
-      `${e.subject} ${e.sender} ${e.body}`.toLowerCase().includes(search.toLowerCase()),
-  );
-  const inTab = base.filter((e) => emailTabs.find((t) => t.id === tab)!.match(e.status));
+  const matches = (e: EmailItem) =>
+    (issuer === 'All issuers' || e.issuerId === issuer) &&
+    `${e.subject} ${e.sender} ${e.body}`.toLowerCase().includes(search.toLowerCase());
+  // Emails tied to no event live only in "Needs triage", not in every conference's lists.
+  const base = data.emails.filter((e) => e.conferenceId === conferenceId && matches(e));
+  const triage = data.emails.filter((e) => !e.conferenceId && e.status !== 'Ignored' && matches(e));
+  const inTab = tab === 'triage' ? triage : base.filter((e) => emailTabs.find((t) => t.id === tab)!.match(e.status));
   const filtered = inTab
     .filter((e) => !category || e.category === category)
     .sort((x, y) => y.receivedAt.localeCompare(x.receivedAt));
@@ -1294,8 +1342,8 @@ function InboxView({
         <div>
           <h1>Email reviews</h1>
           <p>
-            {base.filter((e) => e.status === 'Pending review').length} waiting for a decision · open one to see exactly
-            what will change
+            {base.filter((e) => e.status === 'Pending review').length} waiting for a decision
+            {triage.length ? ` · ${triage.length} need an event` : ''} · open one to see exactly what will change
           </p>
         </div>
         <div className="flex gap-2">
@@ -1336,6 +1384,18 @@ function InboxView({
               </button>
             );
           })}
+          <button
+            role="tab"
+            aria-selected={tab === 'triage'}
+            className={`${tab === 'triage' ? 'active' : ''} triage-tab`}
+            onClick={() => {
+              setTab('triage');
+              setCategory(null);
+            }}
+          >
+            Needs triage
+            <span className={`tab-count ${triage.length ? 'hot' : ''}`}>{triage.length}</span>
+          </button>
         </div>
         <div className="filter-row">
           <button className={`chip ${!category ? 'active' : ''}`} onClick={() => setCategory(null)}>
@@ -1363,7 +1423,7 @@ function InboxView({
         {filtered.length ? (
           <div className="inbox-list">
             {filtered.map((e) => {
-              const line = e.status === 'Pending review' ? proposalLine(e, zone) : null;
+              const line = ['Pending review', 'Clarification requested'].includes(e.status) ? emailLine(e) : null;
               return (
                 <button key={e.id} onClick={() => onEmail(e.id)}>
                   <span className={e.status === 'Pending review' ? 'unread-dot' : 'read-dot'} />
@@ -1373,7 +1433,9 @@ function InboxView({
                   />
                   <div className="inbox-main">
                     <div>
-                      <strong>{n.issuer(e.issuerId)}</strong>
+                      <strong>{n.issuer(e.issuerId) === 'Unassociated' ? e.sender : n.issuer(e.issuerId)}</strong>
+                      {e.senderStatus === 'unverified' && <span className="mini-flag red">Sender not verified</span>}
+                      {e.category === 'Escalation / complaint' && <span className="mini-flag amber">Escalation</span>}
                       <span>{fmt(e.receivedAt, undefined, 'MMM d, h:mm a')}</span>
                     </div>
                     <h3>{e.subject}</h3>
@@ -1399,11 +1461,13 @@ function InboxView({
           </div>
         ) : (
           <Empty
-            title={tab === 'review' ? 'Inbox zero' : 'Nothing here'}
+            title={tab === 'review' ? 'Inbox zero' : tab === 'triage' ? 'Nothing to triage' : 'Nothing here'}
             description={
               tab === 'review'
                 ? 'Every conference email has been handled. New ones land here after each sync.'
-                : 'Try another tab or clear the type filter.'
+                : tab === 'triage'
+                  ? 'Emails that name no event and could not be placed land here.'
+                  : 'Try another tab or clear the type filter.'
             }
           />
         )}
@@ -1433,8 +1497,8 @@ function QueueView({
   run: Run;
   onOpenEmails: () => void;
   onOpenDrafts: () => void;
-  focus: 'all' | KindId;
-  setFocus: (f: 'all' | KindId) => void;
+  focus: 'all' | 'triage' | KindId;
+  setFocus: (f: 'all' | 'triage' | KindId) => void;
 }) {
   const [status, setStatus] = useState('Open');
   const [sort, setSort] = useState<SortMode>('soonest');
@@ -1445,35 +1509,104 @@ function QueueView({
     (email) => email.conferenceId === conferenceId && email.status === 'Pending review',
   ).length;
   const draftCount = data.drafts.filter((draft) => draft.status === 'Draft').length;
+  const work = openWork(data, conferenceId);
+  const text = (a: Action) =>
+    `${a.title} ${a.recommendation} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`.toLowerCase().includes(search.toLowerCase());
+  const pool = data.actions.filter(
+    (a) => (status === 'All' || a.status === status) && text(a),
+  );
+  const triage = sortActions(pool.filter((a) => !a.conferenceId), data, sort);
   const actions = sortActions(
-    data.actions.filter(
-      (a) =>
-        (a.conferenceId === conferenceId || !a.conferenceId) &&
-        (status === 'All' || a.status === status) &&
-        (focus === 'all' || actionKind(a, data).id === focus) &&
-        `${a.title} ${a.recommendation} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`
-          .toLowerCase()
-          .includes(search.toLowerCase()),
-    ),
+    pool.filter((a) => a.conferenceId === conferenceId && (focus === 'all' || actionKind(a, data).id === focus)),
     data,
     sort,
   );
-  const openForConference = data.actions.filter(
-    (a) => (a.conferenceId === conferenceId || !a.conferenceId) && a.status === 'Open',
-  );
-  const kindCount = (k: KindId) => openForConference.filter((a) => actionKind(a, data).id === k).length;
+  const kindCount = (k: KindId) => work.conference.filter((a) => actionKind(a, data).id === k).length;
   const primaryLabel = (a: AppState['actions'][number]) => {
+    if (/escalation/i.test(a.type)) return 'Handle escalation';
     if (a.type === 'Resource allocation') return 'Review allocation';
+    if (a.type === 'Availability conflict') return 'Open meeting';
     if (a.requestId || /request|alternative/i.test(a.type)) return 'Review request';
     if (a.emailId) return 'Review update';
     return 'Review';
   };
+  const row = (a: Action) => {
+    const issuer = n.issuer(a.issuerId);
+    const investor = n.investor(a.investorId);
+    const kind = actionKind(a, data);
+    const when = actionWhen(a, data);
+    const summary = askLine(a, data, conference.timezone) || a.recommendation;
+    const pos = askPosition(a, data);
+    const email = askOf(a, data).email;
+    return (
+      <div className={`decision-row kind-${kind.id}`} key={a.id}>
+        <span className="decision-priority-mark" />
+        <div className="decision-main">
+          <div className="decision-kicker">
+            <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
+            {pos && <span className="ask-pos">{pos}</span>}
+            {a.priority === 'Urgent' && <span className="mini-flag red">Urgent</span>}
+            {email?.senderStatus === 'unverified' && <span className="mini-flag red">Sender not verified</span>}
+          </div>
+          <h3>
+            {issuer === 'Unassociated' ? email?.subject || a.title : issuer}
+            {issuer !== 'Unassociated' && investor !== '—' && <><i>with</i>{investor}</>}
+          </h3>
+          <p>{summary}</p>
+          <div className="decision-meta">
+            {when && <span><Clock3 size={12} /> {whenLabel(a, data, conference.timezone) || fmt(when, conference.timezone, 'EEE, h:mm a')}</span>}
+            <span>
+              {n.user(a.assignedTo)}
+              {a.ccUserIds?.length ? ` · cc ${a.ccUserIds.map(n.user).join(', ')}` : ''}
+            </span>
+            <span>Received {fmt(actionReceived(a, data), conference.timezone, 'MMM d, h:mm a')}</span>
+          </div>
+        </div>
+        <div className="decision-primary-action">
+          <Button size="sm" onClick={() => onClick(a)}>
+            {primaryLabel(a)} <ArrowRight size={13} />
+          </Button>
+          <button
+            className="decision-more"
+            aria-label={`More options for ${a.title}`}
+            aria-expanded={expanded === a.id}
+            onClick={() => setExpanded(expanded === a.id ? null : a.id)}
+          >
+            <MoreHorizontal size={17} />
+          </button>
+        </div>
+        {expanded === a.id && (
+          <div className="decision-details">
+            <span>Owner</span>
+            <select
+              aria-label={`Assign ${a.title}`}
+              value={a.assignedTo || ''}
+              onChange={(e) => run('action', { id: a.id, assignedTo: e.target.value || null }, 'Coverage assignment updated')}
+            >
+              <option value="">Unassigned</option>
+              {data.users.filter((u) => u.role === 'BANKER').map((u) => (
+                <option key={u.id} value={u.id}>{u.name}</option>
+              ))}
+            </select>
+            <div />
+            {a.status === 'Open' && !a.emailId && (
+              <>
+                <Button size="sm" variant="ghost" onClick={() => run('action', { id: a.id, status: 'Rejected' }, 'Action rejected')}>Reject</Button>
+                <Button size="sm" variant="outline" onClick={() => run('action', { id: a.id, status: 'Resolved' }, 'Action resolved. No schedule change applied.')}>Mark resolved</Button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+  const showTriage = (focus === 'all' || focus === 'triage') && triage.length > 0;
   return (
     <>
       <div className="page-heading action-queue-heading">
         <div>
           <h1>
-            Action queue <span className="queue-heading-count">{openForConference.length}</span>
+            Action queue <span className="queue-heading-count">{work.total}</span>
           </h1>
         </div>
         <div className="queue-secondary-links">
@@ -1487,28 +1620,32 @@ function QueueView({
       </div>
       <div className="decision-summary">
         <div>
+          <strong>{kindCount('escalation')}</strong>
+          <span>Escalations</span>
+        </div>
+        <div>
           <strong>{kindCount('new')}</strong>
           <span>New requests</span>
         </div>
         <div>
-          <strong>{kindCount('reschedule')}</strong>
-          <span>Reschedules</span>
+          <strong>{kindCount('reschedule') + kindCount('cancel')}</strong>
+          <span>Moves & cancellations</span>
         </div>
         <div>
-          <strong>{kindCount('availability') + kindCount('cancel')}</strong>
-          <span>Availability & cancellations</span>
+          <strong>{work.triage.length}</strong>
+          <span>Needs triage</span>
         </div>
         <p><ShieldCheck size={14} /> No schedule changes without your approval</p>
       </div>
       <div className="panel decision-panel">
         <div className="decision-toolbar">
           <div className="decision-filters" aria-label="Filter action queue">
-            {(['all', ...kindOrder] as const).map((id) => {
-              const count = id === 'all' ? openForConference.length : kindCount(id);
-              if (id === 'other' && !count) return null;
+            {(['all', ...kindOrder, 'triage'] as const).map((id) => {
+              const count = id === 'all' ? work.total : id === 'triage' ? work.triage.length : kindCount(id);
+              if ((id === 'other' || id === 'escalation' || id === 'triage') && !count) return null;
               return (
-                <button key={id} className={focus === id ? 'active' : ''} onClick={() => setFocus(id)}>
-                  {id === 'all' ? 'All' : kindLabel[id]} <span>{count}</span>
+                <button key={id} className={`${focus === id ? 'active' : ''} ${id === 'triage' ? 'triage' : ''}`} onClick={() => setFocus(id)}>
+                  {id === 'all' ? 'All' : id === 'triage' ? 'Needs triage' : kindLabel[id]} <span>{count}</span>
                 </button>
               );
             })}
@@ -1520,72 +1657,17 @@ function QueueView({
             </select>
           </div>
         </div>
-        <div className="decision-list">
-          {actions.map((a) => {
-            const issuer = n.issuer(a.issuerId);
-            const investor = n.investor(a.investorId);
-            const kind = actionKind(a, data);
-            const when = actionWhen(a, data);
-            const email = data.emails.find((x) => x.id === a.emailId);
-            const summary = (email && proposalLine(email, conference.timezone)) || a.recommendation;
-            return (
-              <div className={`decision-row kind-${kind.id}`} key={a.id}>
-                <span className="decision-priority-mark" />
-                <div className="decision-main">
-                  <div className="decision-kicker">
-                    <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
-                  </div>
-                  <h3>
-                    {issuer === 'Unassociated' ? a.title : issuer}
-                    {issuer !== 'Unassociated' && investor !== '—' && <><i>with</i>{investor}</>}
-                  </h3>
-                  <p>{summary}</p>
-                  <div className="decision-meta">
-                    {when && <span><Clock3 size={12} /> {fmt(when, conference.timezone, 'EEE, h:mm a')}</span>}
-                    <span>{n.user(a.assignedTo)}</span>
-                    <span>Received {fmt(actionReceived(a, data), conference.timezone, 'MMM d, h:mm a')}</span>
-                  </div>
-                </div>
-                <div className="decision-primary-action">
-                  <Button size="sm" onClick={() => onClick(a)}>
-                    {primaryLabel(a)} <ArrowRight size={13} />
-                  </Button>
-                  <button
-                    className="decision-more"
-                    aria-label={`More options for ${a.title}`}
-                    aria-expanded={expanded === a.id}
-                    onClick={() => setExpanded(expanded === a.id ? null : a.id)}
-                  >
-                    <MoreHorizontal size={17} />
-                  </button>
-                </div>
-                {expanded === a.id && (
-                  <div className="decision-details">
-                    <span>Owner</span>
-                    <select
-                      aria-label={`Assign ${a.title}`}
-                      value={a.assignedTo || ''}
-                      onChange={(e) => run('action', { id: a.id, assignedTo: e.target.value || null }, 'Coverage assignment updated')}
-                    >
-                      <option value="">Unassigned</option>
-                      {data.users.filter((u) => u.role === 'BANKER').map((u) => (
-                        <option key={u.id} value={u.id}>{u.name}</option>
-                      ))}
-                    </select>
-                    <div />
-                    {a.status === 'Open' && (
-                      <>
-                        <Button size="sm" variant="ghost" onClick={() => run('action', { id: a.id, status: 'Rejected' }, 'Action rejected')}>Reject</Button>
-                        <Button size="sm" variant="outline" onClick={() => run('action', { id: a.id, status: 'Resolved' }, 'Action resolved. No schedule change applied.')}>Mark resolved</Button>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        {!actions.length && (
+        {showTriage && (
+          <div className="triage-lane">
+            <div className="triage-head">
+              <strong>Needs triage</strong>
+              <span>No event could be determined — pick one in the review. Shown here once, not in every conference.</span>
+            </div>
+            <div className="decision-list">{triage.map(row)}</div>
+          </div>
+        )}
+        {focus !== 'triage' && <div className="decision-list">{actions.map(row)}</div>}
+        {!actions.length && !showTriage && (
           <Empty
             title="Nothing waiting on you"
             description="New proposals and investor requests will appear here automatically."
@@ -1593,5 +1675,135 @@ function QueueView({
         )}
       </div>
     </>
+  );
+}
+
+function LoginScreen({
+  profiles,
+  onPick,
+  error,
+}: {
+  profiles: { id: string; name: string; role: string }[];
+  onPick: (id: string) => void;
+  error: string;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const groups = [
+    ['BANKER', 'Bankers'],
+    ['SALES', 'Sales'],
+  ] as const;
+  return (
+    <main className="loading-screen login-screen">
+      <CordaMark />
+      <h1>Corda AI</h1>
+      {profiles.length ? (
+        <>
+          <p>Choose a demo profile to sign in. All data in this demo is synthetic.</p>
+          <div className="profile-picker">
+            {groups.map(([role, label]) => (
+              <section key={role}>
+                <h2>{label}</h2>
+                <div>
+                  {profiles
+                    .filter((p) => p.role === role)
+                    .map((p) => (
+                      <button
+                        key={p.id}
+                        disabled={Boolean(busy)}
+                        onClick={async () => {
+                          setBusy(p.id);
+                          await onPick(p.id);
+                          setBusy(null);
+                        }}
+                      >
+                        <Avatar name={p.name} color="#436b5e" />
+                        <span>
+                          <strong>{p.name}</strong>
+                          <small>{role === 'BANKER' ? 'Investment Banking' : 'Institutional Sales'}</small>
+                        </span>
+                        {busy === p.id ? <Loader2 size={15} className="spin" /> : <ChevronRight size={15} />}
+                      </button>
+                    ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </>
+      ) : (
+        <p>Sign-in is required. Demo profiles are disabled on this server.</p>
+      )}
+      {error && <p className="error">{error}</p>}
+    </main>
+  );
+}
+
+/** Human label for an audited record (never a raw id). */
+function entityLabel(a: AppState['auditLogs'][number], data: AppState) {
+  const n = names(data);
+  const zone = data.conferences[0]?.timezone;
+  const meeting = (id: string) => {
+    const m = data.meetings.find((x) => x.id === id);
+    return m ? `${n.issuer(m.issuerId)} × ${n.investor(m.investorId)} · ${fmt(m.start, zone, 'EEE h:mm a')}` : 'Meeting';
+  };
+  switch (a.entityType) {
+    case 'Meeting':
+      return meeting(a.entityId);
+    case 'Email':
+      return data.emails.find((e) => e.id === a.entityId)?.subject || 'Email';
+    case 'Proposal': {
+      const e = data.emails.find((x) => x.proposals.some((p) => p.id === a.entityId));
+      const p = e?.proposals.find((x) => x.id === a.entityId);
+      return p ? `${p.summary || e!.subject}${e!.proposals.length > 1 ? ` (ask ${p.askIndex + 1} of ${e!.proposals.length})` : ''}` : 'Email ask';
+    }
+    case 'MeetingRequest': {
+      const r = data.requests.find((x) => x.id === a.entityId);
+      return r ? `${n.investor(r.investorId)} → ${n.issuer(r.issuerId)} request` : 'Meeting request';
+    }
+    case 'Availability':
+      return data.issuers.some((i) => i.id === a.entityId) ? `${n.issuer(a.entityId)} availability` : 'Availability window';
+    case 'Draft': {
+      const d = data.drafts.find((x) => x.id === a.entityId);
+      return d ? d.subject : 'Draft';
+    }
+    case 'Action':
+      return data.actions.find((x) => x.id === a.entityId)?.title || 'Queue item';
+    case 'Conference':
+      return n.conference(a.entityId);
+    case 'AllocationRun':
+      return 'Allocation run';
+    case 'AllocationProposal':
+      return 'Allocation proposal';
+    default:
+      return a.entityType;
+  }
+}
+function RecentChanges({ data, onClose, onOpenAudit }: { data: AppState; onClose: () => void; onOpenAudit: () => void }) {
+  const n = names(data);
+  const items = data.auditLogs.slice(0, 10);
+  return (
+    <div className="bell-pop" role="dialog" aria-label="Recent changes">
+      <div className="bell-head">
+        <strong>Recent changes</strong>
+        <button aria-label="Close" onClick={onClose}>
+          <X size={14} />
+        </button>
+      </div>
+      {items.length ? (
+        items.map((a) => (
+          <div key={a.id} className="bell-item">
+            <strong>{a.action}</strong>
+            <span>{entityLabel(a, data)}</span>
+            <small>
+              {n.user(a.actorId)} · {fmt(a.createdAt, undefined, 'MMM d, h:mm a')}
+            </small>
+          </div>
+        ))
+      ) : (
+        <p className="muted">No changes yet.</p>
+      )}
+      <button className="text-button" onClick={onOpenAudit}>
+        Open audit trail <ArrowUpRight size={13} />
+      </button>
+    </div>
   );
 }

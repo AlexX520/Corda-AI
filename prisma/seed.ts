@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
-import { mockExtract, newEmailContent } from '../src/lib/extraction';
+import { mockExtractAsks, newEmailContent } from '../src/lib/extraction';
 import { conferenceTime } from '../src/lib/scheduling';
 const db = new PrismaClient();
 async function main() {
@@ -402,42 +402,49 @@ async function main() {
   ];
   for (const s of samples) {
     if (await db.email.findUnique({ where: { messageId: s.id } })) continue;
-    const e = mockExtract(
+    const { asks } = mockExtractAsks(
       s.body,
       s.subject,
       { conferences, issuers, investors },
       { conferenceId: 'abs-east', issuerId: s.issuerId },
     );
+    const issuer = issuers.find((i) => i.id === s.issuerId)!;
     const mail = await db.email.create({
       data: {
         messageId: s.id,
         threadId: `thread-${s.id}`,
-        sender: issuers.find((i) => i.id === s.issuerId)!.contactEmail,
+        sender: issuer.contactEmail,
         to: ['alex.morgan@conferenceos.demo'],
         cc: [],
         subject: s.subject,
         body: s.body,
         newContent: newEmailContent(s.body),
-        conferenceId: e.conferenceId,
-        issuerId: e.issuerId,
-        investorId: e.investorId,
-        category: e.category,
-        proposal: { create: { extraction: e } },
+        conferenceId: asks[0].conferenceId,
+        issuerId: asks[0].issuerId,
+        investorId: asks.length === 1 ? asks[0].investorId : null,
+        category: asks.length === 1 ? asks[0].category : 'Multiple asks',
+        senderStatus: 'verified',
       },
     });
-    await db.action.create({
-      data: {
-        type: e.category,
-        title: `${issuers.find((i) => i.id === s.issuerId)!.name} · ${s.subject.split('—')[1]?.trim()}`,
-        conferenceId: 'abs-east',
-        issuerId: s.issuerId,
-        investorId: e.investorId,
-        emailId: mail.id,
-        assignedTo: issuers.find((i) => i.id === s.issuerId)!.ownerId,
-        priority: e.uncertainties.length ? 'High' : 'Normal',
-        recommendation: e.uncertainties[0] || 'Review extracted availability and source evidence.',
-      },
-    });
+    for (const [askIndex, e] of asks.entries()) {
+      const proposal = await db.proposal.create({
+        data: { emailId: mail.id, askIndex, summary: e.summary, extraction: e },
+      });
+      await db.action.create({
+        data: {
+          type: e.category,
+          title: `${issuer.name} · ${e.summary}`,
+          conferenceId: 'abs-east',
+          issuerId: s.issuerId,
+          investorId: e.investorId,
+          emailId: mail.id,
+          proposalId: proposal.id,
+          assignedTo: issuer.ownerId,
+          priority: e.uncertainties.length ? 'High' : 'Normal',
+          recommendation: e.uncertainties[0] || 'Review extracted availability and source evidence.',
+        },
+      });
+    }
   }
   await db.auditLog.upsert({
     where: { id: 'seed-audit' },

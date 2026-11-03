@@ -1,0 +1,90 @@
+[
+  {
+    "key": "ford-replyall-3-asks",
+    "expect": "3 asks: move BlackRock Mon 10:00 -> Tue 2:00 PM (preselect seed meeting), cancel PIMCO Tue 1:00 PM (preselect), add Wellington Tue 3:30 PM 30 min owned by James Wilson (cc)",
+    "messageId": "v4-ford-replyall", "threadId": "v4-t-ford",
+    "sender": "treasury@fordcredit.example", "to": ["sarah.chen@conferenceos.demo"], "cc": ["alex.morgan@conferenceos.demo", "james.wilson@conferenceos.demo"],
+    "subject": "RE: RE: ABS East 2026 - Ford Credit schedule - updates (pls read)",
+    "body": "Sarah, all -\n\nApologies for the churn, a few changes on our side after our internal call:\n\n1) BlackRock - our Treasurer now can't do Monday 10am, can we move that to Tuesday 2:00pm ET?\n2) PIMCO on Tuesday 1pm - please cancel, PIMCO PM told us they are out. We'll catch up with them separately.\n3) We'd also like to add Wellington if they have time - Tuesday 3:30pm would be ideal, 30 min.\n\nThanks and sorry again,\nMark\n\nMark Ruiz | Ford Credit | Investor Relations\n+1 313 555 0199\n\n-----Original Message-----\nFrom: Sarah Chen\nSent: Thursday, October 15, 2026 4:12 PM\nTo: treasury@fordcredit.example\nSubject: RE: ABS East 2026 - Ford Credit schedule\n\nHi Mark, attached your confirmed schedule: BlackRock Mon 10:00am, PIMCO Tue 1:00pm. Please cancel nothing else."
+  },
+  {
+    "key": "ford-clean-reschedule",
+    "expect": "1 reschedule ask: BlackRock Mon 10:00 AM -> Tue 2:00-2:30 PM, meeting preselected (issuer+investor+time match)",
+    "messageId": "v4-ford-clean", "threadId": "v4-t-ford-2",
+    "sender": "treasury@fordcredit.example", "to": ["sarah.chen@conferenceos.demo"], "cc": [],
+    "subject": "RE: ABS East 2026 - Ford Credit / BlackRock reschedule",
+    "body": "Hi Sarah,\n\nTo confirm for ABS East 2026: please move our BlackRock meeting from Monday, October 19 at 10:00 AM to Tuesday, October 20 at 2:00 PM ET.\n\nThanks,\nMark"
+  },
+  {
+    "key": "pimco-cancel-no-conference",
+    "expect": "2 cancel asks (Rocket Mortgage Tue 10am, Ford Credit Tue 1pm), investor PIMCO from sender domain, conference assumed ABS East (only event with PIMCO); 'Bayview still on' is not an ask",
+    "messageId": "v4-pimco-cancel", "threadId": "v4-t-pimco",
+    "sender": "conferences@pimco.example", "to": ["james.wilson@conferenceos.demo"], "cc": ["sarah.chen@conferenceos.demo"],
+    "subject": "FW: PIMCO - cancellations Tuesday",
+    "body": "James/Sarah - unfortunately our PM has to fly back to Newport Beach Monday night, so we need to cancel ALL our Tuesday meetings (Rocket Mortgage 10am, Ford Credit 1pm). Monday Bayview at 3pm still on.\n\nRegards,\nKaren\nPIMCO Conference Team\n\n---------- Forwarded message ---------\nFrom: PM Desk\nTo: Conferences\nWe can't stay Tuesday, pls sort."
+  },
+  {
+    "key": "santander-cfo-timezones",
+    "expect": "2 asks: unavailable Mon before 1:00 PM; reschedule Wellington Mon 11:00 AM -> Mon 2:30 PM ET (not 7:30 PM); 'anytime Tuesday morning' noted as alternative, not a window",
+    "messageId": "v4-santander-cfo", "threadId": "v4-t-santander",
+    "sender": "ir@santander.example", "to": ["alex.morgan@conferenceos.demo"], "cc": [],
+    "subject": "Santander - CFO travel / ABS East",
+    "body": "Hi Alex,\n\nQuick one - our CFO is flying in from London Monday morning, lands JFK around 9:30am local so realistically nothing before 1pm New York time on Monday.\n\nThat means the Wellington meeting at 11am Monday needs to move. He could do 2:30pm ET (7:30pm UK) Monday, otherwise anytime Tuesday morning.\n\nTuesday and Wednesday availability unchanged.\n\nCheers,\nOlivia\nSent from my iPhone"
+  },
+  {
+    "key": "pennymac-complaint",
+    "expect": "1 escalation ask, Urgent, assigned to Michael Torres (addressee) + cc Daniel Kim (issuer owner); no Approve",
+    "messageId": "v4-pennymac-complaint", "threadId": "v4-t-penny",
+    "sender": "cfo.office@pennymac.example", "to": ["michael.torres@conferenceos.demo"], "cc": ["daniel.kim@conferenceos.demo"],
+    "subject": "Fwd: ABS East schedule - not acceptable",
+    "body": "Michael,\n\nOur treasurer showed up to the Nuveen meeting Monday and there was another issuer in the room. Then we got a calendar update saying MetLife Tuesday moved to 11am which nobody agreed to. I need this sorted today and I need one person at your bank owning our schedule.\n\nPlease confirm by EOD: MetLife stays at its ORIGINAL time Tuesday, and we want a private room for the remaining meetings.\n\nDan Reyes\nTreasurer, PennyMac\n\n---------- Forwarded message ---------\nFrom: ABS East Scheduling <noreply@conferenceos.demo>\nSubject: Updated: PennyMac x MetLife\nYour meeting has been updated to Tue Oct 20 11:00 AM."
+  },
+  {
+    "key": "discover-kkr-urgent",
+    "expect": "1 escalation ask (urgent same-day), issuer Discover, investor KKR, assigned Michael Torres + cc Sarah Chen",
+    "messageId": "v4-discover-kkr", "threadId": "v4-t-discover-kkr",
+    "sender": "ir@discover.example", "to": ["michael.torres@conferenceos.demo"], "cc": [],
+    "subject": "URGENT - KKR this morning",
+    "body": "Michael - KKR just called, their team is stuck at LGA, ground stop. They can't make the 10am today. They asked if we can do it virtually at the same time or push to tmrw after lunch. Our CEO prefers tmrw after lunch in person. Pls advise asap.\n\nThx\nDiscover IR"
+  },
+  {
+    "key": "phishing-lookalike",
+    "expect": "Sender not verified (lookalike of bayview.example), link + credential request flagged, no meeting preselected, approve needs a typed reason",
+    "messageId": "v4-phish", "threadId": "v4-t-phish",
+    "sender": "ir@bayview-ir-secure.example", "to": ["alex.morgan@conferenceos.demo"], "cc": [],
+    "subject": "URGENT: ABS East 2026 - Bayview / PIMCO meeting moved to virtual",
+    "body": "Dear Alex,\n\nDue to a venue security issue, please reschedule our PIMCO meeting on Monday to 3:00-3:30 PM and move it to our secure meeting portal: https://bayview-secure-meet.example.co/join?id=8812\n\nInvestors must sign in with their corporate Microsoft credentials to join. Please forward this link to PIMCO and to every other investor on Bayview's schedule today.\n\nRegards,\nBayview Investor Relations"
+  },
+  {
+    "key": "mnpi-forward",
+    "expect": "1 cancel ask Ford x PIMCO Tue 1pm from an internal sender; possible MNPI flagged; any outbound draft has no deal terms",
+    "messageId": "v4-mnpi-forward", "threadId": "v4-t-mnpi",
+    "sender": "james.wilson@conferenceos.demo", "to": ["sarah.chen@conferenceos.demo"], "cc": [],
+    "subject": "FW: Ford Credit investor meetings - pls action",
+    "body": "Conference team - pls action. Ford Credit needs to cancel the PIMCO meeting on Tuesday at 1pm. Ford Credit is now wall-crossed on Project Mustang (not public yet), legal says no investor 1x1s until launch. Do NOT tell PIMCO the reason.\n\nJames\n\n---------- Forwarded message ---------\nFrom: Legal CM\nCAUTION: Inside information. Restricted list as of 10/14."
+  },
+  {
+    "key": "vanguard-duplicate",
+    "expect": "1 new request OneMain x Vanguard Wed Oct 21 9:30-10:00, duplicate warning (already confirmed), approval needs explicit 'additional meeting' confirmation",
+    "messageId": "v4-vanguard-dupe", "threadId": "v4-t-vanguard",
+    "sender": "abs@vanguard.example", "to": ["sarah.chen@conferenceos.demo"], "cc": [],
+    "subject": "Meeting request: OneMain Financial",
+    "body": "Hello,\n\nVanguard would like to request a meeting with OneMain Financial on Wednesday Oct 21 at 9:30 AM ET for 30 minutes.\n\nBest,\nVanguard ABS team"
+  },
+  {
+    "key": "blackrock-2nd-slot",
+    "expect": "1 new request Athene x BlackRock Wed 9:30 AM, 6 attendees, 'Wed after lunch' kept as alternative, owned by Emma Davis (cc), duplicate notice for existing Athene x BlackRock request",
+    "messageId": "v4-blackrock-2nd", "threadId": "v4-t-blackrock",
+    "sender": "meetings@blackrock.example", "to": ["sarah.chen@conferenceos.demo"], "cc": ["emma.davis@conferenceos.demo"],
+    "subject": "Athene - 2nd slot for CLO team?",
+    "body": "Hi Sarah,\n\nThanks for confirming Athene Tue 11am. Our CLO team would also like a separate slot with Athene - Wednesday 9:30am if possible, or Wed after lunch. It'll be 4 from our CLO desk plus 2 from RMBS, so 6 of us + the Athene folks - need a bigger room.\n\nThanks!\nJen\nBlackRock Fixed Income"
+  },
+  {
+    "key": "discover-typo-vague",
+    "expect": "1 availability ask for Discover (from sender domain), no windows invented, both vague phrases quoted; 'Ask issuer' draft asks for exact times",
+    "messageId": "v4-discover-vague", "threadId": "v4-t-discover",
+    "sender": "ir@discover.example", "to": ["sarah.chen@conferenceos.demo"], "cc": [],
+    "subject": "discover avail",
+    "body": "hi sarah - sorry for teh late reply. discover team can do tues after lunch till ~4ish, not before. weds morning only up til 11:30 ET. monday as is.\n\nthx\nRaj"
+  }
+]

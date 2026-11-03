@@ -658,17 +658,21 @@ export function PlannerView({
   data,
   conferenceId,
   search,
+  onOpenMeeting,
+  onNewMeeting,
 }: {
   data: AppState;
   conferenceId: string;
   search: string;
+  onOpenMeeting: (id: string) => void;
+  onNewMeeting?: () => void;
 }) {
   const [view, setView] = useState('calendar'),
     [date, setDate] = useState(data.conferences.find((c) => c.id === conferenceId)!.startDate),
     [scope, setScope] = useState('master'),
     [audience, setAudience] = useState(''),
-    [recipient, setRecipient] = useState(''),
-    [selected, setSelected] = useState<string | null>(null);
+    [recipient, setRecipient] = useState('');
+  const setSelected = (id: string | null) => id && onOpenMeeting(id);
   const c = data.conferences.find((c) => c.id === conferenceId)!,
     n = names(data);
   const meetings = data.meetings.filter(
@@ -684,7 +688,6 @@ export function PlannerView({
         (scope === 'banker' && data.coverageAssignments.some((a) => a.meetingId === m.id && a.bankerId === audience)) ||
         (scope === 'cube' && data.cubeAssignments.some((a) => a.meetingId === m.id && a.cubeId === audience))),
   );
-  const active = meetings.find((m) => m.id === selected);
   const days = eachDayOfInterval({ start: parseISO(c.startDate), end: parseISO(c.endDate) });
   const exportUrl = `/api/export?conferenceId=${conferenceId}&scope=${scope}${audience ? `&id=${audience}` : ''}${recipient ? `&recipient=${encodeURIComponent(recipient)}` : ''}`;
   return (
@@ -697,6 +700,12 @@ export function PlannerView({
           </p>
         </div>
         <div className="resource-actions">
+          {onNewMeeting && (
+            <Button variant="outline" onClick={onNewMeeting}>
+              <Plus size={16} />
+              New meeting
+            </Button>
+          )}
           <Button variant="outline" asChild><a href={`${exportUrl}&format=pdf`}><Download size={16} />Export PDF</a></Button>
           <Button asChild><a href={exportUrl}><Download size={16} />Export Excel</a></Button>
         </div>
@@ -917,37 +926,6 @@ export function PlannerView({
           <span>Updates after every approved change</span>
         </div>
       </div>
-      {active && (
-        <Dialog
-          open
-          onOpenChange={(v) => !v && setSelected(null)}
-          title={`${n.issuer(active.issuerId)} × ${n.investor(active.investorId)}`}
-          description={`Meeting ${active.id}`}
-        >
-          <div className="form-grid">
-            <Badge>{active.status}</Badge>
-            <p>
-              {fmt(active.start, c.timezone)} – {fmt(active.end, c.timezone, 'h:mm a')}
-            </p>
-            <p>
-              {c.timezone} · {active.location || 'Location to be confirmed'}
-            </p>
-            <p>Bankers: {active.bankerIds.map(n.user).join(', ')}</p>
-            <div className="notice">
-              Approved recipients:{' '}
-              {active.approvedRecipients.join(', ') || 'Pending recipient review in Communications'}
-            </div>
-            <Button variant="outline" asChild>
-              <a
-                href={`/api/export?conferenceId=${conferenceId}&scope=meeting&id=${active.id}&format=ics`}
-              >
-                <Download size={15} />
-                Download calendar event
-              </a>
-            </Button>
-          </div>
-        </Dialog>
-      )}
     </>
   );
 }
