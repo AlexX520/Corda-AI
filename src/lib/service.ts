@@ -586,6 +586,11 @@ async function analyseEmail(p: IngestInput) {
 }
 
 /** One proposal and one queue action per ask. */
+function escalationFrom(a: Analysis) {
+  if (a.trust.investorId) return a.investorNames?.[a.trust.investorId] || null;
+  if (a.trust.issuerId) return a.issuers.find((i) => i.id === a.trust.issuerId)?.name || null;
+  return null;
+}
 async function writeAsks(tx: Tx, user: User, emailId: string, a: Analysis) {
   if (a.protectMeetingId) {
     const reason = a.escalationReasons.find((r) => /threat/i.test(r)) || 'Investor asked that it not move again';
@@ -604,7 +609,10 @@ async function writeAsks(tx: Tx, user: User, emailId: string, a: Analysis) {
     await tx.action.create({
       data: {
         type: e.category,
-        title: `${issuer?.name || 'Needs triage'} · ${e.summary}`,
+        // An escalation is titled with the company that complained (the sender), not the issuer named.
+        title: escalation
+          ? `${escalationFrom(a) || issuer?.name || 'Client'} escalation · ${e.summary}`
+          : `${issuer?.name || 'Needs triage'} · ${e.summary}`,
         conferenceId: e.conferenceId,
         issuerId: e.issuerId,
         investorId: e.investorId,

@@ -230,6 +230,7 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
     contextNote,
     content,
     issuers,
+    investorNames: Object.fromEntries(investors.map((i) => [i.id, i.name])) as Record<string, string>,
     addressed,
     parser: result.parser,
     suspicious,

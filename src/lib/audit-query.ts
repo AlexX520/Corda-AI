@@ -48,17 +48,24 @@ async function where(p: AuditQuery): Promise<Prisma.AuditLogWhereInput> {
   if (p.action) and.push({ action: p.action });
   if (p.issuer) {
     // Older rows only have the meeting; match those through the meeting's issuer too.
-    const meetings = await db.meeting.findMany({ where: { issuerId: p.issuer }, select: { id: true } });
-    and.push({ OR: [{ issuerId: p.issuer }, { meetingId: { in: meetings.map((m) => m.id) } }, { entityId: p.issuer }] });
+    // Includes rejections, phishing reports and escalation acks via the issuer's emails.
+    const [meetings, emails] = await Promise.all([
+      db.meeting.findMany({ where: { issuerId: p.issuer }, select: { id: true } }),
+      db.email.findMany({ where: { issuerId: p.issuer }, select: { id: true } }),
+    ]);
+    and.push({ OR: [{ issuerId: p.issuer }, { meetingId: { in: meetings.map((m) => m.id) } }, { entityId: p.issuer }, { emailId: { in: emails.map((e) => e.id) } }] });
   }
   if (p.meeting) {
-    const m = await db.meeting.findUnique({ where: { id: p.meeting }, select: { requestId: true, sourceEmailId: true } });
+    // Only this meeting: its own events, its request, and email asks that were about it (not
+    // every other ask of the same email).
+    const m = await db.meeting.findUnique({ where: { id: p.meeting }, select: { requestId: true } });
+    const asks = await db.proposal.findMany({ where: { extraction: { path: ['meetingId'], equals: p.meeting } }, select: { id: true } });
     and.push({
       OR: [
         { meetingId: p.meeting },
         { entityId: p.meeting },
         ...(m?.requestId ? [{ entityId: m.requestId }] : []),
-        ...(m?.sourceEmailId ? [{ emailId: m.sourceEmailId, entityType: 'Proposal' }] : []),
+        ...(asks.length ? [{ entityId: { in: asks.map((a) => a.id) } }] : []),
       ],
     });
   }

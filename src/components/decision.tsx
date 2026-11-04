@@ -163,6 +163,10 @@ export function EmailDecision({
       (x.receivedAt > email.receivedAt || (x.receivedAt === email.receivedAt && x.id > email.id)),
   );
   const softOutside = (check?.soft || []).some((x) => x.startsWith('Outside'));
+  // Requester → counterpart, decided from the (original) sender so it never flips while loading.
+  const senderDomain = (email.originalSender || email.sender).split('@')[1]?.toLowerCase() || '';
+  const issuerContact = (data.issuers.find((i) => i.id === e.issuerId) as { contactEmail?: string } | undefined)?.contactEmail;
+  const issuerRequested = Boolean(issuerContact && issuerContact.split('@')[1]?.toLowerCase() === senderDomain) || Boolean(check?.issuerAsked);
   // Who asked: an issuer moving its own meeting phrases it as asking the investor, and vice versa.
   const asker = email.originalSenderName || (check?.issuerAsked ? issuer : check?.investorAsked ? investor : email.sender);
   const headline = escalation
@@ -176,7 +180,7 @@ export function EmailDecision({
           : op === 'confirm'
             ? `${issuer} confirmed the ${investor || 'investor'} meeting`
             : e.category === 'New Meeting Request'
-              ? check?.issuerAsked
+              ? issuerRequested
                 ? `${issuer} asked to meet ${investor || 'an investor'}`
                 : `${investor || 'An investor'} asked to meet ${issuer}`
               : ['add', 'remove', 'replace'].includes(op)
@@ -326,7 +330,7 @@ export function EmailDecision({
           <p>
             {proposal.status === 'Acknowledged'
               ? `Acknowledged. ${n.user(action?.assignedTo || null)} owns the follow-up${action?.status === 'Resolved' ? ' (resolved).' : '.'}`
-              : `Already handled: ${proposal.status.toLowerCase()}${proposal.reviewNote ? ` — ${proposal.reviewNote.split('\n')[0]}` : ''}.`}
+              : `Already handled: ${proposal.status.toLowerCase()}${proposal.reviewNote?.split('\n').find((l) => l.trim()) ? ` — ${proposal.reviewNote.split('\n').find((l) => l.trim())}` : ''}${proposal.reviewerId ? ` (by ${n.user(proposal.reviewerId)})` : ''}.`}
           </p>
           {proposal.status === 'Acknowledged' && action && action.status !== 'Resolved' && (
             <div className="dc-actions">

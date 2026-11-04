@@ -22,6 +22,8 @@ export function operationFor(
       return 'confirm';
     case 'Escalation / complaint':
       return 'escalate';
+    case 'Meeting Update':
+      return 'update';
     case 'Issuer Availability Update':
       return ['add', 'replace', 'remove'].includes(current) ? current : 'add';
     default:
@@ -34,6 +36,7 @@ const categoryLabel: Record<string, string> = {
   'Meeting Confirmation': 'Meeting confirmation',
   'Reschedule Request': 'Reschedule',
   'Meeting Cancellation': 'Cancellation',
+  'Meeting Update': 'Headcount / room update',
   'Escalation / complaint': 'Escalation / complaint',
   'General Conference Inquiry': 'Question (no schedule change)',
   'Unrelated Email': 'Not about the conference',
@@ -198,7 +201,8 @@ export function ExtractionForm({
           </select>
         </label>
         {(value.category === 'New Meeting Request' ||
-          value.category === 'Meeting Confirmation') && (
+          value.category === 'Meeting Confirmation' ||
+          value.category === 'Meeting Update') && (
           <label>
             <span>Attendees (investor side)</span>
             <input
@@ -293,13 +297,16 @@ export function ExtractionForm({
           className="text-button xf-add"
           disabled={!conference}
           onClick={() => {
-            const date = days[0];
+            // Default to the next half hour still to come (never a past slot).
+            const nowMs = Date.now();
+            const date = days.find((d) => +conferenceTime(d, '18:00', zone) > nowMs) || days[days.length - 1];
+            const next = new Date(Math.max(+conferenceTime(date, '09:00', zone), Math.ceil(nowMs / 1800000) * 1800000));
             set({
               windows: [
                 ...value.windows,
                 {
-                  start: conferenceTime(date, '09:00', zone).toISOString(),
-                  end: conferenceTime(date, '09:30', zone).toISOString(),
+                  start: next.toISOString(),
+                  end: new Date(+next + 30 * 60000).toISOString(),
                   kind: 'availability',
                   evidence: 'Entered by reviewer',
                   source: 'manual',

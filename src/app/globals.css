@@ -3762,3 +3762,5 @@ tr.past td { opacity: 0.5; }
 .loose-sentences { display: grid; gap: 6px; padding: 10px 12px; margin-bottom: 10px; border-radius: 10px; background: #fffaf0; border: 1px solid #f0d78c; font-size: 13px; }
 .loose-sentences > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 10px; align-items: center; }
 .loose-sentences .question span { font-weight: 600; }
+/* Checkboxes inside issue boxes keep their size (the text input rule made them full width). */
+.dc-issue input[type='checkbox'], .dc-pick input[type='checkbox'], .avail-diff input[type='checkbox'] { width: auto; padding: 0; }

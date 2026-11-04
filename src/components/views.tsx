@@ -918,7 +918,11 @@ export function PlannerView({
                 </thead>
                 <tbody>
                   {meetings.map((m) => {
-                    const coverage = data.coverageAssignments.filter((a) => a.meetingId === m.id);
+                    const assigned = data.coverageAssignments.filter((a) => a.meetingId === m.id);
+                    // Same source as the meeting drawer: coverage assignments, else the meeting's bankers.
+                    const coverage = assigned.length
+                      ? assigned
+                      : m.bankerIds.map((bankerId, i) => ({ meetingId: m.id, bankerId, coverageRole: i === 0 ? 'Primary' : 'Support' }));
                     const room = data.cubeAssignments.find((a) => a.meetingId === m.id);
                     const cube = data.meetingCubes.find((x) => x.id === room?.cubeId);
                     const requirement = data.coverageRequirements.find((r) => r.meetingId === m.id);

@@ -1502,7 +1502,9 @@ function QueueView({
   const firstAt = new Map<string, number>();
   actions.forEach((a, i) => !firstAt.has(groupKey(a)) && firstAt.set(groupKey(a), i));
   actions.sort((x, y) => firstAt.get(groupKey(x))! - firstAt.get(groupKey(y))!);
-  const kindCount = (k: KindId) => work.conference.filter((a) => actionKind(a, data).id === k).length;
+  // Escalations count wherever they sit (including Needs triage).
+  const kindCount = (k: KindId) =>
+    (k === 'escalation' ? [...work.conference, ...work.triage] : work.conference).filter((a) => actionKind(a, data).id === k).length;
   const showTriageLane = (focus === 'all' || focus === 'triage') && triage.length > 0;
   const visible = [...(showTriageLane ? triage : []), ...(focus !== 'triage' ? actions : [])];
   /** Clean = safe to approve in bulk: verified sender, no escalation, no open question, not conditional. */

@@ -304,8 +304,12 @@ export function MeetingForm({
     : meeting?.bankerIds || [];
   const [issuerId, setIssuerId] = useState(meeting?.issuerId || '');
   const [investorId, setInvestorId] = useState(meeting?.investorId || '');
-  const [date, setDate] = useState(meeting ? fmt(meeting.start, zone, 'yyyy-MM-dd') : days[0]);
-  const [time, setTime] = useState(meeting ? fmt(meeting.start, zone, 'HH:mm') : '09:00');
+  // A new meeting defaults to the next half hour still to come.
+  const nextSlot = new Date(Math.ceil(+new Date(data.now) / 1800000) * 1800000);
+  const defaultDay = days.find((d) => d >= fmt(nextSlot.toISOString(), zone, 'yyyy-MM-dd')) || days[0];
+  const defaultTime = defaultDay === fmt(nextSlot.toISOString(), zone, 'yyyy-MM-dd') && fmt(nextSlot.toISOString(), zone, 'HH:mm') > '09:00' ? fmt(nextSlot.toISOString(), zone, 'HH:mm') : '09:00';
+  const [date, setDate] = useState(meeting ? fmt(meeting.start, zone, 'yyyy-MM-dd') : defaultDay);
+  const [time, setTime] = useState(meeting ? fmt(meeting.start, zone, 'HH:mm') : defaultTime);
   const [duration, setDuration] = useState(
     meeting ? Math.round((+new Date(meeting.end) - +new Date(meeting.start)) / 60000) : 30,
   );
