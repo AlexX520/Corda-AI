@@ -103,9 +103,11 @@ export function EmailReview({
         body: JSON.stringify({
           type: 'review',
           data: {
-            id: p.id, decision: 'approve', extraction: e, note: 'Approved with all asks of this email; both sides agreed.',
+            id: p.id, decision: 'approve', extraction: e, note: `Approved with all asks of this email; both sides agreed.${e.meetingId ? ' Verified affected meeting.' : ''}`,
             consent: true, confirmNow: e.category === 'New Meeting Request', consentParties: ['issuer', 'investor'],
-            meetingId: e.meetingId || undefined, requestId: e.category === 'New Meeting Request' ? openReq?.id : undefined, uncertaintyResolved: false,
+            meetingId: e.meetingId || undefined, requestId: e.category === 'New Meeting Request' ? openReq?.id : undefined,
+            // Only "verify the meeting" is resolved by this summary; real open questions still block.
+            uncertaintyResolved: e.uncertainties.every((u) => u.startsWith('Select and verify')),
           },
         }),
       });

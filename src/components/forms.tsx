@@ -213,11 +213,13 @@ export function EmailForm({
   close,
   run,
   reload,
+  onAnalyzed,
 }: {
   open: boolean;
   close: () => void;
   run: Run;
   reload: () => Promise<void>;
+  onAnalyzed?: (emailId: string) => void;
 }) {
   const [subject, setSubject] = useState('ABS East 2026 — Bayview availability'),
     [sender, setSender] = useState('ir@bayview.example'),
@@ -273,6 +275,7 @@ export function EmailForm({
         onSubmit={async (e) => {
           e.preventDefault();
           setBusy(true);
+          let created: string | null = null;
           try {
             if (
               await run(
@@ -292,10 +295,15 @@ export function EmailForm({
                   subject,
                   body,
                 },
-                'Email analyzed. Proposed changes are ready for review.',
+                (r: unknown) => {
+                  created = (r as { id?: string } | null)?.id || null;
+                  return 'Email analyzed. Proposed changes are ready for review.';
+                },
               )
-            )
+            ) {
               close();
+              if (created && onAnalyzed) onAnalyzed(created);
+            }
           } finally {
             setBusy(false);
           }

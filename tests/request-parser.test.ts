@@ -47,3 +47,8 @@ test('durations are read in all the usual forms (round 2, J)', () => {
   for (const [text, minutes] of cases) assert.equal(parseRequestText(text, ctx).duration, minutes, text);
   assert.equal(parseDuration('12 pm'), null);
 });
+
+test('"tomorrow" resolves against the event-local today (round 3)', () => {
+  const p = parseRequestText('Ford Credit / T. Rowe Price tomorrow', { ...ctx, today: '2026-10-19' });
+  assert.equal(p.date, '2026-10-20');
+});

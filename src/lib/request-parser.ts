@@ -78,6 +78,8 @@ export function parseRequestText(
   text: string,
   ctx: {
     conference: { startDate: string; endDate: string; slotMinutes: number };
+    /** Event-local today (yyyy-MM-dd), for "today" / "tomorrow". */
+    today?: string;
     issuers: Named[];
     investors: Named[];
   },
@@ -136,6 +138,12 @@ export function parseRequestText(
         (d) =>
           format(parseISO(d), 'MMM').toLowerCase() === named[1] && Number(d.slice(8)) === +named[2],
       ) || null;
+  if (!date && ctx.today && /\b(today|this afternoon)\b/.test(lower)) date = days.find((d) => d === ctx.today) || null;
+  if (!date && ctx.today && /\b(tomorrow|tmrw|tmw)\b/.test(lower)) {
+    const t = new Date(`${ctx.today}T12:00:00Z`);
+    t.setUTCDate(t.getUTCDate() + 1);
+    date = days.find((d) => d === t.toISOString().slice(0, 10)) || null;
+  }
   if (!date && /\b(day one|day 1|first day)\b/.test(lower)) date = days[0];
   if (!date && days.length === 1) date = days[0];
 

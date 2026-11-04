@@ -949,7 +949,7 @@ export function Workspace() {
           Saving changes
         </div>
       )}
-      {emailOpen && <EmailForm open close={() => setEmailOpen(false)} run={run} reload={reload} />}
+      {emailOpen && <EmailForm open close={() => setEmailOpen(false)} run={run} reload={reload} onAnalyzed={(id) => setReview({ emailId: id })} />}
       {requestOpen && (
         <RequestForm
           data={data}

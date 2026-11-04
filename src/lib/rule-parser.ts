@@ -589,7 +589,8 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
       uncertainties.push(r.error);
       return null;
     }
-    if (r.note) uncertainties.push(r.note);
+    // "tomorrow" resolved from the arrival time is shown in the summary, not raised as a question.
+    void r.note;
     return r.date!;
   };
   const sentenceText = (t: TimeTok) => {

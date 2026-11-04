@@ -258,7 +258,7 @@ export function availabilityMode(text: string): 'narrow' | 'extend' {
 export function unhandledSentences(content: string, evidence: string[]) {
   const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9:]+/g, ' ').trim();
   const covered = evidence.map(norm).filter((x) => x.length > 6);
-  const SKIP = /^(hi|hello|hey|dear|thanks|thank you|thx|best|regards|cheers|sorry|apologies|sent from|fyi|all)\b|^[A-Z][a-z]+ ?[A-Z]?[a-z]*$|\|/i;
+  const SKIP = /^(hi|hello|hey|dear|thanks|thank you|thx|best|regards|cheers|sorry|apologies|sent from|fyi|all)\b|^(?:please |pls )?(?:lock|book|pencil) (?:that|it|this) in\b|^[A-Z][a-z]+ ?[A-Z]?[a-z]*$|\|/i;
   const sentences = content
     .split(/\n+/)
     .filter((l) => !l.trim().startsWith('>') && !/^(on .* wrote:|-----|from:|sent:|to:|subject:)/i.test(l.trim()))

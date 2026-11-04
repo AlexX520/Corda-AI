@@ -75,6 +75,7 @@ async function audit(
       action,
       entityType,
       entityId,
+      createdAt: now(),
       issuerId: pick('issuerId'),
       meetingId: entityType === 'Meeting' ? entityId : pick('meetingId'),
       emailId: entityType === 'Email' ? entityId : pick('emailId') || pick('sourceEmailId'),
@@ -92,7 +93,7 @@ async function audit(
 async function markMeetingChanged(tx: Tx, user: User, meetingId: string, summary: string) {
   const m = await tx.meeting.update({
     where: { id: meetingId },
-    data: { version: { increment: 1 }, changedAt: new Date(), changedBy: user.id, changeSummary: summary },
+    data: { version: { increment: 1 }, changedAt: now(), changedBy: user.id, changeSummary: summary },
   });
   const [issuer, investor, request, coverage] = await Promise.all([
     tx.issuer.findUnique({ where: { id: m.issuerId } }),
@@ -340,7 +341,18 @@ async function buildReply(tx: Tx | typeof db, user: User, emailId: string) {
     if (p.status === 'Approved') {
       if (e.operation === 'reschedule' && target) done.push(`We've moved the ${other} meeting to ${formatInTimeZone(target.start, zone, 'EEEE h:mm a')}.`);
       else if (e.operation === 'cancel') done.push(`We've cancelled the ${other} meeting.`);
-      else if (e.category === 'New Meeting Request') done.push(`We've passed the ${other} request on and will confirm the time shortly.`);
+      else if (e.category === 'New Meeting Request') {
+        // Confirmed from this email (or its open request): say so, with time and room.
+        const confirmed = await tx.meeting.findFirst({
+          where: { issuerId: e.issuerId || undefined, investorId: e.investorId || undefined, status: 'Confirmed', OR: [{ sourceEmailId: email.id }, ...(target ? [{ start: new Date(target.start) }] : [])] },
+        });
+        if (confirmed) {
+          const room = await tx.meetingCubeAssignment.findUnique({ where: { meetingId: confirmed.id } });
+          const cube = room ? await tx.meetingCube.findUnique({ where: { id: room.cubeId } }) : null;
+          const where = cube ? `${cube.name} · ${cube.location}` : confirmed.location || 'room to follow';
+          done.push(`Confirmed: ${other}, ${formatInTimeZone(confirmed.start, zone, 'EEEE MMM d, h:mm')}–${formatInTimeZone(confirmed.end, zone, 'h:mm a zzz')} (${where}).`);
+        } else done.push(`We've passed the ${other} request on and will confirm the time shortly.`);
+      }
       else if (e.category === 'Issuer Availability Update') done.push(`We've updated your availability.`);
       else if (e.operation === 'update') done.push(`We've noted ${e.attendees} attendees for the ${other} meeting.`);
       continue;
@@ -449,6 +461,23 @@ async function confirmRequest(
   const { windows, busy } = await resources(tx, r.conferenceId, r.issuerId, r.investorId);
   if (!isAvailable(r, windows, busy))
     throw new Error('This slot is no longer available. Review the alternatives.');
+  // Staff it without double-booking anyone: the issuer's banker if free, else the approver, else
+  // nobody (allocation picks it up). Same for the room: the smallest free cube that fits.
+  const clash = await tx.meeting.findMany({ where: { conferenceId: r.conferenceId, status: 'Confirmed', start: { lt: r.end }, end: { gt: r.start } } });
+  const clashIds = clash.map((x) => x.id);
+  const busyBankers = new Set([
+    ...clash.flatMap((x) => x.bankerIds),
+    ...(await tx.meetingCoverageAssignment.findMany({ where: { meetingId: { in: clashIds } } })).map((x) => x.bankerId),
+  ]);
+  const issuerRow = await tx.issuer.findUnique({ where: { id: r.issuerId } });
+  const banker = [issuerRow?.ownerId, isDesk(user.role) ? user.id : null].find((b): b is string => Boolean(b) && !busyBankers.has(b!));
+  const takenCubes = new Set((await tx.meetingCubeAssignment.findMany({ where: { meetingId: { in: clashIds } } })).map((x) => x.cubeId));
+  const people = r.attendees || 4;
+  const cube = location
+    ? null
+    : (await tx.meetingCube.findMany({ where: { conferenceId: r.conferenceId, status: 'Active' }, orderBy: { capacity: 'asc' } })).find(
+        (c) => c.capacity >= people && !takenCubes.has(c.id),
+      );
   const m = await tx.meeting.create({
     data: {
       requestId: r.id,
@@ -458,14 +487,16 @@ async function confirmRequest(
       start: r.start,
       end: r.end,
       status: 'Confirmed',
-      location,
-      bankerIds: [user.id],
+      location: cube ? `${cube.name} · ${cube.location}` : location,
+      bankerIds: banker ? [banker] : [],
       approvedRecipients: [],
       approvedBy: user.id,
       sourceEmailId: sourceEmailId || r.sourceEmailId,
       ...(r.attendees ? { expectedAttendees: r.attendees } : {}),
     },
   });
+  if (banker) await tx.meetingCoverageAssignment.create({ data: { meetingId: m.id, bankerId: banker, coverageRole: 'Primary', assignmentStatus: 'Approved', assignedBy: user.id } });
+  if (cube) await tx.meetingCubeAssignment.create({ data: { meetingId: m.id, cubeId: cube.id, assignmentStatus: 'Approved', assignedBy: user.id } });
   await tx.meetingRequest.update({ where: { id }, data: { status: 'Confirmed' } });
   await tx.action.updateMany({
     where: { requestId: id, status: 'Open' },
@@ -676,7 +707,7 @@ async function ingestEmail(user: User, input: unknown) {
         source: p.source,
         graphId: p.graphId,
         ...emailFields(a),
-        ...(p.receivedAt ? { receivedAt: new Date(p.receivedAt) } : {}),
+        receivedAt: p.receivedAt ? new Date(p.receivedAt) : now(),
       },
     });
     await writeAsks(tx, user, mail.id, a);
@@ -1206,7 +1237,7 @@ export async function command(user: User, type: string, input: unknown): Promise
       const after = await tx.issuer.update({
         where: { id: p.issuerId },
         data: p.hold
-          ? { holdChanges: true, holdReason: p.reason.trim(), holdSetBy: user.id, holdSetAt: new Date() }
+          ? { holdChanges: true, holdReason: p.reason.trim(), holdSetBy: user.id, holdSetAt: now() }
           : { holdChanges: false, holdReason: '', holdSetBy: null, holdSetAt: null },
       });
       if (before.ownerId && before.ownerId !== user.id)
@@ -1223,7 +1254,7 @@ export async function command(user: User, type: string, input: unknown): Promise
     });
   }
   if (type === 'notificationsRead') {
-    await db.notification.updateMany({ where: { userId: user.id, readAt: null }, data: { readAt: new Date() } });
+    await db.notification.updateMany({ where: { userId: user.id, readAt: null }, data: { readAt: now() } });
     return { ok: true };
   }
   if (type === 'request') {
@@ -1428,7 +1459,7 @@ export async function command(user: User, type: string, input: unknown): Promise
       const actionScope = { OR: [{ proposalId: p.id }, { emailId: email.id, proposalId: null }] };
       if (p.decision === 'refresh') {
         // The reviewer has looked at what changed on the meeting since the email arrived.
-        await tx.proposal.update({ where: { id: p.id }, data: { refreshedAt: new Date(), extraction: json(e) } });
+        await tx.proposal.update({ where: { id: p.id }, data: { refreshedAt: now(), extraction: json(e) } });
         await audit(tx, user, 'Ask re-checked after a meeting change', 'Proposal', p.id, undefined, { emailId: email.id, note: p.note });
         return { ok: true };
       }
@@ -1436,7 +1467,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         // Done outside the email flow (e.g. a manual move); recorded, not rejected.
         await tx.proposal.update({
           where: { id: p.id },
-          data: { status: 'Resolved', reviewedAt: new Date(), reviewerId: user.id, reviewNote: `Handled manually${p.note ? `: ${p.note}` : ''}` },
+          data: { status: 'Resolved', reviewedAt: now(), reviewerId: user.id, reviewNote: `Handled manually${p.note ? `: ${p.note}` : ''}` },
         });
         await tx.action.updateMany({ where: actionScope, data: { status: 'Resolved', recommendation: 'Handled manually' } });
         const statuses = (await tx.proposal.findMany({ where: { emailId: email.id } })).map((x) => x.status);
@@ -1818,7 +1849,7 @@ export async function command(user: User, type: string, input: unknown): Promise
             if (!op2 || op2.status !== 'Pending' || x?.meetingId !== m.id || +op2.email.receivedAt > +email.receivedAt) continue;
             const why = `Superseded by “${email.subject}” (${e.operation === 'cancel' ? 'cancelled' : 'moved'}, approved by ${user.name})`;
             await tx.action.update({ where: { id: oa.id }, data: { status: 'Resolved', recommendation: why } });
-            await tx.proposal.update({ where: { id: op2.id }, data: { status: 'Resolved', reviewNote: why, reviewedAt: new Date() } });
+            await tx.proposal.update({ where: { id: op2.id }, data: { status: 'Resolved', reviewNote: why, reviewedAt: now() } });
           }
           outcome = {
             kind: e.operation === 'cancel' ? 'cancelled' : 'moved',
@@ -1870,7 +1901,7 @@ export async function command(user: User, type: string, input: unknown): Promise
           summary: e.summary,
           reviewerId: user.id,
           reviewNote: p.note,
-          reviewedAt: new Date(),
+          reviewedAt: now(),
           editedOnReview: extractionEdited(proposal.extraction, e),
         },
       });
@@ -2065,7 +2096,7 @@ export async function command(user: User, type: string, input: unknown): Promise
             ? {
                 status: delivery.mode === 'outlook' ? 'Sent' : 'Simulated sent',
                 approvedBy: user.id,
-                simulatedSentAt: new Date(),
+                simulatedSentAt: now(),
                 deliveryMode: delivery.mode,
                 deliveryReceipt: delivery.receipt,
               }
@@ -2235,7 +2266,7 @@ export async function command(user: User, type: string, input: unknown): Promise
   if (type === 'ping') return { ok: true }; // lets the client refresh after a batch of direct calls
   if (type === 'markSeen') {
     // "What changed since my last visit" starts again from now.
-    await db.user.update({ where: { id: user.id }, data: { lastSeenAt: new Date() } });
+    await db.user.update({ where: { id: user.id }, data: { lastSeenAt: now() } });
     return { ok: true };
   }
   if (type === 'bulkApprove') {
@@ -2284,7 +2315,7 @@ export async function command(user: User, type: string, input: unknown): Promise
     const p = z.object({ text: z.string().min(3).max(500), conferenceId: z.string() }).parse(input);
     const c = await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } });
     const [issuers, investors] = await Promise.all([db.issuer.findMany(), db.investor.findMany()]);
-    const parsed = parseRequestText(p.text, { conference: c, issuers, investors });
+    const parsed = parseRequestText(p.text, { conference: c, issuers, investors, today: formatInTimeZone(now(), c.timezone, 'yyyy-MM-dd') });
     const names = namesFrom(issuers, investors);
     // One option per issuer on the wish list. No time given: search the whole day (or event).
     const options = [];

@@ -128,7 +128,7 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
       senderInvestorId: ok ? who.investorId : null,
       partyIssuerId: ok ? partyIssuerId : null,
       partyInvestorId: ok ? partyInvestorId : null,
-      receivedAt: p.receivedAt || new Date().toISOString(),
+      receivedAt: p.receivedAt || (deps.now || new Date()).toISOString(),
     });
     return { ...extracted, defaultConferenceId, contextNote };
   };

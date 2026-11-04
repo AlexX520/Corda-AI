@@ -549,7 +549,7 @@ export async function handleResourceCommand(user: User, type: string, input: unk
       const approved = validMeetingIds.length;
       await tx.allocationRun.update({
         where: { id: run.id },
-        data: { runStatus: 'Approved', approvedBy: user.id, approvedAt: new Date() },
+        data: { runStatus: 'Approved', approvedBy: user.id, approvedAt: now() },
       });
       await audit(tx, user, 'Conference allocation approved', 'AllocationRun', run.id, run, {
         approved,
