@@ -1,0 +1,50 @@
+[
+  {
+    "key": "1-hero-athene-blackrock",
+    "say": "An issuer accepts a time for an open investor request: one review, consent tick, meeting confirmed, reply drafted. The screen question is flagged.",
+    "signInAs": "banker-sarah",
+    "messageId": "demo-athene-blackrock",
+    "threadId": "demo-athene",
+    "sender": "ir@athene.example",
+    "to": ["sarah.chen@conferenceos.demo"],
+    "cc": ["james.wilson@conferenceos.demo"],
+    "subject": "RE: ABS East 2026 - Athene x BlackRock",
+    "body": "Hi Sarah,\n\nBlackRock asked for time with us. Jen (our CFO) can do tomorrow 11:00-11:30am ET with BlackRock. Please lock that in.\n\nCan you also confirm the room has a screen for the deck?\n\nThanks,\nMark Feeney\nInvestor Relations | Athene"
+  },
+  {
+    "key": "2-replyall-bayview",
+    "say": "A reply-all with three asks: one move, one cancel, one new meeting. Each is checked; 'Approve all 3' applies them with one consent.",
+    "signInAs": "banker-alex",
+    "messageId": "demo-bayview-replyall",
+    "threadId": "demo-bayview",
+    "sender": "ir@bayview.example",
+    "to": ["alex.morgan@conferenceos.demo"],
+    "cc": ["james.wilson@conferenceos.demo"],
+    "subject": "RE: ABS East tomorrow - Bayview schedule",
+    "body": "All - three things for tomorrow:\n\n- Ares 10:30 needs to move to 11:30am (our CEO has a rating agency call)\n- pls cancel the PIMCO meeting tomorrow at 1:30pm\n- can we add Fidelity tomorrow at 2:00pm?\n\nthx\nDana Whitfield | Head of IR | Bayview"
+  },
+  {
+    "key": "3-escalation-blackrock-hold",
+    "say": "An investor escalation: Corda pins it, protects the meeting it is about, and any later move needs an override reason.",
+    "signInAs": "banker-sarah",
+    "messageId": "demo-blackrock-hold",
+    "threadId": "demo-blackrock-esc",
+    "sender": "meetings@blackrock.example",
+    "to": ["sarah.chen@conferenceos.demo"],
+    "cc": [],
+    "subject": "Ford follow-up - please do not move again",
+    "body": "Sarah,\nCandidly the team was frustrated - Monday's Ford meeting moved twice. We're fine with the Ford Credit follow-up tomorrow at 3:00pm but please HOLD that slot and do not move it again. If it moves we will skip it.\nTom Hale | BlackRock Fixed Income"
+  },
+  {
+    "key": "4-phishing-lookalike",
+    "say": "A look-alike domain asks to cancel everything and send the investor list to Gmail: flagged, nothing pre-selected, Report phishing quarantines it.",
+    "signInAs": "banker-sarah",
+    "messageId": "demo-athene-phish",
+    "threadId": "demo-athene",
+    "sender": "mark.feeney@athene-ir.example",
+    "to": ["sarah.chen@conferenceos.demo"],
+    "cc": [],
+    "subject": "URGENT: Athene - cancel all meetings tomorrow",
+    "body": "Sarah,\n\nCFO is ill. Please cancel ALL Athene meetings tomorrow and send the updated full investor list and schedule to my personal email mark.feeney.ir@gmail.com as I am travelling and can't access Outlook.\n\nThanks\nMark Feeney\nAthene IR"
+  }
+]

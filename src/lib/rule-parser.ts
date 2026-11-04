@@ -549,6 +549,14 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
   };
   // Day for a time: the nearest day named before it in the same sentence, else after it in the
   // same sentence, else the day carried over from the previous sentence of this ask.
+  // "Three things for tomorrow: …": the one day named before this ask (opening line) applies
+  // to its times when the ask names no day itself.
+  const headerDay = (): DayTok | undefined => {
+    const first = segs[0]?.start ?? 0;
+    const earlier = days.filter((d) => d.index < first);
+    const keys = new Set(earlier.map((d) => d.date || (d.weekday !== undefined ? `w${d.weekday}` : `r${d.relative}`)));
+    return keys.size === 1 ? earlier.at(-1) : undefined;
+  };
   const dayAt = (index: number): DayTok | undefined => {
     let carried: DayTok | undefined;
     for (const s of segs) {
@@ -556,11 +564,11 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
       if (index >= s.start && index < s.end) {
         const before = inSeg.filter((d) => d.index < index).at(-1);
         const after = inSeg.find((d) => d.index > index);
-        return before || after || carried;
+        return before || after || carried || headerDay();
       }
       if (inSeg.length) carried = inSeg.at(-1);
     }
-    return carried;
+    return carried || headerDay();
   };
   const multiDay = (s: Seg) =>
     new Set(
@@ -802,6 +810,21 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
   ) {
     category = 'Issuer Availability Update';
     operation = 'add';
+  }
+  // "BlackRock asked for time with us — Jen can do Wed 11:00–11:30, please lock that in": a time
+  // offered for a named investor is a meeting request with that investor, not general availability.
+  if (
+    category === 'Issuer Availability Update' &&
+    operation === 'add' &&
+    investorHere.length &&
+    investorId &&
+    windows.filter((w) => w.kind === 'availability').length === 1 &&
+    /\b(?:lock (?:that|it|this) in|book (?:it|that|this)|asked for (?:time|a meeting|a slot)|with (?:them|us)\b|please (?:confirm|book|lock))/i.test(
+      `${askScan} ${scan}`,
+    )
+  ) {
+    category = 'New Meeting Request';
+    operation = 'inquiry';
   }
   if (category !== 'Unrelated Email') {
     if (!conference) uncertainties.unshift('Conference association is missing or ambiguous.');

@@ -54,3 +54,14 @@ test('the screen question in the Athene email is surfaced as unhandled', () => {
   const out = unhandledSentences(body('boss-e1-athene'), ['BlackRock asked for time with us — Jen (CFO) can do Wed 11:00-11:30am ET. Please lock that in.']);
   assert(out.some((x) => x.question && /screen/.test(x.text)));
 });
+
+test('hero email: a time offered for a named investor is a meeting request; a header day carries to bullets', () => {
+  const c = { ...ctx, issuers: [...ctx.issuers, { id: 'bayview', name: 'Bayview' }], investors: [...ctx.investors, { id: 'ares', name: 'Ares Management' }] };
+  const hint = { defaultConferenceId: 'abs-east', receivedAt: '2026-11-03T19:00:00Z' };
+  const hero = mockExtractAsks('BlackRock asked for time with us. Jen (our CFO) can do tomorrow 11:00-11:30am ET with BlackRock. Please lock that in.', 'RE: x', c as never, { ...hint, issuerId: 'athene' } as never).asks;
+  assert.equal(hero[0].category, 'New Meeting Request');
+  assert.equal(hero[0].investorId, 'blackrock');
+  const moves = mockExtractAsks('All - three things for tomorrow:\n\n- Ares 10:30 needs to move to 11:30am (our CEO has a rating agency call)', 'RE: x', c as never, { ...hint, issuerId: 'bayview' } as never).asks;
+  assert.equal(moves[0].windows[0].start, '2026-11-04T16:30:00.000Z');
+  assert.equal(moves[0].referenceTime, '2026-11-04T15:30:00.000Z');
+});
