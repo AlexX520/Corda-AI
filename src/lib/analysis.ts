@@ -156,7 +156,8 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
     };
     content = `${newEmailContent(note)}\n\n${newEmailContent(forwarded.body)}`;
   }
-  const { defaultConferenceId, contextNote } = result;
+  const { defaultConferenceId } = result;
+  const contextNote = [result.contextNote, 'fallbackNote' in result ? result.fallbackNote : ''].filter(Boolean).join(' ');
   for (const e of result.asks)
     if (
       (e.conferenceId && !conferences.some((c) => c.id === e.conferenceId)) ||
@@ -216,7 +217,7 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
     if (esc?.investorId && pool.length === 1) protectMeetingId = pool[0].id;
   }
   const addressed = users.find(
-    (u) => u.role === 'BANKER' && p.to.some((t) => t.toLowerCase() === u.email.toLowerCase()),
+    (u) => (u.role === 'BANKER' || u.role === 'MANAGER') && p.to.some((t) => t.toLowerCase() === u.email.toLowerCase()),
   );
   return {
     asks,

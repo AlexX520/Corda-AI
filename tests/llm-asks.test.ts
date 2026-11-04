@@ -118,7 +118,8 @@ test('model failure falls back to the rule parser, which still splits the asks',
       r.asks.map((a) => a.operation),
       ['reschedule', 'cancel'],
     );
-    assert(r.asks.every((a) => a.uncertainties.some((u) => u.includes('AI model unavailable'))));
+    assert(r.fallbackNote?.includes('AI model unavailable'));
+    assert(r.asks.every((a) => !a.uncertainties.some((u) => /sk-|api key/i.test(u))));
   } finally {
     restore();
   }

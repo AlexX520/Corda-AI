@@ -1,3 +1,4 @@
+import { LlmUnavailable, llmChat } from './llm';
 import { z } from 'zod';
 import { conferenceTime } from './scheduling';
 import {
@@ -16,21 +17,18 @@ export async function extractEmail(
   subject: string,
   ctx: Context,
   hints?: Hints,
-): Promise<{ asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean }> {
+): Promise<{ asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean; fallbackNote?: string }> {
   if (!process.env.LLM_API_KEY) return { ...mockExtractAsks(body, subject, ctx, hints), parser: 'rules' };
   try {
     return { asks: await llmExtract(body, subject, ctx, hints), parser: 'llm' };
   } catch (e) {
     // Outlook sync moves past each message once, so a provider outage must not drop the email.
     // Fall back to the built-in parser and say so; the banker still reviews everything.
+    // The note says so on the email; it is not an open question about the ask itself.
     const fallback = mockExtractAsks(body, subject, ctx, hints);
-    for (const ask of fallback.asks) {
-      ask.uncertainties.push(
-        `AI model unavailable (${e instanceof Error ? e.message : 'error'}); read with the built-in parser.`,
-      );
-      ask.needsReview = ask.category !== 'Unrelated Email';
-    }
-    return { ...fallback, parser: 'rules' };
+    for (const ask of fallback.asks) ask.needsReview = ask.category !== 'Unrelated Email';
+    const why = e instanceof LlmUnavailable ? e.message : 'unexpected answer';
+    return { ...fallback, parser: 'rules', fallbackNote: `AI model unavailable (${why}); read with the built-in parser.` };
   }
 }
 /** Reasoning models (o-series, gpt-5) reject a temperature setting. */
@@ -43,32 +41,18 @@ const SYSTEM = (ctx: Context, hints?: Hints) =>
   `Context: ${JSON.stringify(ctx)}. Resolve weekdays to the conference's dates. Give each window as date (YYYY-MM-DD) plus startTime and endTime in 24-hour HH:mm in the conference's local time; when the email states another time zone (e.g. "2:30pm ET (7:30pm UK)" or "after 2pm Central"), convert to the conference's local time and ignore the duplicate in the other zone. Do not convert to UTC; Corda does that. A compact range like "2–4pm" means 2pm to 4pm. Never invent windows from vague times such as "morning" or "after lunch"; list them in vague and uncertainties instead. Every window's evidence and every evidence entry must be an exact substring of the email body. Missing or contradictory information goes in uncertainties. All relevant changes require human review. Never resolve meetingId yourself; set null.`;
 async function llmExtract(body: string, subject: string, ctx: Context, hints?: Hints) {
   const content = newEmailContent(body);
-  const response = await fetch(
-    `${process.env.LLM_BASE_URL || 'https://api.openai.com/v1'}/chat/completions`,
+  const payload = await llmChat(
     {
-      method: 'POST',
-      signal: AbortSignal.timeout(45000),
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.LLM_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.LLM_MODEL || 'gpt-4.1-mini',
-        ...tuning(process.env.LLM_MODEL || 'gpt-4.1-mini'),
-        response_format: { type: 'json_object' },
-        messages: [
-          { role: 'system', content: SYSTEM(ctx, hints) },
-          { role: 'user', content: JSON.stringify({ subject, body: content }) },
-        ],
-      }),
+      ...tuning(process.env.LLM_MODEL || 'gpt-4.1-mini'),
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: SYSTEM(ctx, hints) },
+        { role: 'user', content: JSON.stringify({ subject, body: content }) },
+      ],
     },
+    Number(process.env.LLM_TIMEOUT_MS) || 12000, // reading an email may take longer than a draft
   );
-  if (!response.ok) {
-    const detail = await response.json().catch(() => ({}));
-    throw new Error(`LLM ${response.status}: ${detail?.error?.message?.slice(0, 120) || response.statusText}`);
-  }
-  const payload = await response.json();
-  const raw = JSON.parse(payload.choices[0].message.content);
+  const raw = JSON.parse(payload.choices?.[0]?.message?.content || '{}');
   // Older prompt shape (one object) is still accepted.
   const list: Record<string, unknown>[] = Array.isArray(raw?.asks) ? raw.asks : [raw];
   if (!list.length) throw new Error('answer had no asks');
@@ -181,29 +165,20 @@ export function missingFor(e: Extraction): Extraction['missing'] {
 }
 export async function generateDraft(facts: string, fallback: string) {
   if (!process.env.LLM_API_KEY) return fallback;
-  const r = await fetch(
-    `${process.env.LLM_BASE_URL || 'https://api.openai.com/v1'}/chat/completions`,
-    {
-      method: 'POST',
-      signal: AbortSignal.timeout(30000),
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.LLM_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: process.env.LLM_MODEL || 'gpt-4.1-mini',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Write a concise conference coordination email using only supplied facts. Availability is not consent. Return plain text; no invented participants or approvals.',
-          },
-          { role: 'user', content: facts },
-        ],
-      }),
-    },
-  );
-  if (!r.ok) return fallback;
-  const data = await r.json();
-  return z.string().min(1).max(10000).parse(data.choices[0].message.content);
+  try {
+    const data = await llmChat({
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Write a concise conference coordination email using only supplied facts. Availability is not consent. Return plain text; no invented participants or approvals.',
+        },
+        { role: 'user', content: facts },
+      ],
+    });
+    const text = z.string().min(1).max(10000).safeParse(data.choices?.[0]?.message?.content);
+    return text.success ? text.data : fallback;
+  } catch {
+    return fallback; // model unreachable or slow: the template draft is used
+  }
 }
