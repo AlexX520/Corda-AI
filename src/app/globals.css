@@ -3722,3 +3722,28 @@ button.danger, .danger { background: #b4412b !important; color: #fff !important;
 .mgr-foot { font-size: 12px; margin-top: 12px; }
 @media (max-width: 1100px) { .kpi-row { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } .mgr-grid { grid-template-columns: 1fr; } .mgr-grid > * { grid-column: auto !important; } }
+
+/* Live-day time awareness */
+.myday-grid li.past > button { opacity: 0.5; }
+.myday-grid li.live > button { background: #eef6f1; }
+.myday-grid li { position: relative; }
+.now-line { display: flex; align-items: center; gap: 8px; color: #c2412d; font-size: 11px; font-weight: 600; margin: 2px 10px; }
+.now-line::after { content: ''; flex: 1; height: 1px; background: #c2412d; }
+.md-done { color: var(--muted); font-size: 11px; }
+tr.past td { opacity: 0.5; }
+.calendar-event.past { opacity: 0.45; }
+.protect-banner { display: grid; gap: 2px; padding: 10px 12px; border-radius: 10px; background: #fdecea; border: 1px solid #f2b8b0; color: #8a2a1d; font-size: 13px; }
+.protect-toggle summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+.protect-toggle input { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font-size: 13px; }
+.danger-note { color: #a33a2b; font-size: 13px; margin: 0; font-weight: 600; }
+.related-item.danger { border-color: #f2b8b0; background: #fdecea; color: #8a2a1d; }
+.holds-bar { display: grid; gap: 8px; margin-bottom: 14px; }
+.holds-bar .hold-banner { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.notify-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 10px 12px; border-radius: 10px; background: #e8f4ec; border: 1px solid #a9d3b8; font-size: 13px; margin-bottom: 10px; }
+.apply-all { padding: 8px 12px; border: 1px dashed var(--border); border-radius: 10px; margin-bottom: 10px; font-size: 13px; display: grid; gap: 6px; }
+.apply-all ol, .apply-result { margin: 0; padding-left: 18px; }
+.answer-row { flex-direction: column; align-items: flex-start; }
+.answer-row p { margin: 0; font-size: 13px; }
+.inline-reject { grid-column: 3 / -1; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.inline-reject input { flex: 1; min-width: 200px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.group-head { padding: 8px 18px 4px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #4b554e; background: #fafbf9; border-bottom: 1px solid var(--border); }

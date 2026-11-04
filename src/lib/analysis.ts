@@ -30,6 +30,8 @@ export type AnalyseDeps = {
   meetings: MeetingLike[];
   internal: string[];
   today: string;
+  /** Meetings that already took place are never suggested (omit in tests with fixed dates). */
+  now?: Date;
   /** Conferences where these companies already have meetings, requests or availability. */
   involvement: (issuerIds: string[], investorIds: string[]) => Promise<string[]> | string[];
   extract: (
@@ -157,7 +159,8 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
     content = `${newEmailContent(note)}\n\n${newEmailContent(forwarded.body)}`;
   }
   const { defaultConferenceId } = result;
-  const contextNote = [result.contextNote, 'fallbackNote' in result ? result.fallbackNote : ''].filter(Boolean).join(' ');
+  // A model outage is logged on the server only; the reviewer just sees the rule-parser result.
+  const contextNote = result.contextNote;
   for (const e of result.asks)
     if (
       (e.conferenceId && !conferences.some((c) => c.id === e.conferenceId)) ||
@@ -202,6 +205,7 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
       trusted: !suspicious,
       open: isOpenMeeting,
       n: names,
+      now: deps.now,
     });
     e.meetingId = r.preselectId;
     if (!r.preselectId && !suspicious && e.issuerId && !e.missing.includes('meeting'))

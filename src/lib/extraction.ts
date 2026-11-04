@@ -28,6 +28,7 @@ export async function extractEmail(
     const fallback = mockExtractAsks(body, subject, ctx, hints);
     for (const ask of fallback.asks) ask.needsReview = ask.category !== 'Unrelated Email';
     const why = e instanceof LlmUnavailable ? e.message : 'unexpected answer';
+    console.warn(`[llm] extraction fell back to the rule parser: ${why}`);
     return { ...fallback, parser: 'rules', fallbackNote: `AI model unavailable (${why}); read with the built-in parser.` };
   }
 }

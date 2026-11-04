@@ -133,9 +133,7 @@ export function ManagerHome({ data, onOpenEvent, onOpenQueue }: { data: AppState
           <ul className="mgr-rank">{m.perInvestor.slice(0, 8).map((p) => <li key={p.id}><span>{p.name}</span><b>{p.meetings}</b><small>{p.requested} requested</small></li>)}</ul>
         </section>
       </div>
-      {m.demoRecords > 0 && (
-        <p className="muted mgr-foot">Includes {m.demoRecords} seeded demo-history emails and their requests (marked “demo history”) so the trends are visible in the demo.</p>
-      )}
+
     </>
   );
 }

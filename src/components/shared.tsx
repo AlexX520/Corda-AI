@@ -3,7 +3,8 @@ import { formatInTimeZone } from 'date-fns-tz';
 import { cn } from '@/lib/utils';
 import type { AppState } from '@/lib/types';
 import { Inbox } from 'lucide-react';
-export type Run = (type: string, data: unknown, message?: string) => Promise<boolean>;
+/** Runs a command; the toast is the message, or built from the command's result. */
+export type Run = (type: string, data: unknown, message?: string | ((result: unknown) => string)) => Promise<boolean>;
 export function Badge({
   children,
   tone,

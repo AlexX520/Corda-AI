@@ -15,11 +15,13 @@ export type MetricsInput = {
   requests: { id: string; conferenceId: string; issuerId: string; investorId: string; status: string; createdAt: Dateish }[];
   meetings: { id: string; conferenceId: string; issuerId: string; investorId: string; status: string; requestId: string | null; bankerIds: string[]; start: Dateish; createdAt: Dateish }[];
   coverage: { meetingId: string; bankerId: string }[];
-  proposals: { status: string; editedOnReview: boolean; conferenceId: string | null; category: string }[];
+  proposals: { status: string; editedOnReview: boolean; conferenceId: string | null; category: string; noise?: boolean }[];
   actions: { id: string; type: string; status: string; assignedTo: string | null; createdAt: Dateish; conferenceId: string | null; title: string }[];
   emails: { id: string; subject: string; sender: string; issuerId: string | null; conferenceId: string | null; status: string; receivedAt: Dateish; escalation: boolean; source: string }[];
 };
 
+/** Documented assumption for the ROI tile: re-keying one ask by hand takes about 6 minutes. */
+export const MINUTES_PER_ASK = 6;
 export function median(values: number[]) {
   if (!values.length) return null;
   const s = [...values].sort((a, b) => a - b);
@@ -80,14 +82,21 @@ export function computeMetrics(x: MetricsInput) {
 
   // Email handling: approved as read, approved after the reviewer edited, rejected.
   const reviewed = x.proposals.filter((p) => p.category !== 'Unrelated Email');
+  // "Rejected" is split: noise/phishing (suspicious or unrelated mail) vs real asks the desk declined.
   const emails = {
     approvedClean: reviewed.filter((p) => p.status === 'Approved' && !p.editedOnReview).length,
     approvedEdited: reviewed.filter((p) => p.status === 'Approved' && p.editedOnReview).length,
     rejected: reviewed.filter((p) => p.status === 'Rejected').length,
+    rejectedNoise: x.proposals.filter((p) => p.status === 'Rejected' && (p.noise || p.category === 'Unrelated Email')).length,
+    declined: reviewed.filter((p) => p.status === 'Rejected' && !p.noise).length,
     pending: reviewed.filter((p) => ['Pending', 'Clarification requested', 'Acknowledged'].includes(p.status)).length,
   };
+  // ROI: every ask handled in Corda (approved, declined, handled) saves re-keying it by hand.
+  const handled = x.proposals.filter((p) => ['Approved', 'Rejected', 'Resolved'].includes(p.status)).length;
+  const roi = { asksHandled: handled, minutesPerAsk: MINUTES_PER_ASK, hoursSaved: Math.round((handled * MINUTES_PER_ASK) / 6) / 10 };
 
-  const desk = x.users.filter((u) => u.role === 'BANKER' || u.role === 'MANAGER');
+  // Coordinator workload is the bankers' (the manager is not a coordinator).
+  const desk = x.users.filter((u) => u.role === 'BANKER');
   const open = x.actions.filter((a) => OPEN_ACTION.includes(a.status));
   const owners = [...new Set(open.map((a) => a.assignedTo))];
   const openByCoordinator = owners
@@ -148,6 +157,7 @@ export function computeMetrics(x: MetricsInput) {
     perIssuer: per(x.issuers, 'issuerId'),
     perInvestor: per(x.investors, 'investorId'),
     emails,
+    roi,
     openByCoordinator,
     unanswered,
     escalations,

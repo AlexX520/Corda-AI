@@ -918,7 +918,7 @@ export function PlannerView({
                     const warning = coverage.length < (requirement?.requiredBankerCount || 2) || (m.requiresCube && !room);
                     const pend = pendingSeats(m.id);
                     return (
-                    <tr key={m.id} className="clickable" onClick={() => setSelected(m.id)}>
+                    <tr key={m.id} className={`clickable ${+new Date(m.end) <= +new Date(data.now) ? 'past' : ''}`} onClick={() => setSelected(m.id)}>
                       <td>
                         <strong>{n.issuer(m.issuerId)}</strong>
                         <small>{n.investor(m.investorId)}</small>
@@ -1005,7 +1005,7 @@ export function PlannerView({
                             <button
                               onClick={() => setSelected(m.id)}
                               key={m.id}
-                              className="calendar-event"
+                              className={`calendar-event ${+new Date(m.end) <= +new Date(data.now) ? 'past' : ''}`}
                               style={{ borderLeftColor: i.color, background: `${i.color}16` }}
                             >
                               <strong>{n.investor(m.investorId)}</strong>

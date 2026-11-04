@@ -31,6 +31,9 @@ export function MeetingDrawer({
   const [mode, setMode] = useState<'view' | 'edit' | 'cancel'>('view');
   const [reason, setReason] = useState('');
   const [holdOverride, setHoldOverride] = useState('');
+  const [protectReason, setProtectReason] = useState('');
+  const [confirmHandled, setConfirmHandled] = useState<string | null>(null);
+  const [protectOverride, setProtectOverride] = useState('');
   const [busy, setBusy] = useState(false);
   const [formKey, setFormKey] = useState(0);
   const issuer = data.issuers.find((i) => i.id === meeting.issuerId) as
@@ -77,11 +80,36 @@ export function MeetingDrawer({
           )}
           <div className="flex items-center gap-2">
             <Badge>{meeting.status}</Badge>
-            {meeting.protected && <Badge tone="red">Protected — investor asked it not move again</Badge>}
+            {meeting.protected && <Badge tone="red">Protected</Badge>}
             {coverage.some((a) => a.assignmentStatus === 'Needs Review') && (
               <Badge tone="amber">Resources need review</Badge>
             )}
           </div>
+          {meeting.protected && (
+            <div className="protect-banner">
+              <strong>Do not move: {meeting.protectedReason || 'protected'}</strong>
+              <span>
+                Set by {n.user(meeting.protectedBy || '')} · moving or cancelling needs an override reason.
+              </span>
+              {banker && (
+                <button className="text-button" onClick={() => run('meetingProtect', { id: meeting.id, protected: false }, 'Protection removed.')}>
+                  Remove protection
+                </button>
+              )}
+            </div>
+          )}
+          {banker && !meeting.protected && +new Date(meeting.end) > +new Date(data.now) && (
+            <details className="protect-toggle">
+              <summary>Protect this meeting (do not move)</summary>
+              <div className="dc-actions">
+                <input placeholder="Why, e.g. BlackRock asked us not to move it again" value={protectReason} onChange={(e) => setProtectReason(e.target.value)} />
+                <Button size="sm" variant="outline" disabled={protectReason.trim().length < 3} onClick={() => run('meetingProtect', { id: meeting.id, protected: true, reason: protectReason }, 'Meeting protected.')}>
+                  Protect
+                </Button>
+              </div>
+            </details>
+          )}
+          {+new Date(meeting.end) <= +new Date(data.now) && <p className="dc-why">This meeting already took place.</p>}
           <h2>
             {fmt(meeting.start, c.timezone, 'EEEE, MMM d · h:mm a')} –{' '}
             {fmt(meeting.end, c.timezone, 'h:mm a')}
@@ -145,7 +173,9 @@ export function MeetingDrawer({
                       variant="ghost"
                       disabled={busy}
                       onClick={() =>
-                        run(
+                        confirmHandled !== p.id
+                          ? setConfirmHandled(p.id)
+                          : run(
                           'review',
                           {
                             id: p.id,
@@ -155,11 +185,11 @@ export function MeetingDrawer({
                               ? `Meeting changed manually: ${meeting.changeSummary}`
                               : 'Handled in the meeting editor',
                           },
-                          'Marked as handled manually.',
+                          'Marked as handled manually. Reopen it from the queue (Status → Resolved) if needed.',
                         )
                       }
                     >
-                      Mark handled manually
+                      {confirmHandled === p.id ? 'Confirm: handled manually' : 'Mark handled manually'}
                     </Button>
                   )}
                 </div>
@@ -203,16 +233,24 @@ export function MeetingDrawer({
               <input value={holdOverride} onChange={(e) => setHoldOverride(e.target.value)} />
             </Field>
           )}
+          {meeting.protected && (
+            <>
+              <p className="danger-note">Protected: {meeting.protectedReason}. Cancelling it goes against what the investor asked.</p>
+              <Field label="Override reason (required)">
+                <input value={protectOverride} onChange={(e) => setProtectOverride(e.target.value)} placeholder="e.g. Investor called and agreed" />
+              </Field>
+            </>
+          )}
           <div className="dc-actions">
             <Button
               disabled={
-                busy || reason.trim().length < 3 || (Boolean(issuer?.holdChanges) && holdOverride.trim().length < 5)
+                busy || reason.trim().length < 3 || (Boolean(issuer?.holdChanges) && holdOverride.trim().length < 5) || (meeting.protected && protectOverride.trim().length < 5)
               }
               onClick={async () => {
                 setBusy(true);
                 const ok = await run(
                   'meetingCancel',
-                  { id: meeting.id, reason, version: meeting.version, holdOverride: holdOverride || undefined },
+                  { id: meeting.id, reason, version: meeting.version, holdOverride: holdOverride || undefined, protectedOverride: protectOverride || undefined },
                   'Meeting cancelled and recorded.',
                 );
                 setBusy(false);

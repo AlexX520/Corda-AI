@@ -55,7 +55,7 @@ export function MyDay({
   const n = names(data);
   const c = data.conferences.find((x) => x.id === conferenceId)!;
   const zone = c.timezone;
-  const now = new Date();
+  const now = new Date(data.now);
   const today = fmt(now.toISOString(), zone, 'yyyy-MM-dd');
   const tomorrow = fmt(new Date(+now + 86400000).toISOString(), zone, 'yyyy-MM-dd');
   const days = [
@@ -96,6 +96,7 @@ export function MyDay({
           <CheckCheck size={15} /> Full queue · {openActions.length}
         </Button>
       </div>
+      <HoldsBar data={data} run={run} />
       <div className="myday-grid">
         <section className="panel myday-meetings">
           <div className="panel-heading">
@@ -112,8 +113,11 @@ export function MyDay({
                 </h4>
                 {list.length ? (
                   <ul>
-                    {list.map(({ m, pending }) => (
-                      <li key={m.id}>
+                    {list.map(({ m, pending }, i) => (
+                      <li key={m.id} className={+new Date(m.end) <= +now ? 'past' : +new Date(m.start) <= +now ? 'live' : ''}>
+                        {d.key === today && +new Date(m.start) > +now && (i === 0 || +new Date(list[i - 1].m.start) <= +now) && (
+                          <span className="now-line">Now · {fmt(now.toISOString(), zone, 'h:mm a')}</span>
+                        )}
                         <button onClick={() => onOpenMeeting(m.id)}>
                           <span className="md-time">{fmt(m.start, zone, 'h:mm a')}</span>
                           <span className="md-what">
@@ -124,6 +128,7 @@ export function MyDay({
                             </small>
                           </span>
                           {pending && <Badge tone="amber">Pending</Badge>}
+                          {+new Date(m.end) <= +now ? <small className="md-done">Done</small> : +new Date(m.start) <= +now ? <Badge tone="green">Now</Badge> : null}
                         </button>
                       </li>
                     ))}
@@ -210,5 +215,28 @@ export function MyDay({
         </section>
       </div>
     </>
+  );
+}
+
+/** Issuer-wide holds stay visible until someone releases them (not just until the email is acknowledged). */
+export function HoldsBar({ data, run }: { data: AppState; run: Run }) {
+  const holds = data.issuers.filter((i) => (i as { holdChanges?: boolean }).holdChanges) as (AppState['issuers'][number] & { holdReason?: string; holdSetBy?: string | null })[];
+  if (!holds.length) return null;
+  const n = names(data);
+  return (
+    <div className="holds-bar">
+      {holds.map((i) => (
+        <div key={i.id} className="hold-banner">
+          <strong>All changes for {i.name} are on hold</strong>
+          <span>
+            {i.holdReason || 'Escalation'}
+            {i.holdSetBy ? ` · set by ${n.user(i.holdSetBy)}` : ''}
+          </span>
+          <button className="text-button" onClick={() => run('issuerHold', { issuerId: i.id, hold: false, reason: 'Released from My day' }, `Hold on ${i.name} released.`)}>
+            Release hold
+          </button>
+        </div>
+      ))}
+    </div>
   );
 }

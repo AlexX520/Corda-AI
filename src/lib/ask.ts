@@ -134,7 +134,11 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
     const issuerId = named.issuerIds[0];
     const investorId = named.investorIds[0];
     const target = day || conf.startDate;
-    const windows = s.availability.filter((a) => a.issuerId === issuerId && a.conferenceId === conf.id && a.kind === 'Available');
+    // Only future time can be offered.
+    const from = new Date(Math.ceil(+s.now / 1800000) * 1800000);
+    const windows = s.availability
+      .filter((a) => a.issuerId === issuerId && a.conferenceId === conf.id && a.kind === 'Available' && +a.end > +from)
+      .map((a) => (+a.start < +from ? { ...a, start: from } : a));
     const busy = [
       ...s.availability.filter((a) => a.issuerId === issuerId && a.conferenceId === conf.id && a.kind !== 'Available'),
       ...s.meetings.filter((m) => m.conferenceId === conf.id && ['Confirmed', 'Tentative'].includes(m.status) && (m.issuerId === issuerId || m.investorId === investorId)),

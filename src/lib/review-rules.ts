@@ -105,9 +105,9 @@ export type CandidateResult<T> = {
  * its time agrees with the time the email mentions, and the sender is trusted.
  */
 export function findCandidates<T extends MeetingLike>(
-  ask: Pick<Extraction, 'conferenceId' | 'issuerId' | 'investorId' | 'referenceTime'>,
+  ask: Pick<Extraction, 'conferenceId' | 'issuerId' | 'investorId' | 'referenceTime'> & { evidence?: string[]; summary?: string },
   items: T[],
-  opts: { zone: string; trusted: boolean; open: (s: string) => boolean; n: Names; noun?: string },
+  opts: { zone: string; trusted: boolean; open: (s: string) => boolean; n: Names; noun?: string; now?: Date },
 ): CandidateResult<T> {
   const noun = opts.noun || 'meeting';
   if (!ask.issuerId)
@@ -117,8 +117,14 @@ export function findCandidates<T extends MeetingLike>(
       why: `Pick the issuer first; Corda only suggests a ${noun} of the same issuer.`,
     };
   const ref = ask.referenceTime ? +new Date(ask.referenceTime) : null;
+  // Weekdays the email names for this ask ("drop the PIMCO lunch on Thursday").
+  const said = (ask.evidence || []).join(' ').toLowerCase();
+  const days = WEEKDAYS.filter((d) => new RegExp(`\\b${d}(day)?\\b`).test(said.replace(/(mon|tues|wednes|thurs|fri|satur|sun)day/g, (w) => w.slice(0, 3))));
+  const nowMs = +(opts.now || new Date(0));
   const pool = items.filter(
     (m) =>
+      // A meeting that already took place is never the one an email asks to change.
+      +new Date(m.end) > nowMs &&
       opts.open(m.status) &&
       m.issuerId === ask.issuerId &&
       (!ask.conferenceId || m.conferenceId === ask.conferenceId) &&
@@ -132,7 +138,11 @@ export function findCandidates<T extends MeetingLike>(
           ? `Same investor (${opts.n.investor(m.investorId)})`
           : 'Investor not named in the email',
       );
-      const timeMatches = ref === null ? null : +new Date(m.start) === ref;
+      const weekday = local(m.start, opts.zone, 'EEE').toLowerCase().slice(0, 3);
+      const timeMatches =
+        ref !== null ? +new Date(m.start) === ref : days.length ? days.includes(weekday) || null : null;
+      if (ref === null && days.length && !days.includes(weekday))
+        return { item: m, reasons: [...reasons, `Email says ${days.map((d) => d[0].toUpperCase() + d.slice(1)).join('/')}; this ${noun} is ${local(m.start, opts.zone, 'EEE h:mm a')}`], timeMatches: false };
       if (timeMatches === true)
         reasons.push(`Time matches the email (${local(m.start, opts.zone, 'EEE h:mm a')})`);
       if (timeMatches === false)
@@ -153,7 +163,7 @@ export function findCandidates<T extends MeetingLike>(
       why: `No open ${noun} matches ${ask.investorId ? `${opts.n.issuer(ask.issuerId)} × ${opts.n.investor(ask.investorId)}` : opts.n.issuer(ask.issuerId)}.`,
     };
   const only = candidates.length === 1 ? candidates[0] : null;
-  const timeOk = ref === null ? Boolean(ask.investorId) : only?.timeMatches === true;
+  const timeOk = only?.timeMatches === false ? false : ref === null ? Boolean(ask.investorId) : only?.timeMatches === true;
   if (!opts.trusted)
     return {
       candidates,
@@ -178,6 +188,7 @@ export function findCandidates<T extends MeetingLike>(
 }
 
 export const isOpenMeeting = (s: string) => s === 'Confirmed';
+const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 export const isOpenRequest = (s: string) => !['Confirmed', 'Cancelled'].includes(s);
 
 /** Confirmed meetings or open requests the same investor already has with the same issuer. */
@@ -202,7 +213,7 @@ export function duplicatesFor<M extends MeetingLike, R extends MeetingLike>(
 }
 
 /** Statuses after which an ask needs nothing more from the reviewer. */
-export const DONE_ASK = ['Approved', 'Rejected', 'Acknowledged', 'Resolved'];
+export const DONE_ASK = ['Approved', 'Rejected', 'Acknowledged', 'Resolved', 'Expired'];
 export const DONE_EMAIL = ['Approved', 'Rejected', 'Acknowledged', 'Resolved', 'Ignored'];
 
 /** An email is done only when every ask in it is done. */

@@ -150,7 +150,7 @@ export function detectEscalation(subject: string, content: string) {
   ];
   for (const [re, reason] of patterns) if (re.test(content)) reasons.push(reason);
   if (
-    /\b(?:we'?ll|we will|we'?d|will) (?:pass|walk|drop (?:it|the meeting)|pull out)\b|\braise it with\b[^.]{0,40}\bmanagement\b|\b(?:third|3rd) time\b/i.test(
+    /\b(?:we'?ll|we will|we'?d|will) (?:pass|walk|skip(?: it)?|drop (?:it|the meeting)|pull out)\b|\braise it with\b[^.]{0,40}\bmanagement\b|\b(?:third|3rd) time\b|\bHOLD\b(?= (?:that|this|the) (?:slot|meeting|time))|\bdo not move (?:it|this|that)?\s*again\b/i.test(
       content,
     )
   ) {

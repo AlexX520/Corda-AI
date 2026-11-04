@@ -163,6 +163,7 @@ model Meeting {
   /// An investor threatened to drop it if it moves again.
   protected Boolean @default(false)
   protectedReason String @default("")
+  protectedBy String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([conferenceId, issuerId])
@@ -249,6 +250,8 @@ model ExportLog {
   userId String
   /// Meetings in the export, to show "new / changed / removed since last sent" next time.
   meetingIds String[] @default([])
+  /// A download is not a send: only exports marked as sent are the baseline for change marks.
+  sentAt DateTime?
   createdAt DateTime @default(now())
   @@index([conferenceId, scope, audienceId])
 }
@@ -399,4 +402,14 @@ model OutlookAuthState {
   verifier String
   appOrigin String
   createdAt DateTime @default(now())
+}
+
+/// Ask Corda questions: kept apart from the audit trail (they change nothing).
+model AskLog {
+  id String @id @default(cuid())
+  userId String
+  question String
+  pattern String
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
 }

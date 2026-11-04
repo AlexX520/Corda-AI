@@ -5,7 +5,8 @@ import type { AppState, EmailItem } from '@/lib/types';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { Sheet } from './ui/sheet';
-import { EmailDecision } from './decision';
+import { EmailDecision, type Outcome } from './decision';
+import type { Extraction } from '@/lib/extraction-schema';
 import { EventSelect } from './extraction-form';
 import { Badge, Field, fmt, names, Run } from './shared';
 import {
@@ -19,7 +20,7 @@ import {
 } from 'lucide-react';
 import { findSensitive, outsideAllowlist, stripSensitiveQuotes } from '@/lib/outbound';
 
-const ASK_DONE = ['Approved', 'Rejected', 'Acknowledged', 'Resolved'];
+const ASK_DONE = ['Approved', 'Rejected', 'Acknowledged', 'Resolved', 'Expired'];
 const askState = (status: string) =>
   ASK_DONE.includes(status)
     ? { icon: <CircleCheck size={15} />, tone: 'done', text: status === 'Resolved' ? 'Handled' : status }
@@ -48,7 +49,8 @@ export function EmailReview({
   const asks = email.proposals;
   const firstOpen = asks.find((p) => !ASK_DONE.includes(p.status));
   const [selected, setSelected] = useState(
-    asks.find((p) => p.id === proposalId)?.id || firstOpen?.id || asks[0]?.id,
+    // Reopening an email lands on the next open ask, not on one already decided.
+    asks.find((p) => p.id === proposalId && !ASK_DONE.includes(p.status))?.id || firstOpen?.id || asks[0]?.id,
   );
   const [event, setEvent] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -69,11 +71,43 @@ export function EmailReview({
     ? data.users.find((u) => u.email?.toLowerCase() === email.forwardedBy?.toLowerCase())?.name || email.forwardedBy
     : null;
   // After one ask is decided, move on to the next open one.
-  const next = () => {
+  const [notify, setNotify] = useState<Outcome | null>(null);
+  const next = (o?: Outcome | null) => {
+    const changed = Boolean(o && ['confirmed', 'moved', 'cancelled'].includes(o.kind));
+    if (changed) setNotify(o!);
     const rest = asks.filter((p) => p.id !== proposal?.id && !ASK_DONE.includes(p.status));
     if (rest.length) setSelected(rest[0].id);
-    else close();
+    else if (!changed) close();
   };
+  const openAsks = asks.filter((p) => p.status === 'Pending');
+  const [applyAll, setApplyAll] = useState(false);
+  const [agreed, setAgreed] = useState(false);
+  const [applyResult, setApplyResult] = useState<string[] | null>(null);
+  async function approveAll() {
+    setBusy(true);
+    const out: string[] = [];
+    for (const p of openAsks) {
+      const e = p.extraction as unknown as Extraction;
+      const openReq = data.requests.find((r) => !['Confirmed', 'Cancelled', 'Expired'].includes(r.status) && r.issuerId === e.issuerId && r.investorId === e.investorId);
+      const r = await fetch('/api/commands', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'review',
+          data: {
+            id: p.id, decision: 'approve', extraction: e, note: 'Approved with all asks of this email; both sides agreed.',
+            consent: true, confirmNow: e.category === 'New Meeting Request', consentParties: ['issuer', 'investor'],
+            meetingId: e.meetingId || undefined, requestId: e.category === 'New Meeting Request' ? openReq?.id : undefined, uncertaintyResolved: false,
+          },
+        }),
+      });
+      const j = await r.json();
+      out.push(`${p.summary || 'Ask'}: ${r.ok ? j.result?.outcome?.text || 'done' : `not applied — ${j.error}`}`);
+    }
+    setApplyResult(out);
+    setBusy(false);
+    await run('ping', {}, `${out.filter((x) => !x.includes('not applied')).length} of ${openAsks.length} asks applied.`);
+  }
   return (
     <Sheet
       open
@@ -85,6 +119,39 @@ export function EmailReview({
           : 'AI prepared the change. Nothing updates until you approve.'
       }
     >
+      {notify && (
+        <div className="notify-banner">
+          <strong>{notify.text}</strong>
+          <span>Notify both sides?</span>
+          <Button size="sm" onClick={() => onReply(email.id)}>
+            <Mail size={13} /> Draft the reply
+          </Button>
+          <button className="text-button" onClick={() => setNotify(null)}>Not now</button>
+        </div>
+      )}
+      {openAsks.length > 1 && !email.suspicious && !email.escalation && (
+        <div className="apply-all">
+          {!applyAll ? (
+            <button className="text-button" onClick={() => setApplyAll(true)}>
+              Approve all {openAsks.length} asks…
+            </button>
+          ) : (
+            <>
+              <strong>Apply all {openAsks.length} asks</strong>
+              <ol>{openAsks.map((p) => <li key={p.id}>{p.summary}</li>)}</ol>
+              <label className="check">
+                <input type="checkbox" checked={agreed} onChange={(ev) => setAgreed(ev.target.checked)} />
+                <span>Both sides agreed to these changes</span>
+              </label>
+              <div className="dc-actions">
+                <Button size="sm" disabled={!agreed || busy} onClick={approveAll}>Yes, apply all {openAsks.length}</Button>
+                <button className="text-button" onClick={() => setApplyAll(false)}>Cancel</button>
+              </div>
+              {applyResult && <ul className="apply-result">{applyResult.map((x, i) => <li key={i}>{x}</li>)}</ul>}
+            </>
+          )}
+        </div>
+      )}
       <div className="email-head">
         <div>
           <strong>{email.originalSenderName || email.originalSender || email.sender}</strong>

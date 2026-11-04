@@ -69,7 +69,9 @@ test('fill rate and median time-to-confirm come from requests and meetings', () 
 });
 
 test('emails handled: approved as read vs edited vs rejected (unrelated mail excluded)', () => {
-  assert.deepEqual(computeMetrics(base).emails, { approvedClean: 2, approvedEdited: 1, rejected: 1, pending: 1 });
+  const m = computeMetrics(base);
+  assert.deepEqual(m.emails, { approvedClean: 2, approvedEdited: 1, rejected: 1, rejectedNoise: 0, declined: 1, pending: 1 });
+  assert.deepEqual(m.roi, { asksHandled: 5, minutesPerAsk: 6, hoursSaved: 0.5 });
 });
 
 test('open items per coordinator with the oldest age; escalations; workload', () => {
@@ -80,7 +82,7 @@ test('open items per coordinator with the oldest age; escalations; workload', ()
   const sarah = m.workload.find((w) => w.userId === 'sarah')!;
   assert.deepEqual([sarah.meetings, sarah.openItems], [2, 1], 'bankerIds and coverage both count; cancelled not');
   assert(!m.workload.some((w) => w.userId === 'james'), 'sales are not desk workload');
-  assert(m.workload.some((w) => w.userId === 'morgan'));
+  assert(!m.workload.some((w) => w.userId === 'morgan'), 'the manager is not coordinator workload');
 });
 
 test('unanswered issuer emails: from the issuer, waiting on us, older than 4 hours', () => {

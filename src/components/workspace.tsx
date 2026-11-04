@@ -1,6 +1,6 @@
 'use client';
 import { isDesk, roleLabel } from '@/lib/roles';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
 import {
   Activity,
@@ -52,7 +52,7 @@ import { ResourceAllocationView } from './resources';
 import { AuditTrail } from './audit';
 import { SalesEmailsView, SalesHome } from './sales';
 import { ManagerHome } from './manager';
-import { MyDay } from './myday';
+import { HoldsBar, MyDay } from './myday';
 import { AskCorda, AskPanel } from './ask';
 import { MeetingDrawer, MeetingForm } from './meeting';
 import { actionKind, askOf, askPosition, kindLabel, kindOrder, openWork, type KindId } from './queue-model';
@@ -276,7 +276,7 @@ export function Workspace() {
         result = await response.json();
       if (!response.ok) throw new Error(result.error);
       await reload();
-      setToast({ message: message || 'Changes saved' });
+      setToast({ message: (typeof message === 'function' ? message(result.result) : message) || 'Changes saved' });
       return true;
     } catch (e) {
       setToast({ message: e instanceof Error ? e.message : 'Something went wrong', error: true });
@@ -1447,13 +1447,30 @@ function QueueView({
       inScope(a) &&
       (!urgentOnly || a.priority === 'Urgent' || actionKind(a, data).id === 'escalation'),
   );
+  const expiredCount = data.actions.filter((a) => a.status === 'Expired' && (a.conferenceId === conferenceId || !a.conferenceId)).length;
   const ignoredCount = data.emails.filter((e) => e.status === 'Ignored' && (!e.conferenceId || e.conferenceId === conferenceId)).length;
   const triage = sortActions(pool.filter((a) => !a.conferenceId), data, sort);
   const actions = sortActions(
     pool.filter((a) => a.conferenceId === conferenceId && (focus === 'all' || actionKind(a, data).id === focus)),
     data,
     sort,
-  ).sort((x, y) => Number(y.status === 'Acknowledged') - Number(x.status === 'Acknowledged'));
+  )
+    // Escalations always on top (whatever the sort), then items you acknowledged.
+    .sort(
+      (x, y) =>
+        Number(actionKind(y, data).id === 'escalation') - Number(actionKind(x, data).id === 'escalation') ||
+        Number(y.status === 'Acknowledged') - Number(x.status === 'Acknowledged'),
+    );
+  // Keep items about the same meeting (or issuer × investor) together under one heading.
+  const groupKey = (a: Action) => {
+    const x = askOf(a, data).extraction;
+    return a.meetingId || x?.meetingId || (a.issuerId && a.investorId ? `${a.issuerId}|${a.investorId}` : a.id);
+  };
+  const groupSize = new Map<string, number>();
+  for (const a of actions) groupSize.set(groupKey(a), (groupSize.get(groupKey(a)) || 0) + 1);
+  const firstAt = new Map<string, number>();
+  actions.forEach((a, i) => !firstAt.has(groupKey(a)) && firstAt.set(groupKey(a), i));
+  actions.sort((x, y) => firstAt.get(groupKey(x))! - firstAt.get(groupKey(y))!);
   const kindCount = (k: KindId) => work.conference.filter((a) => actionKind(a, data).id === k).length;
   const showTriageLane = (focus === 'all' || focus === 'triage') && triage.length > 0;
   const visible = [...(showTriageLane ? triage : []), ...(focus !== 'triage' ? actions : [])];
@@ -1484,11 +1501,19 @@ function QueueView({
       notify(e instanceof Error ? e.message : 'Bulk approval failed.', true);
     }
   }
-  async function rejectOne(a: Action) {
-    const reason = window.prompt(`Reject “${a.title}”? Give a short reason (shared with the requester).`);
-    if (reason === null) return;
-    if (a.proposalId) await run('review', { id: a.proposalId, decision: 'reject', note: reason || 'Rejected from the queue' }, 'Ask rejected.');
-    else await run('action', { id: a.id, status: 'Rejected' }, 'Action rejected');
+  // Reject asks for a reason inline (no browser prompt); the row shows a small form.
+  const [rejecting, setRejecting] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  function rejectOne(a: Action) {
+    setRejecting(a.id);
+    setRejectReason('');
+  }
+  async function confirmReject(a: Action) {
+    const reason = rejectReason.trim() || 'Rejected from the queue';
+    const ok = a.proposalId
+      ? await run('review', { id: a.proposalId, decision: 'reject', note: reason }, 'Ask rejected. Reopen it from Status → Rejected.')
+      : await run('action', { id: a.id, status: 'Rejected' }, 'Action rejected');
+    if (ok) setRejecting(null);
   }
   // Keyboard: j/k move, Enter or e open, a approve (clean items only), r reject, x select.
   const keyState = useRef({ visible, cursor });
@@ -1532,7 +1557,7 @@ function QueueView({
     const email = askOf(a, data).email;
     const index = visible.indexOf(a);
     return (
-      <div className={`decision-row kind-${kind.id} ${index === cursor ? 'kbd-focus' : ''}`} key={a.id} onMouseEnter={() => setCursor(index)}>
+      <div className={`decision-row kind-${kind.id} ${index === cursor ? 'kbd-focus' : ''}`} key={a.id}>
         <span className="decision-priority-mark" />
         <label className="bulk-check" title={clean(a) ? 'Select for bulk approve' : 'Needs a full review (not eligible for bulk approve)'}>
           <input
@@ -1549,6 +1574,7 @@ function QueueView({
             {pos && <span className="ask-pos">{pos}</span>}
             {a.status === 'Acknowledged' && <span className="mini-flag amber">Acknowledged · yours</span>}
             {a.priority === 'Urgent' && a.status !== 'Acknowledged' && <span className="mini-flag red">Urgent</span>}
+            {a.status === 'Expired' && <span className="mini-flag">Expired · {a.recommendation}</span>}
             {email?.senderStatus === 'unverified' && <span className="mini-flag red">Sender not verified</span>}
           </div>
           <h3>
@@ -1578,6 +1604,13 @@ function QueueView({
             <MoreHorizontal size={17} />
           </button>
         </div>
+        {rejecting === a.id && (
+          <form className="inline-reject" onSubmit={(ev) => { ev.preventDefault(); void confirmReject(a); }}>
+            <input autoFocus aria-label="Reason for rejecting" placeholder="Reason (shared with the requester)" value={rejectReason} onChange={(ev) => setRejectReason(ev.target.value)} onKeyDown={(ev) => ev.key === 'Escape' && setRejecting(null)} />
+            <Button size="sm" variant="destructive" type="submit">Reject</Button>
+            <button type="button" className="text-button" onClick={() => setRejecting(null)}>Cancel</button>
+          </form>
+        )}
         {expanded === a.id && (
           <div className="decision-details">
             <span>Owner</span>
@@ -1592,6 +1625,9 @@ function QueueView({
               ))}
             </select>
             <div />
+            {['Rejected', 'Expired', 'Resolved'].includes(a.status) && (
+              <Button size="sm" variant="outline" onClick={() => run('reopen', { actionId: a.id }, 'Reopened: back in the queue.')}>Reopen</Button>
+            )}
             {a.status === 'Open' && !a.emailId && (
               <>
                 <Button size="sm" variant="ghost" onClick={() => run('action', { id: a.id, status: 'Rejected' }, 'Action rejected')}>Reject</Button>
@@ -1622,6 +1658,7 @@ function QueueView({
           </button>
         </div>
       </div>
+      <HoldsBar data={data} run={run} />
       <div className="decision-summary">
         <div>
           <strong>{kindCount('escalation')}</strong>
@@ -1664,10 +1701,15 @@ function QueueView({
             </div>
             <button className={`chip ${urgentOnly ? 'active' : ''}`} aria-pressed={urgentOnly} onClick={() => setUrgentOnly(!urgentOnly)}>Urgent</button>
             {ignoredCount > 0 && <button className="chip" onClick={onOpenIgnored}>Ignored <span>{ignoredCount}</span></button>}
+            {expiredCount > 0 && (
+              <button className={`chip ${status === 'Expired' ? 'active' : ''}`} onClick={() => setStatus(status === 'Expired' ? 'Open' : 'Expired')}>
+                Expired <span>{expiredCount}</span>
+              </button>
+            )}
             <button className={`chip ${dense ? 'active' : ''}`} aria-pressed={dense} onClick={() => setDense(!dense)}>Dense</button>
             <SortToggle value={sort} onChange={setSort} />
             <select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>
-              {['Open', 'Resolved', 'Rejected', 'All'].map((s) => <option key={s}>{s}</option>)}
+              {['Open', 'Resolved', 'Rejected', 'Expired', 'All'].map((s) => <option key={s}>{s}</option>)}
             </select>
           </div>
         </div>
@@ -1705,7 +1747,26 @@ function QueueView({
             <div className="decision-list">{triage.map(row)}</div>
           </div>
         )}
-        {focus !== 'triage' && <div className={`decision-list ${dense ? 'dense' : ''}`}>{actions.map(row)}</div>}
+        {focus !== 'triage' && (
+          <div className={`decision-list ${dense ? 'dense' : ''}`}>
+            {actions.map((a, i) => {
+              const key = groupKey(a);
+              const size = groupSize.get(key) || 1;
+              const head = size > 1 && (i === 0 || groupKey(actions[i - 1]) !== key);
+              return (
+                <Fragment key={a.id}>
+                  {head && (
+                    <div className="group-head">
+                      {size} asks about {n.issuer(a.issuerId)}
+                      {a.investorId ? ` × ${n.investor(a.investorId)}` : ''}
+                    </div>
+                  )}
+                  {row(a)}
+                </Fragment>
+              );
+            })}
+          </div>
+        )}
         {!actions.length && !showTriage && (
           <Empty
             title="Nothing waiting on you"

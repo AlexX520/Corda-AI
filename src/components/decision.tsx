@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AppState, EmailItem, RequestItem } from '@/lib/types';
 import type { Extraction } from '@/lib/extraction-schema';
 import { duplicatesFor, findCandidates, isOpenMeeting, isOpenRequest, windowLabel } from '@/lib/review-rules';
@@ -29,6 +29,7 @@ type Check = {
 };
 const MEETING_OPS = ['cancel', 'reschedule', 'update'];
 
+export type Outcome = { kind: string; meetingId?: string | null; text: string };
 export function EmailDecision({
   email,
   proposal,
@@ -42,7 +43,7 @@ export function EmailDecision({
   proposal: ProposalItem;
   data: AppState;
   run: Run;
-  onDone: () => void;
+  onDone: (outcome?: Outcome | null) => void;
   onReply: () => void;
   onOpenEmail?: (id: string) => void;
 }) {
@@ -54,6 +55,8 @@ export function EmailDecision({
   const [showEmail, setShowEmail] = useState(false);
   const [showEditor, setShowEditor] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const outcomeRef = useRef<Outcome | null>(null);
+  const [rejectOpen, setRejectOpen] = useState(false);
   const [note, setNote] = useState(proposal.reviewNote || '');
   const [trustReason, setTrustReason] = useState('');
   const [extraMeeting, setExtraMeeting] = useState(false);
@@ -73,8 +76,8 @@ export function EmailDecision({
   const escalation = e.category === 'Escalation / complaint';
   const needsMeeting = MEETING_OPS.includes(op);
   const needsRequest = op === 'confirm';
-  const meetingPick = findCandidates(e, data.meetings, { zone, trusted: !suspicious, open: isOpenMeeting, n });
-  const requestPick = findCandidates(e, data.requests, { zone, trusted: !suspicious, open: isOpenRequest, n, noun: 'request' });
+  const meetingPick = findCandidates(e, data.meetings, { zone, trusted: !suspicious, open: isOpenMeeting, n, now: new Date(data.now) });
+  const requestPick = findCandidates(e, data.requests, { zone, trusted: !suspicious, open: isOpenRequest, n, noun: 'request', now: new Date(data.now) });
   // "Please drop the Apollo request": a cancellation can be about an open request.
   const cancelRequest = op === 'cancel' && !meetingPick.candidates.length && requestPick.candidates.length > 0;
   const [meetingId, setMeetingId] = useState(meetingPick.preselectId || '');
@@ -87,7 +90,21 @@ export function EmailDecision({
   const req = data.requests.find((r) => r.id === requestId);
   const issues = realUncertainties(e);
   const hasSelectUncertainty = (e.uncertainties || []).some((u) => u.startsWith(SELECT_UNCERTAINTY));
-  const dupes = e.category === 'New Meeting Request' ? duplicatesFor(e, data.meetings, data.requests) : [];
+  // An email that asks for / accepts a time with a known counterpart answers an open request for
+  // the same pair: approving confirms that request at the email's time (no duplicate, no second page).
+  const isNew = e.category === 'New Meeting Request';
+  const openReq = isNew
+    ? data.requests.find(
+        (r) =>
+          isOpenRequest(r.status) &&
+          r.issuerId === e.issuerId &&
+          r.investorId === e.investorId &&
+          (!e.conferenceId || r.conferenceId === e.conferenceId) &&
+          +new Date(r.end) > +new Date(data.now),
+      )
+    : undefined;
+  const [confirmNow, setConfirmNow] = useState(false);
+  const dupes = isNew ? duplicatesFor(e, data.meetings, data.requests).filter((d) => d.item.id !== openReq?.id) : [];
   const waiting = proposal.status === 'Clarification requested';
   const done = DONE.includes(proposal.status);
   const issuerRow = data.issuers.find((i) => i.id === e.issuerId) as (AppState['issuers'][number] & { holdChanges?: boolean; holdReason?: string }) | undefined;
@@ -137,7 +154,11 @@ export function EmailDecision({
       .map((p) => ({ email: x, p })),
   );
   const newer = data.emails.filter(
-    (x) => x.threadId === email.threadId && x.id !== email.id && (x.receivedAt > email.receivedAt || (x.receivedAt === email.receivedAt && x.id > email.id)),
+    (x) =>
+      x.threadId === email.threadId &&
+      x.id !== email.id &&
+      x.status !== 'Quarantined' && // reported phishing never shows as a normal reply
+      (x.receivedAt > email.receivedAt || (x.receivedAt === email.receivedAt && x.id > email.id)),
   );
   const softOutside = (check?.soft || []).some((x) => x.startsWith('Outside'));
   // Who asked: an issuer moving its own meeting phrases it as asking the investor, and vice versa.
@@ -170,6 +191,7 @@ export function EmailDecision({
   if (needsMeeting && !cancelRequest && !meetingId) blockers.push('Pick the meeting this is about.');
   if ((needsRequest || cancelRequest) && !requestId) blockers.push('Pick the request.');
   if (e.category === 'New Meeting Request' && newWindows.length !== 1) blockers.push('Needs exactly one requested time.');
+  if (isNew && openReq && !confirmNow) blockers.push('Tick that the issuer agreed to confirm the open request.');
   if (op === 'reschedule' && !newWindows.length) blockers.push('Needs the new time.');
   if (['add', 'remove', 'replace'].includes(op) && !newWindows.length && !blockedWindows.length)
     blockers.push('No exact times — ask the sender or add them.');
@@ -209,8 +231,9 @@ export function EmailDecision({
         note: finalNote,
         uncertaintyResolved: decision === 'approve',
         replaceConfirmed: decision === 'approve' && op === 'replace',
-        consent: decision === 'approve' && (needsMeeting || needsRequest || cancelRequest),
-        requestId: requestId || undefined,
+        consent: decision === 'approve' && (needsMeeting || needsRequest || cancelRequest || (isNew && confirmNow)),
+        confirmNow: decision === 'approve' && isNew && confirmNow,
+        requestId: (isNew ? openReq?.id : requestId) || undefined,
         meetingId: (!cancelRequest && meetingId) || undefined,
         senderOverride: decision === 'approve' && unverified && trustReason.trim().length >= 10,
         duplicateConfirmed: extraMeeting,
@@ -222,7 +245,11 @@ export function EmailDecision({
         protectedOverride: protectedOverride || undefined,
       },
       decision === 'approve'
-        ? 'Approved. Schedule updated.'
+        ? (r: unknown) => {
+            const o = (r as { outcome?: Outcome } | null)?.outcome;
+            outcomeRef.current = o || null;
+            return o?.text || 'Approved. Schedule updated.';
+          }
         : decision === 'reject'
           ? 'Rejected. Nothing changed on the schedule.'
           : decision === 'acknowledge'
@@ -236,7 +263,7 @@ export function EmailDecision({
                   : 'Edits saved',
     );
     setBusy(false);
-    if (ok && !['edit', 'refresh'].includes(decision)) onDone();
+    if (ok && !['edit', 'refresh'].includes(decision)) onDone(decision === 'approve' ? outcomeRef.current : null);
   }
 
   const offered = (w: Extraction['windows'][number]) =>
@@ -262,8 +289,8 @@ export function EmailDecision({
       {(otherAsks.length > 0 || newer.length > 0) && !done && (
         <div className="related" role="note">
           {newer.map((x) => (
-            <button key={x.id} className="related-item newer" onClick={() => onOpenEmail?.(x.id)}>
-              <strong>Newer reply from {x.originalSenderName || x.sender}</strong> · {fmt(x.receivedAt, zone, 'EEE h:mm a')}:{' '}
+            <button key={x.id} className={`related-item newer ${x.suspicious ? 'danger' : ''}`} onClick={() => onOpenEmail?.(x.id)}>
+              <strong>{x.suspicious ? 'Suspicious message (not verified) from ' : 'Newer reply from '}{x.originalSenderName || x.sender}</strong> · {fmt(x.receivedAt, zone, 'EEE h:mm a')}:{' '}
               {x.proposals.map((p) => p.summary).join(' · ') || x.subject}
             </button>
           ))}
@@ -623,7 +650,7 @@ export function EmailDecision({
           <Button className="danger" disabled={busy} onClick={() => decide('quarantine')}>
             Report phishing / quarantine
           </Button>
-          <Button variant="outline" disabled={busy} onClick={() => decide('reject')}>
+          <Button variant="outline" disabled={busy} onClick={() => (rejectOpen ? decide('reject') : setRejectOpen(true))}>
             Reject
           </Button>
           {unverified ? null : (
@@ -665,6 +692,20 @@ export function EmailDecision({
           </ConfirmStrip>
         ) : (
           <>
+            {isNew && newWindows.length === 1 && (
+              <div className="consent-row answer-row">
+                {openReq && (
+                  <p>
+                    This email answers the open request <b>{n.investor(openReq.investorId)} × {n.issuer(openReq.issuerId)}</b> ({fmt(openReq.start, zone, 'EEE h:mm a')}). Approving confirms it at{' '}
+                    <b>{fmt(newWindows[0].start, zone, 'EEE h:mm a')}</b> and closes the request.
+                  </p>
+                )}
+                <label className="check">
+                  <input type="checkbox" checked={confirmNow} onChange={(ev) => setConfirmNow(ev.target.checked)} />
+                  <span>{issuer} agreed to this time — confirm the meeting now{openReq ? '' : ' (otherwise a request is created)'}</span>
+                </label>
+              </div>
+            )}
             {op === 'reschedule' && (
               <div className="consent-row">
                 <span>Agreed by</span>
@@ -680,15 +721,28 @@ export function EmailDecision({
             )}
             <div className="dc-actions">
               <Button disabled={busy || !canApprove} onClick={() => setConfirming(true)}>
-                <Check size={14} /> Approve
+                <Check size={14} />{' '}
+                {isNew && newWindows.length === 1
+                  ? openReq
+                    ? `Confirm request at ${fmt(newWindows[0].start, zone, 'EEE h:mm a')}`
+                    : confirmNow
+                      ? 'Confirm meeting'
+                      : 'Create request'
+                  : 'Approve'}
               </Button>
               <Button variant="outline" disabled={busy} onClick={onReply}>
                 <Mail size={14} /> Reply to {asker}
               </Button>
-              <Button variant="ghost" disabled={busy} onClick={() => decide('reject')}>
+              <Button variant="ghost" disabled={busy} onClick={() => (rejectOpen ? decide('reject') : setRejectOpen(true))}>
                 Reject
               </Button>
             </div>
+            {rejectOpen && (
+              <div className="inline-reject">
+                <input autoFocus aria-label="Reason for rejecting" placeholder="Reason (shared with the requester), then press Reject again" value={note} onChange={(ev) => setNote(ev.target.value)} />
+                <button className="text-button" onClick={() => setRejectOpen(false)}>Cancel</button>
+              </div>
+            )}
             {!canApprove && <p className="dc-blockers">To approve: {blockers.join(' ')}</p>}
           </>
         ))}

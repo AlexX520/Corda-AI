@@ -14,6 +14,7 @@ import {
 } from './allocation';
 import { overlaps } from './scheduling';
 import { formatInTimeZone } from 'date-fns-tz';
+import { now } from './clock';
 
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -71,7 +72,8 @@ export function isManualLocation(location: string | null, cubeLabels: string[]) 
 async function loadInputs(tx: Tx | typeof db, conferenceId: string) {
   const conference = await tx.conference.findUniqueOrThrow({ where: { id: conferenceId } });
   const meetingsRaw = await tx.meeting.findMany({
-    where: { conferenceId, status: 'Confirmed' },
+    // Only meetings still to come are (re)allocated; the past stays as it happened.
+    where: { conferenceId, status: 'Confirmed', start: { gt: now() } },
     orderBy: { start: 'asc' },
   });
   const requirements = await tx.meetingCoverageRequirement.findMany({
