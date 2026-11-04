@@ -51,6 +51,7 @@ import { computeMetrics, extractionEdited } from './metrics';
 import { availabilityMode } from './review-rules';
 import { mockExtractAsks } from './rule-parser';
 import { now } from './clock';
+import { seedDemo } from './demo-seed';
 import { getResourceState, handleResourceCommand } from './resource-service';
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -2271,6 +2272,18 @@ export async function command(user: User, type: string, input: unknown): Promise
     await db.exportLog.update({ where: { id: last.id }, data: { sentAt: now() } });
     await db.auditLog.create({ data: { actorId: user.id, action: 'Planner marked as sent', entityType: 'ExportLog', entityId: last.id, note: `${p.scope}${p.audienceId ? ` · ${p.audienceId}` : ''}`, after: { meetings: last.meetingIds.length } } });
     return { ok: true, meetings: last.meetingIds.length };
+  }
+  if (type === 'demoReset') {
+    // Demo mode only: managers can move the demo onto today (same as DEMO_RESEED=true).
+    if (process.env.DEMO_MODE !== 'true') throw new Error('Demo reset is only available in demo mode.');
+    if (user.role !== 'MANAGER') throw new Error('Forbidden');
+    z.object({ confirm: z.literal('RESET') }).parse(input);
+    const at = now();
+    // One transaction: if anything fails, the previous demo data stays as it was.
+    const summary = await db.$transaction((tx) => seedDemo(tx, { reseed: true, now: at }), { timeout: 55000, maxWait: 10000 });
+    // The wipe clears the audit trail, so the reset itself is the first entry of the new one.
+    await db.auditLog.create({ data: { actorId: user.id, action: 'Demo reset to today', entityType: 'Conference', entityId: 'abs-east', createdAt: at, note: summary.split('\n').pop() || null } });
+    return { ok: true, summary };
   }
   if (type === 'ping') return { ok: true }; // lets the client refresh after a batch of direct calls
   if (type === 'markSeen') {

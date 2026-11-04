@@ -131,6 +131,8 @@ export function Workspace() {
   const [data, setData] = useState<AppState | null>(null),
     [page, setPage] = useState('overview'),
     [askOpen, setAskOpen] = useState(false),
+    [resetOpen, setResetOpen] = useState(false),
+    [resetText, setResetText] = useState(''),
     [conferenceId, setConferenceId] = useState('abs-east'),
     [search, setSearch] = useState(''),
     [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null),
@@ -913,6 +915,18 @@ export function Workspace() {
               </div>
             </>
           )}
+          {page === 'settings' && manager && data.demo && (
+            <div className="panel settings-panel">
+              <h3>Demo data</h3>
+              <p className="muted">
+                Moves the demo onto today: ABS East runs yesterday → tomorrow with fresh meetings, queue items and
+                history. Everything entered in the demo so far is deleted (users and Outlook links are kept).
+              </p>
+              <div className="dc-actions">
+                <Button variant="destructive" onClick={() => setResetOpen(true)}>Reset demo to today…</Button>
+              </div>
+            </div>
+          )}
           {page === 'audit' && (
             <AuditTrail
               key={JSON.stringify(auditFilter)}
@@ -1000,6 +1014,34 @@ export function Workspace() {
           run={run}
         />
       )}
+      <Dialog
+        open={resetOpen}
+        onOpenChange={setResetOpen}
+        title="Reset the demo to today?"
+        description="All demo meetings, emails, drafts and the audit trail are replaced with a fresh mid-conference demo. This cannot be undone."
+      >
+        <div className="form-grid">
+          <Field label='Type RESET to confirm'>
+            <input value={resetText} onChange={(e) => setResetText(e.target.value)} placeholder="RESET" />
+          </Field>
+          <div className="dc-actions">
+            <Button
+              variant="destructive"
+              disabled={resetText !== 'RESET' || busy}
+              onClick={async () => {
+                if (await run('demoReset', { confirm: 'RESET' }, 'Demo reset to today.')) {
+                  setResetOpen(false);
+                  setResetText('');
+                  navigate('overview');
+                }
+              }}
+            >
+              {busy ? 'Resetting…' : 'Reset demo'}
+            </Button>
+            <Button variant="outline" onClick={() => setResetOpen(false)}>Cancel</Button>
+          </div>
+        </div>
+      </Dialog>
       {askOpen && (
         <Sheet open onOpenChange={(v) => !v && setAskOpen(false)} title="Ask Corda" description="Read-only answers from the schedule and its history, with sources.">
           <AskPanel data={data} compact onOpenMeeting={(id) => { setAskOpen(false); setMeetingId(id); }} />
