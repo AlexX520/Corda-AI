@@ -1177,9 +1177,18 @@ export async function command(user: User, type: string, input: unknown): Promise
     // Time zones said in the email ("2:00pm CT") are spelled out against the event's zone.
     if (target && e.conferenceId) {
       const c = await db.conference.findUniqueOrThrow({ where: { id: e.conferenceId } });
-      const said = [...e.evidence, target.evidence].join(' ').match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(CT|CST|CDT|Central|MT|Mountain|PT|PST|PDT|Pacific|UK|GMT|BST|London)\b/i);
-      const zoneName = formatInTimeZone(new Date(target.start), c.timezone, 'zzz');
-      if (said) out.timeNote = `${said[1].toUpperCase().replace(/\s+/g, ' ')} ${said[2]} = ${formatInTimeZone(new Date(target.start), c.timezone, 'h:mm a')} ${zoneName} (event time)`;
+      const said = [...e.evidence, target.evidence].join(' ').match(/\b(CT|CST|CDT|Central|MT|MST|MDT|Mountain|PT|PST|PDT|Pacific|UK|GMT|BST|London)\b/i);
+      const ZONES: Record<string, [string, string]> = {
+        c: ['America/Chicago', 'CT'], m: ['America/Denver', 'MT'], p: ['America/Los_Angeles', 'PT'], u: ['Europe/London', 'UK'], g: ['Europe/London', 'UK'], b: ['Europe/London', 'UK'], l: ['Europe/London', 'UK'],
+      };
+      const short = (z: string) => (z === 'America/New_York' ? 'ET' : z === 'America/Chicago' ? 'CT' : z === 'America/Los_Angeles' ? 'PT' : formatInTimeZone(new Date(target.start), z, 'zzz'));
+      if (said) {
+        const [srcZone, label] = ZONES[said[1][0].toLowerCase()];
+        if (srcZone !== c.timezone) {
+          const span = (z: string) => `${formatInTimeZone(new Date(target.start), z, 'h:mm')}–${formatInTimeZone(new Date(target.end), z, 'h:mm a')}`;
+          out.timeNote = `${span(srcZone)} ${label} = ${span(c.timezone)} ${short(c.timezone)} (event time)`;
+        }
+      }
       if (meeting && e.operation === 'reschedule' && +new Date(target.start) === +meeting.start)
         out.timeNote = `${out.timeNote ? `${out.timeNote} — ` : ''}same time as now: no time change. Handle the rest of the ask (e.g. dial-in or room) instead.`;
     }

@@ -248,7 +248,7 @@ export function requestOwner(
  * "can ALSO do 9–11" / "in addition" adds to what is already there (extend).
  */
 export function availabilityMode(text: string): 'narrow' | 'extend' {
-  return /\b(also|additionally|in addition|as well|another window|extra (?:slot|window|time)s?)\b/i.test(text) ? 'extend' : 'narrow';
+  return /\b(also|additionally|in addition|as well|another window|add-on|extra (?:slot|window|time|call)s?)\b/i.test(text) ? 'extend' : 'narrow';
 }
 
 /**
