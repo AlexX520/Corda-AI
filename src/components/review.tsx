@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { Sheet } from './ui/sheet';
 import { EmailDecision, type Outcome } from './decision';
+import { unhandledSentences } from '@/lib/review-rules';
 import type { Extraction } from '@/lib/extraction-schema';
 import { EventSelect } from './extraction-form';
 import { Badge, Field, fmt, names, Run } from './shared';
@@ -42,7 +43,7 @@ export function EmailReview({
   data: AppState;
   close: () => void;
   run: Run;
-  onReply: (emailId: string) => void;
+  onReply: (emailId: string, extraQuestions?: string[]) => void;
   onOpenEmail?: (id: string) => void;
 }) {
   const n = names(data);
@@ -80,6 +81,13 @@ export function EmailReview({
     else if (!changed) close();
   };
   const openAsks = asks.filter((p) => p.status === 'Pending');
+  const loose = unhandledSentences(
+    email.newContent,
+    asks.flatMap((p) => {
+      const x = p.extraction as unknown as Extraction;
+      return [...(x?.evidence || []), ...(x?.windows || []).map((w) => w.evidence)];
+    }),
+  );
   const [applyAll, setApplyAll] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [applyResult, setApplyResult] = useState<string[] | null>(null);
@@ -275,6 +283,24 @@ export function EmailReview({
               </button>
             );
           })}
+        </div>
+      )}
+      {!ignored && !email.suspicious && loose.length > 0 && isDesk(data.user.role) && (
+        <div className="loose-sentences">
+          <span className="dc-label">Not covered by an ask</span>
+          {loose.map((x) => (
+            <div key={x.text} className={x.question ? 'question' : ''}>
+              <span>{x.question ? '❓ ' : ''}“{x.text}”</span>
+              <div className="dc-actions">
+                <button className="text-button" disabled={busy} onClick={() => run('addAsk', { emailId: email.id, text: x.text }, 'Added as an ask.')}>
+                  Add as ask
+                </button>
+                <button className="text-button" onClick={() => onReply(email.id, [x.text])}>
+                  Add as question to reply
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
       {proposal ? (

@@ -1,4 +1,5 @@
 'use client';
+import { useEffect, useState } from 'react';
 import { AlertTriangle, CalendarRange, Clock3, Inbox, Users } from 'lucide-react';
 import type { AppState } from '@/lib/types';
 import { Badge, Empty, fmt } from './shared';
@@ -8,9 +9,9 @@ const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v * 100)}%
 const hours = (h: number | null) => (h === null ? '—' : h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${Math.round(h * 10) / 10} h` : `${Math.round(h / 24)} d`);
 const age = (h: number) => (h < 24 ? `${h} h` : `${Math.round(h / 24)} d`);
 
-function Kpi({ label, value, hint, tone }: { label: string; value: string | number; hint?: string; tone?: 'amber' | 'red' }) {
+function Kpi({ label, value, hint, tone, onClick }: { label: string; value: string | number; hint?: string; tone?: 'amber' | 'red'; onClick?: () => void }) {
   return (
-    <div className={`kpi ${tone || ''}`}>
+    <div className={`kpi ${tone || ''} ${onClick ? 'clickable' : ''}`} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined} onClick={onClick} onKeyDown={(e) => onClick && e.key === 'Enter' && onClick()}>
       <span>{label}</span>
       <strong>{value}</strong>
       {hint && <small>{hint}</small>}
@@ -19,9 +20,37 @@ function Kpi({ label, value, hint, tone }: { label: string; value: string | numb
 }
 
 /** Manager home: every event, computed from the live records (plus clearly marked demo history). */
-export function ManagerHome({ data, onOpenEvent, onOpenQueue }: { data: AppState; onOpenEvent: (id: string) => void; onOpenQueue: () => void }) {
-  const m = data.metrics as M | null;
-  if (!m) return <Empty title="No metrics" description="Team metrics are available to managers." />;
+export type Drill = { scope?: 'mine' | 'issuers' | 'everyone'; owner?: string; urgent?: boolean; focus?: 'escalation' | 'all'; status?: string };
+export function ManagerHome({
+  data,
+  onOpenEvent,
+  onOpenQueue,
+  onOpenMeetings,
+  onOpenEmail,
+  onOpenAudit,
+}: {
+  data: AppState;
+  onOpenEvent: (id: string) => void;
+  onOpenQueue: (d?: Drill) => void;
+  onOpenMeetings: (conferenceId?: string) => void;
+  onOpenEmail: (id: string) => void;
+  onOpenAudit: (q?: Record<string, string>) => void;
+}) {
+  // Event picker: "All events" uses the metrics in the app state; one event is fetched filtered.
+  const [eventId, setEventId] = useState('');
+  const [scoped, setScoped] = useState<M | null>(null);
+  useEffect(() => {
+    if (!eventId) return setScoped(null);
+    let live = true;
+    void fetch('/api/commands', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'metrics', data: { conferenceId: eventId } }) })
+      .then((r) => r.json())
+      .then((j) => live && setScoped(j.result));
+    return () => {
+      live = false;
+    };
+  }, [eventId, data.metrics?.generatedAt]);
+  const m = (eventId ? scoped : data.metrics) as M | null;
+  if (!m) return <Empty title="Loading metrics" description="Team metrics are available to managers." />;
   const handled = m.emails.approvedClean + m.emails.approvedEdited + m.emails.rejected;
   const share = (n: number) => (handled ? `${Math.round((n / handled) * 100)}%` : '—');
   return (
@@ -29,16 +58,21 @@ export function ManagerHome({ data, onOpenEvent, onOpenQueue }: { data: AppState
       <div className="page-heading">
         <div>
           <h1>Team overview</h1>
-          <p>All events · updated {fmt(m.generatedAt, data.conferences[0]?.timezone, 'MMM d, h:mm a')}</p>
+          <p>{eventId ? data.conferences.find((c) => c.id === eventId)?.name : 'All events'} · updated {fmt(m.generatedAt, data.conferences[0]?.timezone, 'MMM d, h:mm a')}</p>
         </div>
+        <select aria-label="Event" className="compact-select" value={eventId} onChange={(e) => setEventId(e.target.value)}>
+          <option value="">All events</option>
+          {data.conferences.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
       </div>
       <div className="kpi-row">
-        <Kpi label="Confirmed meetings" value={m.totals.meetings} />
-        <Kpi label="Fill rate" value={pct(m.totals.rate)} hint={`${m.totals.confirmed} of ${m.totals.requested} requests`} />
+        <Kpi label="Confirmed meetings" value={m.totals.meetings} onClick={() => onOpenMeetings(eventId || undefined)} />
+        <Kpi label="Fill rate" value={pct(m.totals.rate)} hint={`${m.totals.confirmed} of ${m.totals.requested} requests`} onClick={() => onOpenMeetings(eventId || undefined)} />
         <Kpi label="Median time to confirm" value={hours(m.totals.medianHoursToConfirm)} hint={`${m.totals.confirmedFromRequests} requests`} />
-        <Kpi label="Open items" value={m.totals.openItems} />
-        <Kpi label="Escalations open" value={m.totals.escalationsOpen} tone={m.totals.escalationsOpen ? 'red' : undefined} />
-        <Kpi label="Issuer emails > 4 h" value={m.totals.unansweredIssuerEmails} tone={m.totals.unansweredIssuerEmails ? 'amber' : undefined} hint="waiting on us" />
+        <Kpi label="Open items" value={m.totals.openItems} onClick={() => onOpenQueue({ scope: 'everyone' })} />
+        <Kpi label="Escalations open" value={m.totals.escalationsOpen} tone={m.totals.escalationsOpen ? 'red' : undefined} onClick={() => onOpenQueue({ scope: 'everyone', focus: 'escalation' })} />
+        <Kpi label="Issuer emails > 4 h" value={m.totals.unansweredIssuerEmails} tone={m.totals.unansweredIssuerEmails ? 'amber' : undefined} hint="waiting on us" onClick={() => m.unanswered[0] && onOpenEmail(m.unanswered[0].id)} />
+        <Kpi label="Asks handled by Corda" value={m.roi.asksHandled} hint={`≈ ${m.roi.hoursSaved} h saved (${m.roi.minutesPerAsk} min per ask, assumed)`} onClick={() => onOpenAudit({ action: '' })} />
       </div>
       <div className="mgr-grid">
         <section className="panel mgr-events">
@@ -71,21 +105,22 @@ export function ManagerHome({ data, onOpenEvent, onOpenQueue }: { data: AppState
           <ul className="mgr-legend">
             <li><i className="clean" /> Approved as read <b>{m.emails.approvedClean}</b> <small>{share(m.emails.approvedClean)}</small></li>
             <li><i className="edited" /> Approved after edits <b>{m.emails.approvedEdited}</b> <small>{share(m.emails.approvedEdited)}</small></li>
-            <li><i className="rejected" /> Rejected <b>{m.emails.rejected}</b> <small>{share(m.emails.rejected)}</small></li>
+            <li><i className="rejected" /> Declined by the desk <b>{m.emails.declined}</b> <small>{share(m.emails.declined)}</small></li>
+            <li><i className="noise" /> Noise / phishing rejected <b>{m.emails.rejectedNoise}</b></li>
             <li><i /> Still pending <b>{m.emails.pending}</b></li>
           </ul>
         </section>
         <section className="panel">
           <div className="panel-heading">
             <h3><Clock3 size={14} /> Open items per coordinator</h3>
-            <button className="text-button" onClick={onOpenQueue}>Open queue</button>
+            <button className="text-button" onClick={() => onOpenQueue({ scope: "everyone" })}>Open queue</button>
           </div>
           <div className="table-scroll">
             <table>
               <thead><tr><th>Coordinator</th><th>Open</th><th>Oldest</th></tr></thead>
               <tbody>
                 {m.openByCoordinator.map((o) => (
-                  <tr key={o.userId || 'none'}><td>{o.name}</td><td>{o.open}</td><td className={o.oldestHours > 24 ? 'warn-text' : ''}>{age(o.oldestHours)}</td></tr>
+                  <tr key={o.userId || 'none'} className="clickable" onClick={() => onOpenQueue({ scope: 'everyone', owner: o.userId || '' })}><td>{o.name}</td><td>{o.open}</td><td className={o.oldestHours > 24 ? 'warn-text' : ''}>{age(o.oldestHours)}</td></tr>
                 ))}
               </tbody>
             </table>
@@ -95,10 +130,10 @@ export function ManagerHome({ data, onOpenEvent, onOpenQueue }: { data: AppState
           <div className="panel-heading"><h3><AlertTriangle size={14} /> Needs attention</h3></div>
           <ul className="mgr-list">
             {m.escalations.map((e) => (
-              <li key={e.id}><Badge tone="red">Escalation</Badge> <span>{e.title}</span> <small>{e.owner} · {age(e.ageHours)}</small></li>
+              <li key={e.id} className="clickable" onClick={() => onOpenQueue({ scope: 'everyone', focus: 'escalation' })}><Badge tone="red">Escalation</Badge> <span>{e.title}</span> <small>{e.owner} · {age(e.ageHours)}</small></li>
             ))}
             {m.unanswered.map((e) => (
-              <li key={e.id}><Badge tone="amber">No reply {age(e.ageHours)}</Badge> <span>{e.issuer}: {e.subject}</span></li>
+              <li key={e.id} className="clickable" onClick={() => onOpenEmail(e.id)}><Badge tone="amber">No reply {age(e.ageHours)}</Badge> <span>{e.issuer}: {e.subject}</span></li>
             ))}
             {!m.escalations.length && !m.unanswered.length && <li className="muted">Nothing overdue.</li>}
           </ul>
@@ -112,7 +147,7 @@ export function ManagerHome({ data, onOpenEvent, onOpenQueue }: { data: AppState
                 {m.workload.map((w) => {
                   const max = Math.max(...m.workload.map((x) => x.meetings), 1);
                   return (
-                    <tr key={w.userId}>
+                    <tr key={w.userId} className="clickable" onClick={() => onOpenQueue({ scope: 'everyone', owner: w.userId })}>
                       <td>{w.name}</td>
                       <td><span className="mgr-meter"><i style={{ width: `${(w.meetings / max) * 100}%` }} /></span>{w.meetings}</td>
                       <td>{w.next7Days}</td>
@@ -126,7 +161,7 @@ export function ManagerHome({ data, onOpenEvent, onOpenQueue }: { data: AppState
         </section>
         <section className="panel">
           <div className="panel-heading"><h3>Meetings per issuer</h3></div>
-          <ul className="mgr-rank">{m.perIssuer.slice(0, 8).map((p) => <li key={p.id}><span>{p.name}</span><b>{p.meetings}</b><small>{p.requested} requested</small></li>)}</ul>
+          <ul className="mgr-rank">{m.perIssuer.slice(0, 8).map((p) => <li key={p.id} className="clickable" onClick={() => onOpenAudit({ issuer: p.id })}><span>{p.name}</span><b>{p.meetings}</b><small>{p.requested} requested</small></li>)}</ul>
         </section>
         <section className="panel">
           <div className="panel-heading"><h3>Meetings per investor</h3></div>

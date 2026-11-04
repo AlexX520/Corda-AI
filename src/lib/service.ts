@@ -13,7 +13,7 @@ import {
   type Extraction,
 } from './extraction';
 import { analyse, type Analysis } from './analysis';
-import { availableSlots, conferenceTime, evaluate, isAvailable, overlaps, validateInterval } from './scheduling';
+import { availableSlots, conferenceTime, evaluate, isAvailable, mergeWindows, overlaps, validateInterval } from './scheduling';
 import {
   domainOf,
   finalizeAsks,
@@ -48,6 +48,8 @@ import { replyInThread, sendMail } from './graph';
 import { parseRequestText } from './request-parser';
 import { answerQuestion, llmPhrase } from './ask';
 import { computeMetrics, extractionEdited } from './metrics';
+import { availabilityMode } from './review-rules';
+import { mockExtractAsks } from './rule-parser';
 import { now } from './clock';
 import { getResourceState, handleResourceCommand } from './resource-service';
 type Tx = Prisma.TransactionClient;
@@ -1091,7 +1093,44 @@ export async function command(user: User, type: string, input: unknown): Promise
       stale: null as string | null,
       hold: issuer?.holdChanges ? issuer.holdReason || 'Client escalation' : null,
       protected: meeting?.protected ? meeting.protectedReason : null,
+      availability: null as null | { mode: 'narrow' | 'extend'; days: { day: string; before: string[]; after: string[]; outside: string[] }[] },
+      timeNote: null as string | null,
     };
+    // Availability: show the per-day diff before approving (narrow = the day becomes exactly these windows).
+    if (['add'].includes(e.operation) && e.conferenceId && e.issuerId) {
+      const c = await db.conference.findUniqueOrThrow({ where: { id: e.conferenceId } });
+      const mode = availabilityMode([...e.evidence, ...e.windows.map((w) => w.evidence)].join(' ') || proposal.email.newContent);
+      const fresh = e.windows.filter((w) => w.kind === 'availability');
+      const dayOf = (d: Date | string) => formatInTimeZone(d, c.timezone, 'yyyy-MM-dd');
+      const label = (w: { start: Date | string; end: Date | string }) => `${formatInTimeZone(w.start, c.timezone, 'h:mm')}–${formatInTimeZone(w.end, c.timezone, 'h:mm a')}`;
+      const current = await db.availability.findMany({ where: { conferenceId: c.id, issuerId: e.issuerId, kind: 'Available' }, orderBy: { start: 'asc' } });
+      const booked = await db.meeting.findMany({ where: { conferenceId: c.id, issuerId: e.issuerId, status: 'Confirmed' } });
+      const days = [...new Set(fresh.map((w) => dayOf(w.start)))];
+      out.availability = {
+        mode,
+        days: days.map((day) => {
+          const before = current.filter((w) => dayOf(w.start) === day);
+          const added = fresh.filter((w) => dayOf(w.start) === day).map((w) => ({ start: new Date(w.start), end: new Date(w.end) }));
+          const after = mode === 'narrow' ? added : mergeWindows([...before, ...added]).map((w) => ({ start: new Date(w.start), end: new Date(w.end) }));
+          const outside = booked.filter((m) => dayOf(m.start) === day && !after.some((w) => +w.start <= +m.start && +w.end >= +m.end));
+          return {
+            day: formatInTimeZone(new Date(`${day}T17:00:00Z`), 'UTC', 'EEE MMM d'),
+            before: before.map(label),
+            after: after.map(label),
+            outside: outside.map((m) => `${investors.find((i) => i.id === m.investorId)?.name} ${formatInTimeZone(m.start, c.timezone, 'h:mm a')}`),
+          };
+        }),
+      };
+    }
+    // Time zones said in the email ("2:00pm CT") are spelled out against the event's zone.
+    if (target && e.conferenceId) {
+      const c = await db.conference.findUniqueOrThrow({ where: { id: e.conferenceId } });
+      const said = [...e.evidence, target.evidence].join(' ').match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(CT|CST|CDT|Central|MT|Mountain|PT|PST|PDT|Pacific|UK|GMT|BST|London)\b/i);
+      const zoneName = formatInTimeZone(new Date(target.start), c.timezone, 'zzz');
+      if (said) out.timeNote = `${said[1].toUpperCase().replace(/\s+/g, ' ')} ${said[2]} = ${formatInTimeZone(new Date(target.start), c.timezone, 'h:mm a')} ${zoneName} (event time)`;
+      if (meeting && e.operation === 'reschedule' && +new Date(target.start) === +meeting.start)
+        out.timeNote = `${out.timeNote ? `${out.timeNote} — ` : ''}same time as now: no time change. Handle the rest of the ask (e.g. dial-in or room) instead.`;
+    }
     if (meeting?.changedAt && +meeting.changedAt > +(proposal.refreshedAt ?? proposal.createdAt)) {
       const who = meeting.changedBy ? (await db.user.findUnique({ where: { id: meeting.changedBy } }))?.name : null;
       out.stale = `${meeting.changeSummary || 'Updated'}${who ? ` by ${who}` : ''}`;
@@ -1609,16 +1648,24 @@ export async function command(user: User, type: string, input: unknown): Promise
             await tx.availability.deleteMany({
               where: { conferenceId: c.id, issuerId: e.issuerId, kind: 'Available' },
             });
-          for (const w of windows)
+          // Issuer says "free 9–11 and 2–4 Wed": that day becomes exactly those windows (narrow),
+          // unless it says it can ALSO do them (extend). The first window of a day narrows, the rest add.
+          const mode = e.operation === 'add' ? availabilityMode([...e.evidence, ...windows.map((w) => w.evidence)].join(' ') || email.newContent) : 'extend';
+          const seenDay = new Set<string>();
+          for (const w of windows) {
+            const day = formatInTimeZone(w.start, c.timezone, 'yyyy-MM-dd');
+            const narrowNow = mode === 'narrow' && !seenDay.has(day);
+            seenDay.add(day);
             await applyAvailability(tx, user, {
               ...w,
               conferenceId: c.id,
               issuerId: e.issuerId,
-              operation: e.operation === 'replace' ? 'add' : (e.operation as 'add' | 'remove'),
+              operation: narrowNow ? 'narrow' : e.operation === 'replace' ? 'add' : (e.operation as 'add' | 'remove'),
               kind: e.tentative ? 'Hold' : 'Available',
               replaceConfirmed: p.replaceConfirmed,
               sourceEmailId: proposal.emailId,
             });
+          }
         } else if (e.operation === 'confirm') {
           if (!p.requestId || !p.consent)
             throw new Error('Select a request and attest issuer consent.');
@@ -2094,6 +2141,40 @@ export async function command(user: User, type: string, input: unknown): Promise
     if (user.role !== 'MANAGER') throw new Error('Forbidden');
     const p = z.object({ conferenceId: z.string().optional() }).parse(input);
     return managerMetrics(p.conferenceId);
+  }
+  if (type === 'addAsk') {
+    // A sentence the parser did not turn into an ask ("does the room have a screen?") becomes one.
+    banker(user);
+    const p = z.object({ emailId: z.string(), text: z.string().trim().min(3).max(1000) }).parse(input);
+    return db.$transaction(async (tx) => {
+      await lock(tx);
+      const email = await tx.email.findUniqueOrThrow({ where: { id: p.emailId }, include: { proposals: true } });
+      const [conferences, issuers, investors] = await Promise.all([tx.conference.findMany(), tx.issuer.findMany(), tx.investor.findMany()]);
+      const parsed = mockExtractAsks(p.text, email.subject, { conferences, issuers, investors }, { conferenceId: email.conferenceId || undefined, issuerId: email.issuerId || undefined });
+      const base = parsed.asks[0];
+      const e = {
+        ...base,
+        conferenceId: base?.conferenceId || email.conferenceId,
+        issuerId: base?.issuerId || email.issuerId,
+        investorId: base?.investorId || email.investorId,
+        category: base && base.category !== 'Unrelated Email' ? base.category : 'General Conference Inquiry',
+        operation: base && base.category !== 'Unrelated Email' ? base.operation : 'inquiry',
+        evidence: [p.text],
+        summary: base?.summary && base.category !== 'Unrelated Email' ? base.summary : p.text.slice(0, 120),
+        needsReview: true,
+        uncertainties: base?.uncertainties || [],
+      };
+      const askIndex = Math.max(-1, ...email.proposals.map((x) => x.askIndex)) + 1;
+      const proposal = await tx.proposal.create({ data: { emailId: email.id, askIndex, summary: e.summary, extraction: json(e) } });
+      const issuer = issuers.find((i) => i.id === e.issuerId);
+      await tx.action.create({
+        data: { type: e.category, title: `${issuer?.name || 'Needs triage'} · ${e.summary}`, conferenceId: e.conferenceId, issuerId: e.issuerId, investorId: e.investorId, emailId: email.id, proposalId: proposal.id, assignedTo: issuer?.ownerId || user.id, priority: 'Normal', recommendation: 'Added by the reviewer from a sentence in the email.' },
+      });
+      const statuses = [...email.proposals.map((x) => x.status), 'Pending'];
+      await tx.email.update({ where: { id: email.id }, data: { status: rollupEmailStatus(statuses) } });
+      await audit(tx, user, 'Ask added from email sentence', 'Proposal', proposal.id, undefined, { emailId: email.id, issuerId: e.issuerId, note: p.text });
+      return { ok: true, proposalId: proposal.id };
+    });
   }
   if (type === 'ping') return { ok: true }; // lets the client refresh after a batch of direct calls
   if (type === 'markSeen') {

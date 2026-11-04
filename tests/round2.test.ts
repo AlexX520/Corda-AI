@@ -138,3 +138,10 @@ test('A2: PIMCO second slot reads the new time, not the slot they could not make
   assert.equal(local(add.windows[0].start), 'Wed 11:00 AM');
   assert.equal(local(add.windows[0].end), 'Wed 11:45 AM');
 });
+
+test('round 3: unhandled sentences surface questions no ask covers', async () => {
+  const { unhandledSentences } = await import('../src/lib/review-rules');
+  const body = 'Hi Sarah,\n\n1) BlackRock asked for time with us — Jen can do Wed 11:00-11:30am ET. Please lock that in.\n\nCan you also confirm the room has a screen for the deck?\n\nThanks,\nMark';
+  const out = unhandledSentences(body, ['BlackRock asked for time with us — Jen can do Wed 11:00-11:30am ET. Please lock that in.']);
+  assert.deepEqual(out.map((x) => [x.text, x.question]), [['Can you also confirm the room has a screen for the deck?', true]]);
+});

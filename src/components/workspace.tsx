@@ -51,7 +51,7 @@ import { AvailabilityView, PlannerView, RequestDetail, RequestsView, requestStat
 import { ResourceAllocationView } from './resources';
 import { AuditTrail } from './audit';
 import { SalesEmailsView, SalesHome } from './sales';
-import { ManagerHome } from './manager';
+import { ManagerHome, type Drill } from './manager';
 import { HoldsBar, MyDay } from './myday';
 import { AskCorda, AskPanel } from './ask';
 import { MeetingDrawer, MeetingForm } from './meeting';
@@ -152,6 +152,8 @@ export function Workspace() {
     [busy, setBusy] = useState(false),
     [sheetRequestId, setSheetRequestId] = useState<string | null>(null),
     [inboxTab, setInboxTab] = useState<'review' | 'ignored'>('review'),
+    [drill, setDrill] = useState<Drill | null>(null),
+    [auditFilter, setAuditFilter] = useState<Record<string, string> | null>(null),
     [mobile, setMobile] = useState(false);
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
@@ -342,7 +344,7 @@ export function Workspace() {
     }
   }
   /** "Reply": reopen the email's draft if there is one, else compose without saving anything. */
-  async function openReply(emailId: string) {
+  async function openReply(emailId: string, extraQuestions: string[] = []) {
     const r = await fetch('/api/commands', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -351,8 +353,14 @@ export function Workspace() {
     const out = await r.json();
     if (!r.ok) return setToast({ message: out.error, error: true });
     setReview(null);
-    if (out.result.existingDraftId) setDraftId(out.result.existingDraftId);
-    else setComposer({ emailId, ...out.result });
+    if (out.result.existingDraftId && !extraQuestions.length) setDraftId(out.result.existingDraftId);
+    else {
+      // Questions the reviewer picked from the email ("does the room have a screen?") get an answer line.
+      const add = extraQuestions.map((q) => `On your question “${q}”: `).join('\n');
+      const body: string = out.result.body || '';
+      const at = body.search(/\n(Best regards|Kind regards|Best|Thanks),?\n/);
+      setComposer({ emailId, ...out.result, body: add ? (at > 0 ? `${body.slice(0, at)}\n${add}\n${body.slice(at)}` : `${body}\n\n${add}`) : body });
+    }
   }
   async function signOut() {
     await fetch('/api/session', { method: 'DELETE' });
@@ -660,7 +668,21 @@ export function Workspace() {
                 setConferenceId(id);
                 navigate('planner');
               }}
-              onOpenQueue={() => navigate('queue')}
+              onOpenQueue={(d) => {
+                setDrill(d || null);
+                if (d?.focus === 'escalation') setQueueFocus('escalation');
+                else setQueueFocus('all');
+                navigate('queue');
+              }}
+              onOpenMeetings={(id) => {
+                if (id) setConferenceId(id);
+                navigate('planner');
+              }}
+              onOpenEmail={(id) => setReview({ emailId: id })}
+              onOpenAudit={(q) => {
+                setAuditFilter(q || null);
+                navigate('audit');
+              }}
             />
           )}
           {page === 'overview' && banker && !manager && (
@@ -719,6 +741,7 @@ export function Workspace() {
               focus={queueFocus}
               setFocus={setQueueFocus}
               reload={reload}
+              drill={drill}
               notify={(message, error) => setToast({ message, error })}
             />
           )}
@@ -891,6 +914,8 @@ export function Workspace() {
           )}
           {page === 'audit' && (
             <AuditTrail
+              key={JSON.stringify(auditFilter)}
+              initial={auditFilter || undefined}
               data={data}
               timezone={c.timezone}
               onOpenEmail={(id) => setReview({ emailId: id })}
@@ -1381,6 +1406,7 @@ function QueueView({
   setFocus,
   reload,
   notify,
+  drill,
 }: {
   data: AppState;
   conferenceId: string;
@@ -1394,6 +1420,7 @@ function QueueView({
   setFocus: (f: 'all' | 'triage' | KindId) => void;
   reload: () => Promise<void>;
   notify: (message: string, error?: boolean) => void;
+  drill?: Drill | null;
 }) {
   const [status, setStatus] = useState('Open');
   const pref = (k: string, d: string) => {
@@ -1413,10 +1440,12 @@ function QueueView({
   const [scope, setScopeState] = useState<'mine' | 'issuers' | 'everyone'>('everyone');
   const [urgentOnly, setUrgentOnly] = useState(false);
   const [dense, setDenseState] = useState(false);
+  const [owner, setOwner] = useState('');
   useEffect(() => {
-    setScopeState(pref('scope', 'everyone') as 'mine' | 'issuers' | 'everyone');
+    setScopeState(drill?.scope || (pref('scope', 'everyone') as 'mine' | 'issuers' | 'everyone'));
+    setOwner(drill?.owner ?? '');
     setDenseState(pref('dense', '0') === '1');
-  }, []);
+  }, [drill]);
   const setScope = (v: 'mine' | 'issuers' | 'everyone') => (setScopeState(v), save('scope', v));
   const setDense = (v: boolean) => (setDenseState(v), save('dense', v ? '1' : '0'));
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -1435,9 +1464,10 @@ function QueueView({
     `${a.title} ${a.recommendation} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`.toLowerCase().includes(search.toLowerCase());
   const me = data.user.id;
   const inScope = (a: Action) =>
-    scope === 'everyone' ||
+    (owner ? (owner === '-' ? !a.assignedTo : a.assignedTo === owner) : true) &&
+    (scope === 'everyone' ||
     a.assignedTo === me ||
-    (scope === 'issuers' && data.issuers.find((i) => i.id === a.issuerId)?.ownerId === me);
+    (scope === 'issuers' && data.issuers.find((i) => i.id === a.issuerId)?.ownerId === me));
   const pool = data.actions.filter(
     (a) =>
       (status === 'All' ||
@@ -1699,6 +1729,11 @@ function QueueView({
                 </button>
               ))}
             </div>
+            {owner && (
+              <button className="chip active" onClick={() => setOwner('')}>
+                Owner: {owner === '-' ? 'Unassigned' : n.user(owner)} ✕
+              </button>
+            )}
             <button className={`chip ${urgentOnly ? 'active' : ''}`} aria-pressed={urgentOnly} onClick={() => setUrgentOnly(!urgentOnly)}>Urgent</button>
             {ignoredCount > 0 && <button className="chip" onClick={onOpenIgnored}>Ignored <span>{ignoredCount}</span></button>}
             {expiredCount > 0 && (

@@ -26,6 +26,8 @@ type Check = {
   stale: string | null;
   hold: string | null;
   protected: string | null;
+  availability?: { mode: 'narrow' | 'extend'; days: { day: string; before: string[]; after: string[]; outside: string[] }[] } | null;
+  timeNote?: string | null;
 };
 const MEETING_OPS = ['cancel', 'reschedule', 'update'];
 
@@ -469,6 +471,22 @@ export function EmailDecision({
               <p className="muted-line">Ask {issuer} to confirm the time, or add it to their availability first.</p>
             )}
           </div>
+        </div>
+      )}
+      {!escalation && !done && check?.timeNote && <p className="dc-why tz-note">🕑 {check.timeNote}</p>}
+      {!escalation && !done && check?.availability && (
+        <div className="avail-diff">
+          <span className="dc-label">
+            {check.availability.mode === 'narrow' ? 'That day becomes exactly these windows' : 'Adds to the current availability'}
+          </span>
+          {check.availability.days.map((d) => (
+            <div key={d.day}>
+              <strong>{d.day}</strong>
+              <span className="diff-remove">Now: {d.before.join(', ') || 'none'}</span>
+              <span className="diff-add">After: {d.after.join(', ')}</span>
+              {d.outside.length > 0 && <span className="warn">Booked meetings outside the new windows: {d.outside.join(', ')} (flagged for review)</span>}
+            </div>
+          ))}
         </div>
       )}
       {!escalation && !done && check && !check.hard.length && !check.soft.length && op === 'reschedule' && newWindows.length > 0 && (

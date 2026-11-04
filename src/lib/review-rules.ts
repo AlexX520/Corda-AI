@@ -239,3 +239,40 @@ export function requestOwner(
     sales.find((u) => list.some((a) => a.trim().toLowerCase() === u.email.toLowerCase()));
   return (find([email.sender]) || find(email.cc) || find(email.to))?.id || fallbackId;
 }
+
+/**
+ * Issuer availability for a day: "CFO free 9–11 and 2–4 Wed" means exactly those windows (narrow);
+ * "can ALSO do 9–11" / "in addition" adds to what is already there (extend).
+ */
+export function availabilityMode(text: string): 'narrow' | 'extend' {
+  return /\b(also|additionally|in addition|as well|another window|extra (?:slot|window|time)s?)\b/i.test(text) ? 'extend' : 'narrow';
+}
+
+/**
+ * Sentences of the email that no ask covers: questions ("does the room have a screen?") and
+ * requests the parser did not turn into an ask. Greetings, sign-offs and quoted text are skipped.
+ */
+export function unhandledSentences(content: string, evidence: string[]) {
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9:]+/g, ' ').trim();
+  const covered = evidence.map(norm).filter((x) => x.length > 6);
+  const SKIP = /^(hi|hello|hey|dear|thanks|thank you|thx|best|regards|cheers|sorry|apologies|sent from|fyi|all)\b|^[A-Z][a-z]+ ?[A-Z]?[a-z]*$|\|/i;
+  const sentences = content
+    .split(/\n+/)
+    .filter((l) => !l.trim().startsWith('>') && !/^(on .* wrote:|-----|from:|sent:|to:|subject:)/i.test(l.trim()))
+    .flatMap((l) => l.split(/(?<=[.?!])\s+/))
+    .map((x) => x.replace(/^\s*(?:\d+[.)]|[-•*])\s*/, '').trim())
+    .filter((x) => x.length > 12 && !SKIP.test(x));
+  return sentences
+    .filter((x) => {
+      const n = norm(x);
+      return !covered.some((c) => n.includes(c) || c.includes(n) || overlap(n, c) > 0.6);
+    })
+    .map((text) => ({ text, question: /\?\s*$/.test(text) || /^(can|could|does|do|is|are|will|would|any chance)\b/i.test(text) }))
+    .filter((x) => x.question || /\b(please|pls|need|can we|could we|confirm|add|move|cancel|room|screen|dial-in|headcount|people)\b/i.test(x.text));
+}
+function overlap(a: string, b: string) {
+  const A = new Set(a.split(' ').filter((w) => w.length > 2));
+  const B = new Set(b.split(' ').filter((w) => w.length > 2));
+  if (!A.size) return 0;
+  return [...A].filter((w) => B.has(w)).length / A.size;
+}

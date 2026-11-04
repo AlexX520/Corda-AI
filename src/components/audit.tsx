@@ -24,7 +24,9 @@ export function AuditTrail({
   timezone,
   onOpenEmail,
   onOpenMeeting,
+  initial,
 }: {
+  initial?: Record<string, string>;
   data: AppState;
   timezone: string;
   onOpenEmail: (id: string) => void;
@@ -32,9 +34,9 @@ export function AuditTrail({
 }) {
   const [q, setQ] = useState('');
   const [debounced, setDebounced] = useState('');
-  const [actor, setActor] = useState('');
+  const [actor, setActor] = useState(initial?.actor || '');
   const [action, setAction] = useState('');
-  const [issuer, setIssuer] = useState('');
+  const [issuer, setIssuer] = useState(initial?.issuer || '');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [page, setPage] = useState(1);
