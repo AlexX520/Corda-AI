@@ -9,7 +9,7 @@ import { llmChat } from './llm';
  * records it came from. It never changes anything; questions asking it to act get a pointer to
  * the normal flow instead.
  */
-export type AskSource = { kind: 'meeting' | 'history' | 'availability'; id: string; label: string };
+export type AskSource = { kind: 'meeting' | 'history' | 'availability' | 'email'; id: string; label: string };
 export type AskAnswer = { pattern: string; answer: string[]; sources: AskSource[]; llm?: boolean };
 
 type Meeting = {
@@ -23,6 +23,7 @@ type Meeting = {
   location: string;
   bankerIds: string[];
   requiresCube: boolean;
+  expectedAttendees: number;
 };
 export type AskSnapshot = {
   now: Date;
@@ -34,13 +35,14 @@ export type AskSnapshot = {
   meetings: Meeting[];
   coverage: { meetingId: string; bankerId: string }[];
   rooms: { meetingId: string; cubeId: string }[];
-  cubes: { id: string; name: string }[];
+  cubes: { id: string; name: string; capacity?: number }[];
+  emails: { id: string; subject: string; issuerId: string | null; investorId: string | null; status: string; receivedAt: Date }[];
   availability: { issuerId: string; conferenceId: string; start: Date; end: Date; kind: string }[];
   /** Sales: meetings they may see (their clients or their requests). Bankers: undefined (all). */
   visibleMeetingIds?: Set<string>;
 };
-export type HistoryRow = { id: string; createdAt: string; action: string; actor: string; note: string | null; meetingId: string | null };
-export type AskDeps = { history: (meetingIds: string[]) => Promise<HistoryRow[]> };
+export type HistoryRow = { id: string; createdAt: string; action: string; actor: string; note: string | null; meetingId: string | null; subject?: string };
+export type AskDeps = { history: (meetingIds: string[]) => Promise<HistoryRow[]>; historySince: (since: Date) => Promise<HistoryRow[]> };
 
 /** Imperatives ("move…", "please cancel…") ask Corda to act; it only reads. */
 const ACT = /^(?:please\s+|can you\s+|could you\s+)?(move|reschedule|cancel|book|schedule|send|email|approve|reject|confirm|delete|add|create|draft)\b/i;
@@ -88,13 +90,48 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
   const label = (m: Meeting) =>
     `${name(s.issuers, m.issuerId)} × ${name(s.investors, m.investorId)} · ${formatInTimeZone(m.start, zone, 'EEE MMM d h:mm a')}`;
   const bankersOf = (m: Meeting) => [...new Set([...m.bankerIds, ...s.coverage.filter((c) => c.meetingId === m.id).map((c) => c.bankerId)])];
-  const roomOf = (m: Meeting) => {
-    const r = s.rooms.find((x) => x.meetingId === m.id);
-    return r ? name(s.cubes, r.cubeId) : m.location || '';
-  };
+  const cubeOf = (m: Meeting) => s.cubes.find((c) => c.id === s.rooms.find((x) => x.meetingId === m.id)?.cubeId);
+  const roomOf = (m: Meeting) => cubeOf(m)?.name || m.location || '';
   const ctx = { conferences: s.conferences, issuers: s.issuers, investors: s.investors };
   const named = namedContext(q, '', ctx);
   const day = dayIn(q, s.now, zone, conf);
+  const dayOf = (d: Date) => formatInTimeZone(d, zone, 'yyyy-MM-dd');
+  const dayLabel = (d: string) => formatInTimeZone(new Date(`${d}T17:00:00Z`), 'UTC', 'EEEE MMM d');
+  const desk = isDesk(s.user.role);
+  // "my / mine / me / I": only the asker's meetings (covering banker, issuer owner, or covered client).
+  const mineOnly = /\b(my|mine|me|i)\b/.test(lower);
+  const isMine = (m: Meeting) =>
+    desk
+      ? bankersOf(m).includes(s.user.id) || s.issuers.find((i) => i.id === m.issuerId)?.ownerId === s.user.id
+      : s.investors.find((i) => i.id === m.investorId)?.coverageSalesId === s.user.id || visible(m);
+  // A colleague named in the question ("Is Maya covering anything…").
+  const person = s.users.find((u) => u.id !== s.user.id && new RegExp(`\\b${u.name.split(' ')[0].toLowerCase()}\\b`).test(lower));
+  const before = lower.match(/\bbefore (noon|\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/);
+  const after = lower.match(/\bafter (noon|lunch|\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/);
+  const mins = (t: string) => {
+    if (t === 'noon' || t === 'lunch') return 12 * 60 + (t === 'lunch' ? 60 : 0);
+    const m = t.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/)!;
+    let h = +m[1] % 12;
+    if (m[3] === 'pm' || (!m[3] && h < 7)) h += 12;
+    return h * 60 + +(m[2] || 0);
+  };
+  const minuteOf = (d: Date) => { const [h, m] = formatInTimeZone(d, zone, 'H:m').split(':').map(Number); return h * 60 + m; };
+  const inWindow = (m: Meeting) => (!before || minuteOf(m.start) < mins(before[1])) && (!after || minuteOf(m.start) >= mins(after[1]));
+  const live = s.meetings.filter((m) => m.status === 'Confirmed' && visible(m));
+  const scoped = (list: Meeting[]) =>
+    list.filter(
+      (m) =>
+        (!day || dayOf(m.start) === day) &&
+        (!mineOnly || person || isMine(m)) &&
+        (!named.issuerIds.length || named.issuerIds.includes(m.issuerId)) &&
+        (!named.investorIds.length || named.investorIds.includes(m.investorId)) &&
+        inWindow(m),
+    );
+  const cant = (view: string): AskAnswer => ({
+    pattern: 'unsupported',
+    answer: ["I can't answer that yet.", `Try ${view}.`],
+    sources: [],
+  });
 
   // Read-only: requests to change things go through the normal, approved flow.
   if (ACT.test(lower))
@@ -107,11 +144,107 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
       sources: [],
     };
 
+  // What changed in the last N hours / today.
+  const recent = lower.match(/\b(?:last|past)\s+(\d+|an?|one|two|few)?\s*(hour|hr|minute|min|day)s?\b/) || (/\bwhat changed\b.*\btoday\b|\bchanges today\b/.test(lower) ? ['', '', 'today'] : null);
+  if (recent) {
+    const n = recent[1] && /^\d+$/.test(recent[1]) ? +recent[1] : recent[1] === 'two' ? 2 : recent[1] === 'few' ? 3 : 1;
+    const unit = recent[2];
+    const since =
+      unit === 'today' ? new Date(`${dayOf(s.now)}T00:00:00`) : new Date(+s.now - n * (unit.startsWith('min') ? 60000 : unit === 'day' ? 86400000 : 3600000));
+    const rows = (await deps.historySince(since)).filter((r) => !r.meetingId || s.meetings.some((m) => m.id === r.meetingId && visible(m)) || desk);
+    const what = unit === 'today' ? 'today' : `in the last ${n} ${unit}${n === 1 ? '' : 's'}`;
+    return {
+      pattern: 'recent',
+      answer: rows.length ? [`${rows.length} change${rows.length === 1 ? '' : 's'} ${what}:`, ...rows.slice(0, 12).map((r) => `${formatInTimeZone(new Date(r.createdAt), zone, 'h:mm a')} — ${r.action}${r.subject ? `: ${r.subject}` : ''} (${r.actor})${r.note ? ` “${r.note}”` : ''}`)] : [`Nothing changed ${what}.`],
+      sources: rows.slice(0, 12).map((r) => ({ kind: 'history' as const, id: r.id, label: `${r.action} · ${r.actor}` })),
+    };
+  }
+
+  // Emails about an issuer / investor ("Which open emails are about Ford Credit?").
+  if (/\bemails?\b/.test(lower)) {
+    if (!named.issuerIds.length && !named.investorIds.length && !/\bopen|pending|waiting\b/.test(lower)) return cant('the Email reviews tab in the queue');
+    const openOnly = /\b(open|pending|waiting|unanswered)\b/.test(lower);
+    const list = s.emails
+      .filter((e) => (!named.issuerIds.length || named.issuerIds.includes(e.issuerId || '')) && (!named.investorIds.length || named.investorIds.includes(e.investorId || '')))
+      .filter((e) => !openOnly || ['Pending review', 'Clarification requested'].includes(e.status))
+      .sort((a, b) => +b.receivedAt - +a.receivedAt);
+    const who = [...named.issuerIds.map((i) => name(s.issuers, i)), ...named.investorIds.map((i) => name(s.investors, i))].join(' / ') || 'the desk';
+    return {
+      pattern: 'emails',
+      answer: list.length ? [`${list.length} ${openOnly ? 'open ' : ''}email${list.length === 1 ? '' : 's'} about ${who}:`, ...list.slice(0, 10).map((e) => `${formatInTimeZone(e.receivedAt, zone, 'EEE h:mm a')} — ${e.subject} (${e.status.toLowerCase()})`)] : [`No ${openOnly ? 'open ' : ''}emails about ${who}.`],
+      sources: list.slice(0, 10).map((e) => ({ kind: 'email' as const, id: e.id, label: e.subject })),
+    };
+  }
+
+  // Who approved / why.
+  if (/\b(who|why)\b.*\b(approv|confirm|move|cancel|chang)/.test(lower) && named.issuerIds.length) {
+    const meetings = s.meetings.filter((m) => named.issuerIds.includes(m.issuerId) && (!named.investorIds.length || named.investorIds.includes(m.investorId)) && visible(m));
+    if (!meetings.length) return { pattern: 'who', answer: ['No matching meeting is on record.'], sources: [] };
+    const rows = (await deps.history(meetings.map((m) => m.id))).filter((r) => /approv|confirm|moved|edited|cancel|protect/i.test(r.action));
+    return {
+      pattern: 'who',
+      answer: rows.length ? rows.slice(0, 8).map((r) => `${formatInTimeZone(new Date(r.createdAt), zone, 'EEE MMM d h:mm a')} — ${r.action} by ${r.actor}${r.note ? ` · why: “${r.note}”` : ''}`) : [`No approvals or changes are recorded for ${meetings.map(label).join('; ')}.`],
+      sources: [...meetings.map((m) => ({ kind: 'meeting' as const, id: m.id, label: label(m) })), ...rows.slice(0, 8).map((r) => ({ kind: 'history' as const, id: r.id, label: `${r.action} · ${r.actor}` }))],
+    };
+  }
+
+  // Double-booked bankers / investors / rooms.
+  if (/\bdouble[- ]?book|\boverlap|\bclash|\bconflict/.test(lower)) {
+    if (!desk) return cant('your client itinerary');
+    const list = scoped(live.filter((m) => m.conferenceId === conf?.id));
+    const issues: string[] = [];
+    const ids = new Set<string>();
+    for (let i = 0; i < list.length; i++)
+      for (let j = i + 1; j < list.length; j++) {
+        const [a, b] = [list[i], list[j]];
+        if (!(+a.start < +b.end && +b.start < +a.end)) continue;
+        const who = [
+          ...bankersOf(a).filter((x) => bankersOf(b).includes(x)).map((x) => name(s.users, x)),
+          ...(a.investorId === b.investorId ? [name(s.investors, a.investorId)] : []),
+          ...(cubeOf(a) && cubeOf(a)?.id === cubeOf(b)?.id ? [cubeOf(a)!.name] : []),
+        ];
+        if (who.length) {
+          issues.push(`${who.join(', ')}: ${label(a)} and ${label(b)}`);
+          ids.add(a.id).add(b.id);
+        }
+      }
+    return {
+      pattern: 'double-booked',
+      answer: issues.length ? [`${issues.length} double booking${issues.length === 1 ? '' : 's'}${day ? ` on ${dayLabel(day)}` : ''}:`, ...issues] : [`No one is double-booked${day ? ` on ${dayLabel(day)}` : ''}.`],
+      sources: [...ids].map((id) => ({ kind: 'meeting' as const, id, label: label(s.meetings.find((m) => m.id === id)!) })),
+    };
+  }
+
+  // Rooms too small for the headcount.
+  if (/\b(attendees|headcount|seats|capacity|too small|fit)\b/.test(lower)) {
+    if (!desk) return cant('the meeting details');
+    const list = scoped(live.filter((m) => m.conferenceId === conf?.id)).filter((m) => cubeOf(m) && (cubeOf(m)!.capacity || 0) < m.expectedAttendees);
+    return {
+      pattern: 'capacity',
+      answer: list.length ? [`${list.length} meeting${list.length === 1 ? '' : 's'} with more people than seats:`, ...list.map((m) => `${label(m)} — ${m.expectedAttendees} expected, ${cubeOf(m)!.name} seats ${cubeOf(m)!.capacity}`)] : [`Every room${day ? ` on ${dayLabel(day)}` : ''} fits its headcount.`],
+      sources: list.map((m) => ({ kind: 'meeting' as const, id: m.id, label: label(m) })),
+    };
+  }
+
+  // Counts per issuer / investor.
+  if (/\bhow many\b|\bcount\b|\bper (issuer|investor)\b/.test(lower) && /\bmeetings?\b/.test(lower)) {
+    const byInvestor = /\binvestor/.test(lower) || (named.investorIds.length && !named.issuerIds.length);
+    const list = scoped(live.filter((m) => m.conferenceId === conf?.id));
+    const counts = new Map<string, number>();
+    for (const m of list) counts.set(byInvestor ? m.investorId : m.issuerId, (counts.get(byInvestor ? m.investorId : m.issuerId) || 0) + 1);
+    const rows = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+    return {
+      pattern: 'counts',
+      answer: [`${list.length} confirmed meeting${list.length === 1 ? '' : 's'}${day ? ` on ${dayLabel(day)}` : ` at ${conf?.name}`}${mineOnly ? ' (yours)' : ''}:`, ...rows.map(([id, n]) => `${name(byInvestor ? s.investors : s.issuers, id)}: ${n}`)],
+      sources: list.slice(0, 20).map((m) => ({ kind: 'meeting' as const, id: m.id, label: label(m) })),
+    };
+  }
+
   // 1. Meeting history: "when was Ford × PIMCO moved", "history of Ally and MetLife".
-  if (named.issuerIds.length && named.investorIds.length && /\b(moved?|history|changed?|cancel+ed|resched|happened|when was|who)\b/.test(lower)) {
-    const meetings = s.meetings.filter((m) => named.issuerIds.includes(m.issuerId) && named.investorIds.includes(m.investorId) && visible(m));
+  if (named.issuerIds.length && named.investorIds.length && /\b(moved?|history|changed?|cancel+ed|resched|happened|when was|scheduled)\b/.test(lower)) {
+    const meetings = s.meetings.filter((m) => named.issuerIds.includes(m.issuerId) && named.investorIds.includes(m.investorId) && visible(m) && (!day || dayOf(m.start) === day));
     if (!meetings.length)
-      return { pattern: 'history', answer: [`No meeting between ${named.issuerIds.map((i) => name(s.issuers, i)).join('/')} and ${named.investorIds.map((i) => name(s.investors, i)).join('/')} is on record${s.visibleMeetingIds ? ' for your clients' : ''}.`], sources: [] };
+      return { pattern: 'history', answer: [`No meeting between ${named.issuerIds.map((i) => name(s.issuers, i)).join('/')} and ${named.investorIds.map((i) => name(s.investors, i)).join('/')} is on record${s.visibleMeetingIds ? ' for your clients' : ''}${day ? ` on ${dayLabel(day)}` : ''}.`], sources: [] };
     const rows = await deps.history(meetings.map((m) => m.id));
     const moves = rows.filter((r) => /moved|edited|cancel|reschedul/i.test(r.action));
     const shown = (/\bmoved?|resched/.test(lower) ? moves : rows).slice(0, 8);
@@ -130,7 +263,7 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
   }
 
   // 2. Free slots: "free slots for Ford Credit and PIMCO on Tuesday".
-  if (/\b(free|open|available)\b/.test(lower) && named.issuerIds.length && conf) {
+  if (/\b(free|open|available)\b/.test(lower) && /\b(slot|slots|time|times|availability|when)\b/.test(lower) && named.issuerIds.length && conf) {
     const issuerId = named.issuerIds[0];
     const investorId = named.investorIds[0];
     const target = day || conf.startDate;
@@ -145,65 +278,77 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
     ];
     const slots = availableSlots(windows, busy, conf.slotMinutes, conf.slotMinutes).filter((x) => formatInTimeZone(x.start, zone, 'yyyy-MM-dd') === target);
     const who = `${name(s.issuers, issuerId)}${investorId ? ` and ${name(s.investors, investorId)}` : ''}`;
-    const dayLabel = formatInTimeZone(new Date(`${target}T12:00:00Z`), 'UTC', 'EEEE MMM d');
-    if (!windows.length) return { pattern: 'free-slots', answer: [`${name(s.issuers, issuerId)} has not sent availability for ${conf.name}.`], sources: [] };
+    if (!s.availability.some((a) => a.issuerId === issuerId && a.conferenceId === conf.id)) return { pattern: 'free-slots', answer: [`${name(s.issuers, issuerId)} has not sent availability for ${conf.name}.`], sources: [] };
     return {
       pattern: 'free-slots',
       answer: slots.length
-        ? [`Open ${conf.slotMinutes}-minute times for ${who} on ${dayLabel}:`, ...slots.slice(0, 12).map((x) => `${formatInTimeZone(x.start, zone, 'h:mm')}–${formatInTimeZone(x.end, zone, 'h:mm a')}`)]
-        : [`No open ${conf.slotMinutes}-minute time for ${who} on ${dayLabel}.`],
+        ? [`Open ${conf.slotMinutes}-minute times for ${who} on ${dayLabel(target)}:`, ...slots.slice(0, 12).map((x) => `${formatInTimeZone(x.start, zone, 'h:mm')}–${formatInTimeZone(x.end, zone, 'h:mm a')}`)]
+        : [`No open ${conf.slotMinutes}-minute time for ${who} on ${dayLabel(target)}.`],
       sources: [{ kind: 'availability', id: `${conf.id}:${issuerId}`, label: `${name(s.issuers, issuerId)} availability, meetings${investorId ? ` and ${name(s.investors, investorId)}'s meetings` : ''}` }],
     };
   }
 
-  // 3. Gaps: "which meetings lack a banker / room".
+  // 3. Gaps: "which meetings (tomorrow) lack a banker / room".
   if (/\b(lack|missing|without|no|need|needs)\b.*\b(banker|bankers|coverage|room|cube|location)s?\b/.test(lower)) {
-    if (!isDesk(s.user.role)) return { pattern: 'gaps', answer: ['Coverage and rooms are managed by the banking desk.'], sources: [] };
+    if (!desk) return { pattern: 'gaps', answer: ['Coverage and rooms are managed by the banking desk.'], sources: [] };
     const wantRoom = /\b(room|cube|location)/.test(lower);
     const wantBanker = /\b(banker|coverage)/.test(lower);
-    const list = s.meetings
-      .filter((m) => m.conferenceId === conf?.id && m.status === 'Confirmed')
+    const list = scoped(live.filter((m) => m.conferenceId === conf?.id && +m.end > +s.now))
       .filter((m) => (wantBanker && !bankersOf(m).length) || (wantRoom && m.requiresCube && !roomOf(m)))
       .sort((a, b) => +a.start - +b.start);
     const what = [wantBanker && 'a banker', wantRoom && 'a room'].filter(Boolean).join(' or ');
+    const when = day ? ` on ${dayLabel(day)}` : ` in ${conf?.name}`;
     return {
       pattern: 'gaps',
       answer: list.length
-        ? [`${list.length} confirmed meeting${list.length === 1 ? '' : 's'} in ${conf?.name} without ${what}:`, ...list.slice(0, 15).map((m) => `${label(m)}${wantBanker && !bankersOf(m).length ? ' — no banker' : ''}${wantRoom && !roomOf(m) ? ' — no room' : ''}`), ...(list.length > 15 ? [`…and ${list.length - 15} more.`] : [])]
-        : [`Every confirmed meeting in ${conf?.name} has ${what}.`],
+        ? [`${list.length} upcoming meeting${list.length === 1 ? '' : 's'}${when} without ${what}:`, ...list.slice(0, 15).map((m) => `${label(m)}${wantBanker && !bankersOf(m).length ? ' — no banker' : ''}${wantRoom && !roomOf(m) ? ' — no room' : ''}`), ...(list.length > 15 ? [`…and ${list.length - 15} more.`] : [])]
+        : [`Every upcoming meeting${when} has ${what}.`],
       sources: list.slice(0, 15).map((m) => ({ kind: 'meeting', id: m.id, label: label(m) })),
     };
   }
 
-  // 4. My day: "my day", "what's on tomorrow", "my meetings Tuesday".
-  if (/\b(my day|my meetings|on today|on tomorrow|what'?s on|schedule (for )?(today|tomorrow)|agenda)\b/.test(lower) || (day && /\b(my|i)\b/.test(lower))) {
-    const target = day || formatInTimeZone(s.now, zone, 'yyyy-MM-dd');
-    const mine = s.meetings
-      .filter((m) => m.status === 'Confirmed' && formatInTimeZone(m.start, zone, 'yyyy-MM-dd') === target)
-      .filter((m) =>
-        isDesk(s.user.role)
-          ? bankersOf(m).includes(s.user.id) || s.issuers.find((i) => i.id === m.issuerId)?.ownerId === s.user.id
-          : s.investors.find((i) => i.id === m.investorId)?.coverageSalesId === s.user.id || visible(m),
-      )
+  // 4. A person's or my day: "my day", "what's on tomorrow", "is Maya covering anything tomorrow before noon".
+  if (person && desk && /\b(cover|covering|meeting|meetings|busy|free|anything|schedule|day)\b/.test(lower)) {
+    const target = day || dayOf(s.now);
+    const list = live
+      .filter((m) => dayOf(m.start) === target && bankersOf(m).includes(person.id) && inWindow(m))
       .sort((a, b) => +a.start - +b.start);
-    const dayLabel = formatInTimeZone(new Date(`${target}T12:00:00Z`), 'UTC', 'EEEE MMM d');
+    const window = before ? ` before ${before[1]}` : after ? ` after ${after[1]}` : '';
+    return {
+      pattern: 'person-day',
+      answer: list.length
+        ? [`${person.name} covers ${list.length} meeting${list.length === 1 ? '' : 's'} on ${dayLabel(target)}${window}:`, ...list.map((m) => `${formatInTimeZone(m.start, zone, 'h:mm a')} ${name(s.issuers, m.issuerId)} × ${name(s.investors, m.investorId)}${roomOf(m) ? ` · ${roomOf(m)}` : ''}`)]
+        : [`${person.name} covers nothing on ${dayLabel(target)}${window}.`],
+      sources: list.map((m) => ({ kind: 'meeting', id: m.id, label: label(m) })),
+    };
+  }
+  if (/\b(my day|my meetings|on today|on tomorrow|what'?s on|schedule (for )?(today|tomorrow)|agenda|meetings (today|tomorrow))\b/.test(lower) || (day && /\b(my|i|meetings?)\b/.test(lower))) {
+    const target = day || dayOf(s.now);
+    const list = live
+      .filter((m) => dayOf(m.start) === target && (!mineOnly || isMine(m)) && inWindow(m))
+      .filter((m) => (!named.issuerIds.length || named.issuerIds.includes(m.issuerId)) && (!named.investorIds.length || named.investorIds.includes(m.investorId)))
+      .sort((a, b) => +a.start - +b.start);
     return {
       pattern: 'my-day',
-      answer: mine.length
-        ? [`${mine.length} meeting${mine.length === 1 ? '' : 's'} on ${dayLabel}:`, ...mine.map((m) => `${formatInTimeZone(m.start, zone, 'h:mm a')} ${name(s.issuers, m.issuerId)} × ${name(s.investors, m.investorId)}${roomOf(m) ? ` · ${roomOf(m)}` : ''}${bankersOf(m).length ? ` · ${bankersOf(m).map((b) => name(s.users, b)).join(', ')}` : ''}`)]
-        : [`Nothing on your schedule on ${dayLabel}.`],
-      sources: mine.map((m) => ({ kind: 'meeting', id: m.id, label: label(m) })),
+      answer: list.length
+        ? [`${list.length} ${mineOnly ? '' : 'confirmed '}meeting${list.length === 1 ? '' : 's'} on ${dayLabel(target)}${mineOnly ? '' : ` at ${conf?.name}`}:`, ...list.map((m) => `${formatInTimeZone(m.start, zone, 'h:mm a')} ${name(s.issuers, m.issuerId)} × ${name(s.investors, m.investorId)}${roomOf(m) ? ` · ${roomOf(m)}` : ''}${bankersOf(m).length ? ` · ${bankersOf(m).map((b) => name(s.users, b)).join(', ')}` : ''}${+m.end <= +s.now ? ' (done)' : ''}`)]
+        : [`Nothing on ${mineOnly ? 'your schedule' : 'the schedule'} on ${dayLabel(target)}.`],
+      sources: list.map((m) => ({ kind: 'meeting', id: m.id, label: label(m) })),
     };
   }
 
+  // Nothing matched: never answer with data for a different question.
+  if (/\bsent|confirmation|invite\b/.test(lower)) return cant("the meeting's History tab (it lists every email sent)");
+  if (/\bmoved more than|\btimes\b/.test(lower)) return cant('the Audit trail filtered by action “Meeting moved”');
   return {
     pattern: 'help',
     answer: [
-      'I can answer from the schedule and its history. Try:',
-      '“When was Ford Credit × PIMCO moved?”',
-      '“What’s my day tomorrow?”',
-      '“Free slots for Ally Financial and Vanguard on Tuesday”',
-      '“Which meetings lack a banker or room?”',
+      "I can't answer that yet. I can answer from the schedule and its history, for example:",
+      '“What’s my day tomorrow?” · “Is Maya covering anything tomorrow before noon?”',
+      '“When was Ford Credit × PIMCO moved?” · “Who approved Ford Credit × BlackRock?”',
+      '“What changed in the last 2 hours?” · “Which open emails are about Ford Credit?”',
+      '“Free slots for Ally Financial and Vanguard on Tuesday” · “Which meetings tomorrow lack a banker or room?”',
+      '“Is anyone double-booked tomorrow?” · “Which meetings have more attendees than seats?”',
     ],
     sources: [],
   };

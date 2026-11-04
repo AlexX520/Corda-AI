@@ -2083,7 +2083,7 @@ export async function command(user: User, type: string, input: unknown): Promise
   if (type === 'ask') {
     const p = z.object({ question: z.string().trim().min(2).max(500) }).parse(input);
     const clients = isDesk(user.role) ? [] : await clientIds(user);
-    const [conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability] = await Promise.all([
+    const [conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, emailRows] = await Promise.all([
       db.conference.findMany(),
       db.issuer.findMany({ select: { id: true, name: true, ownerId: true } }),
       db.investor.findMany({ select: { id: true, name: true, coverageSalesId: true } }),
@@ -2091,8 +2091,14 @@ export async function command(user: User, type: string, input: unknown): Promise
       db.meeting.findMany({ include: { request: { select: { salespersonId: true } } } }),
       db.meetingCoverageAssignment.findMany({ select: { meetingId: true, bankerId: true } }),
       db.meetingCubeAssignment.findMany({ select: { meetingId: true, cubeId: true } }),
-      db.meetingCube.findMany({ select: { id: true, name: true } }),
+      db.meetingCube.findMany({ select: { id: true, name: true, capacity: true } }),
       db.availability.findMany(),
+      db.email.findMany({
+        where: isDesk(user.role) ? { status: { not: 'Quarantined' } } : { OR: [{ sender: { equals: user.email, mode: 'insensitive' } }, { forwardedBy: { equals: user.email, mode: 'insensitive' } }, { cc: { has: user.email } }] },
+        select: { id: true, subject: true, issuerId: true, investorId: true, status: true, receivedAt: true },
+        orderBy: { receivedAt: 'desc' },
+        take: 300,
+      }),
     ]);
     const visibleMeetingIds =
       isDesk(user.role)
@@ -2100,8 +2106,28 @@ export async function command(user: User, type: string, input: unknown): Promise
         : new Set(meetings.filter((m) => clients.includes(m.investorId) || m.request?.salespersonId === user.id).map((m) => m.id));
     const base = await answerQuestion(
       p.question,
-      { now: new Date(), user, conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, visibleMeetingIds },
+      { now: now(), user, conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, emails: emailRows, visibleMeetingIds },
       {
+        historySince: async (since) => {
+          const rows = await db.auditLog.findMany({
+            where: { createdAt: { gte: since }, entityType: { in: ['Meeting', 'Proposal', 'MeetingRequest', 'Availability', 'Draft', 'Issuer'] } },
+            orderBy: { createdAt: 'desc' },
+            take: 40,
+          });
+          const ms = await db.meeting.findMany({ where: { id: { in: rows.map((r) => r.meetingId || r.entityId) } } });
+          return rows.map((r) => {
+            const m = ms.find((x) => x.id === (r.meetingId || r.entityId));
+            return {
+              id: r.id,
+              createdAt: r.createdAt.toISOString(),
+              action: r.action,
+              actor: users.find((u) => u.id === r.actorId)?.name || 'System',
+              note: isDesk(user.role) ? r.note : null,
+              meetingId: m?.id || null,
+              subject: m ? `${issuers.find((i) => i.id === m.issuerId)?.name} × ${investors.find((i) => i.id === m.investorId)?.name}` : undefined,
+            };
+          });
+        },
         history: async (ids) => {
           const rows = await db.auditLog.findMany({
             where: { OR: [{ meetingId: { in: ids } }, { entityId: { in: ids } }] },
