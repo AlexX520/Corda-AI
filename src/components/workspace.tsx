@@ -22,6 +22,7 @@ import {
   LogOut,
   Loader2,
   Mail,
+  Settings,
   MapPin,
   MoreHorizontal,
   Plus,
@@ -44,6 +45,8 @@ import { Sheet } from './ui/sheet';
 import { RequestDecision } from './decision';
 import { AvailabilityView, PlannerView, RequestDetail, RequestsView } from './views';
 import { ResourceAllocationView } from './resources';
+import { AuditTrail } from './audit';
+import { SalesEmailsView } from './sales';
 import { MeetingDrawer, MeetingForm } from './meeting';
 import { actionKind, askOf, askPosition, kindLabel, kindOrder, openWork, type KindId } from './queue-model';
 import { windowLabel } from '@/lib/review-rules';
@@ -51,6 +54,7 @@ const menu = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
   { id: 'queue', label: 'Action queue', icon: CheckCheck },
   { id: 'requests', label: 'Meeting requests', icon: Users },
+  { id: 'emails', label: 'My emails', icon: Mail },
   { id: 'schedule', label: 'Schedule', icon: CalendarDays },
   { id: 'allocation', label: 'Allocation', icon: SlidersHorizontal },
 ];
@@ -138,7 +142,6 @@ export function Workspace() {
     [help, setHelp] = useState(false),
     [busy, setBusy] = useState(false),
     [sheetRequestId, setSheetRequestId] = useState<string | null>(null),
-    [outlookOpen, setOutlookOpen] = useState(false),
     [mobile, setMobile] = useState(false);
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
@@ -173,9 +176,13 @@ export function Workspace() {
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') void reload().catch(() => {});
     }, 10000);
+    // Coming back to the tab shows the latest state at once (no manual reload).
+    const onFocus = () => void reload().catch(() => {});
+    window.addEventListener('focus', onFocus);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
     };
   }, [reload]);
   useEffect(() => {
@@ -187,7 +194,7 @@ export function Workspace() {
         ? { message: 'Outlook connected. New conference emails are in Email reviews.' }
         : { message: q.get('message') || 'Outlook sign-in did not finish.', error: true },
     );
-    setOutlookOpen(true);
+    navigate('settings');
     history.replaceState(null, '', location.pathname);
   }, []);
   // Deep link: ?email=<id> opens that email's review.
@@ -392,7 +399,7 @@ export function Workspace() {
         <div className="nav-label">WORKSPACE</div>
         <nav>
           {menu
-            .filter((m) => banker || !['queue', 'allocation'].includes(m.id))
+            .filter((m) => (banker ? m.id !== 'emails' : !['queue', 'allocation'].includes(m.id)))
             .map((m) => (
               <button
                 key={m.id}
@@ -414,33 +421,6 @@ export function Workspace() {
             ))}
         </nav>
         <div className="sidebar-bottom">
-          {banker && (
-            <button className="outlook-pill" onClick={() => setOutlookOpen(true)}>
-              <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} />
-              <span>
-                <strong>{outlook?.connected ? 'Outlook connected' : 'Connect Outlook'}</strong>
-                <small>
-                  {outlook?.connected
-                    ? outlook.email || 'Inbox linked'
-                    : outlook?.configured
-                      ? 'Read and send real email'
-                      : 'Using simulated email'}
-                </small>
-              </span>
-            </button>
-          )}
-          <div className="ai-status">
-            <div>
-              <span className="live-dot" />
-              <strong>Human-approved AI</strong>
-              <Sparkles size={14} />
-            </div>
-            <p>
-              Less coordination.
-              <br />
-              More meaningful conversations.
-            </p>
-          </div>
           <button className="nav-item" onClick={() => setHelp(true)}>
             <CircleHelp size={18} />
             <span>Help & workspace info</span>
@@ -452,6 +432,16 @@ export function Workspace() {
             >
               <ShieldCheck size={18} strokeWidth={1.7} />
               <span>Audit trail</span>
+            </button>
+          )}
+          {banker && (
+            <button
+              className={`nav-item ${page === 'settings' ? 'active' : ''}`}
+              onClick={() => navigate('settings')}
+            >
+              <Settings size={18} strokeWidth={1.7} />
+              <span>Settings</span>
+              <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} title={outlook?.connected ? 'Outlook connected' : 'Outlook not connected'} />
             </button>
           )}
           <div className="profile">
@@ -492,7 +482,7 @@ export function Workspace() {
                 ? 'Request tracker'
                 : !banker && page === 'schedule'
                   ? 'Schedule'
-                  : menu.find((m) => m.id === page)?.label || { audit: 'Audit trail' }[page]}
+                  : menu.find((m) => m.id === page)?.label || { audit: 'Audit trail', settings: 'Settings', emails: 'My emails' }[page]}
             </strong>
           </div>
           <div className="topbar-right">
@@ -505,7 +495,11 @@ export function Workspace() {
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
-            <span className="demo-badge">SYNTHETIC DATA</span>
+            {data.demo && (
+              <span className="demo-pill" title="Demo mode: profiles sign in without a password and all data is synthetic.">
+                Demo mode
+              </span>
+            )}
             <div className="bell-wrap">
               <button
                 className="notification"
@@ -538,6 +532,12 @@ export function Workspace() {
                   onOpenMeeting={(id) => {
                     setBellOpen(false);
                     setMeetingId(id);
+                  }}
+                  onOpenNotice={(x) => {
+                    setBellOpen(false);
+                    if (x.meetingId && data.meetings.some((m) => m.id === x.meetingId)) setMeetingId(x.meetingId);
+                    else if (x.requestId && data.requests.some((r) => r.id === x.requestId)) setSheetRequestId(x.requestId);
+                    else if (x.emailId) banker ? setReview({ emailId: x.emailId }) : navigate('emails');
                   }}
                 />
               )}
@@ -828,7 +828,7 @@ export function Workspace() {
               onAdd={() => setEmailOpen(true)}
               outlookConnected={Boolean(outlook?.connected)}
               onSync={syncOutlook}
-              onConnect={() => setOutlookOpen(true)}
+              onConnect={() => navigate('settings')}
             />
           )}
           {page === 'queue' && queueSection === 'tasks' && (
@@ -844,6 +844,7 @@ export function Workspace() {
               setFocus={setQueueFocus}
             />
           )}
+          {page === 'emails' && !banker && <SalesEmailsView data={data} search={search} />}
           {page === 'requests' && (
             <RequestsView
               data={data}
@@ -923,63 +924,100 @@ export function Workspace() {
               </div>
             </>
           )}
-          {page === 'audit' && (
+          {page === 'settings' && banker && (
             <>
               <div className="page-heading">
                 <div>
-                  <h1>Audit trail</h1>
-                  <p>{data.auditLogs.length} events</p>
+                  <h1>Settings</h1>
+                  <p>Email connection for your workspace.</p>
                 </div>
-                <Badge tone="green">Database-backed history</Badge>
               </div>
-              <div className="panel">
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Action</th>
-                        <th>Actor</th>
-                        <th>Entity</th>
-                        <th>Timestamp</th>
-                        <th>Change details</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.auditLogs
-                        .filter((a) =>
-                          `${a.action} ${a.entityType} ${entityLabel(a, data)}`
-                            .toLowerCase()
-                            .includes(search.toLowerCase()),
-                        )
-                        .map((a) => (
-                          <tr key={a.id}>
-                            <td>
-                              <strong>{a.action}</strong>
-                            </td>
-                            <td>{n.user(a.actorId)}</td>
-                            <td>
-                              {entityLabel(a, data)}
-                              <small>{a.entityType.replace(/([a-z])([A-Z])/g, '$1 $2')}</small>
-                            </td>
-                            <td>{fmt(a.createdAt, c.timezone)}</td>
-                            <td>
-                              {(a.after as { reason?: string } | null)?.reason && (
-                                <p className="audit-reason">“{(a.after as { reason: string }).reason}”</p>
-                              )}
-                              <details>
-                                <summary>Raw before / after</summary>
-                                <pre className="audit-json">
-                                  {JSON.stringify({ before: a.before, after: a.after }, null, 2)}
-                                </pre>
-                              </details>
-                            </td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
+              <div className="panel settings-panel">
+                <h3>Outlook</h3>
+                <p className="muted">
+                  Corda reads conference emails from your inbox and sends approved drafts from your address.
+                </p>
+                <div className="form-grid">
+                  <div className="outlook-status">
+                    <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} style={{ width: 10, height: 10, borderRadius: 99, background: outlook?.connected ? '#2f8a5f' : '#b9c2b8' }} />
+                    <div style={{ flex: 1 }}>
+                      <strong>{outlook?.connected ? `Connected as ${outlook.email}` : 'Not connected'}</strong>
+                      <p>
+                        {outlook?.connected
+                          ? outlook.lastSyncAt
+                            ? `Last sync ${fmt(outlook.lastSyncAt, undefined, 'MMM d, h:mm a')} · ${outlook.lastSyncCount} new`
+                            : 'Not synced yet'
+                          : outlook?.configured
+                            ? 'Sign in with your Microsoft account to link your inbox.'
+                            : 'No Azure app is set up yet, so mail is simulated.'}
+                      </p>
+                      {outlook?.lastError && <p style={{ color: 'var(--warn)' }}>{outlook.lastError}</p>}
+                    </div>
+                    {outlook?.connected ? (
+                      <div className="dc-actions">
+                        <Button size="sm" onClick={syncOutlook} disabled={busy}>
+                          <RefreshCw size={13} /> Sync now
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={async () => {
+                            await fetch('/api/outlook/disconnect', { method: 'POST' });
+                            await reload();
+                            setToast({ message: 'Outlook disconnected. Mail is simulated again.' });
+                          }}
+                        >
+                          <Unplug size={13} /> Disconnect
+                        </Button>
+                      </div>
+                    ) : (
+                      outlook?.configured && (
+                        <Button size="sm" onClick={() => (location.href = '/api/outlook/connect')}>
+                          Connect
+                        </Button>
+                      )
+                    )}
+                  </div>
+                  {!outlook?.configured && (
+                    <>
+                      <strong>Set up once (about 5 minutes)</strong>
+                      <ol className="outlook-steps">
+                        <li>
+                          Open <code>portal.azure.com</code> → <b>App registrations</b> → <b>New registration</b>.
+                        </li>
+                        <li>
+                          Account type: <b>Personal Microsoft accounts only</b>. Redirect URI:{' '}
+                          <code>http://localhost:3000/api/outlook/callback</code>
+                        </li>
+                        <li>
+                          Platform: <b>Mobile and desktop applications</b> (no client secret needed).
+                        </li>
+                        <li>
+                          <b>API permissions</b> → Microsoft Graph → Delegated: <code>Mail.Read</code>, <code>Mail.Send</code>,{' '}
+                          <code>User.Read</code>, <code>offline_access</code>.
+                        </li>
+                        <li>
+                          Put <code>MS_CLIENT_ID</code> and <code>MS_TENANT=consumers</code> in{' '}
+                          <code>.env</code>, restart, then click Connect.
+                        </li>
+                      </ol>
+                    </>
+                  )}
+                  <p className="muted">
+                    Corda only imports emails that look conference-related and never sends anything until you press Send on a
+                    draft.
+                  </p>
                 </div>
               </div>
             </>
+          )}
+          {page === 'audit' && (
+            <AuditTrail
+              data={data}
+              timezone={c.timezone}
+              onOpenEmail={(id) => setReview({ emailId: id })}
+              onOpenMeeting={setMeetingId}
+            />
           )}
           <footer className="workspace-footer">
             <span>
@@ -1058,84 +1096,6 @@ export function Workspace() {
           run={run}
         />
       )}
-      <Dialog
-        open={outlookOpen}
-        onOpenChange={setOutlookOpen}
-        title="Outlook"
-        description="Corda reads conference emails from your inbox and sends approved drafts from your address."
-      >
-        <div className="form-grid">
-          <div className="outlook-status">
-            <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} style={{ width: 10, height: 10, borderRadius: 99, background: outlook?.connected ? '#2f8a5f' : '#b9c2b8' }} />
-            <div style={{ flex: 1 }}>
-              <strong>{outlook?.connected ? `Connected as ${outlook.email}` : 'Not connected'}</strong>
-              <p>
-                {outlook?.connected
-                  ? outlook.lastSyncAt
-                    ? `Last sync ${fmt(outlook.lastSyncAt, undefined, 'MMM d, h:mm a')} · ${outlook.lastSyncCount} new`
-                    : 'Not synced yet'
-                  : outlook?.configured
-                    ? 'Sign in with your Microsoft account to link your inbox.'
-                    : 'No Azure app is set up yet, so mail is simulated.'}
-              </p>
-              {outlook?.lastError && <p style={{ color: 'var(--warn)' }}>{outlook.lastError}</p>}
-            </div>
-            {outlook?.connected ? (
-              <div className="dc-actions">
-                <Button size="sm" onClick={syncOutlook} disabled={busy}>
-                  <RefreshCw size={13} /> Sync now
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={async () => {
-                    await fetch('/api/outlook/disconnect', { method: 'POST' });
-                    await reload();
-                    setToast({ message: 'Outlook disconnected. Mail is simulated again.' });
-                  }}
-                >
-                  <Unplug size={13} /> Disconnect
-                </Button>
-              </div>
-            ) : (
-              outlook?.configured && (
-                <Button size="sm" onClick={() => (location.href = '/api/outlook/connect')}>
-                  Connect
-                </Button>
-              )
-            )}
-          </div>
-          {!outlook?.configured && (
-            <>
-              <strong>Set up once (about 5 minutes)</strong>
-              <ol className="outlook-steps">
-                <li>
-                  Open <code>portal.azure.com</code> → <b>App registrations</b> → <b>New registration</b>.
-                </li>
-                <li>
-                  Account type: <b>Personal Microsoft accounts only</b>. Redirect URI:{' '}
-                  <code>http://localhost:3000/api/outlook/callback</code>
-                </li>
-                <li>
-                  Platform: <b>Mobile and desktop applications</b> (no client secret needed).
-                </li>
-                <li>
-                  <b>API permissions</b> → Microsoft Graph → Delegated: <code>Mail.Read</code>, <code>Mail.Send</code>,{' '}
-                  <code>User.Read</code>, <code>offline_access</code>.
-                </li>
-                <li>
-                  Put <code>MS_CLIENT_ID</code> and <code>MS_TENANT=consumers</code> in{' '}
-                  <code>.env</code>, restart, then click Connect.
-                </li>
-              </ol>
-            </>
-          )}
-          <p className="muted">
-            Corda only imports emails that look conference-related and never sends anything until you press Send on a
-            draft.
-          </p>
-        </div>
-      </Dialog>
       {drawerMeeting && (
         <MeetingDrawer key={drawerMeeting.id} meeting={drawerMeeting} data={data} run={run} close={() => setMeetingId(null)} />
       )}
@@ -1747,7 +1707,11 @@ function LoginScreen({
       <h1>Corda AI</h1>
       {profiles.length ? (
         <>
-          <p>Choose a demo profile to sign in. All data in this demo is synthetic.</p>
+          <span className="demo-pill">Demo mode</span>
+          <p>
+            These are demo profiles: anyone can pick one without a password. All organizations, people and emails are
+            synthetic. Production deployments disable this picker and require sign-in.
+          </p>
           <div className="profile-picker">
             {groups.map(([role, label]) => (
               <section key={role}>
@@ -1831,11 +1795,13 @@ function RecentChanges({
   onClose,
   onOpenAudit,
   onOpenMeeting,
+  onOpenNotice,
 }: {
   data: AppState;
   onClose: () => void;
   onOpenAudit: () => void;
   onOpenMeeting: (id: string) => void;
+  onOpenNotice: (x: AppState['notifications'][number]) => void;
 }) {
   const n = names(data);
   const [tab, setTab] = useState<'mine' | 'all'>(data.notifications.length ? 'mine' : 'all');
@@ -1863,7 +1829,7 @@ function RecentChanges({
             <button
               key={x.id}
               className={`bell-item ${x.readAt ? '' : 'unread'}`}
-              onClick={() => x.meetingId && data.meetings.some((m) => m.id === x.meetingId) && onOpenMeeting(x.meetingId)}
+              onClick={() => onOpenNotice(x)}
             >
               <span>{x.text}</span>
               <small>{fmt(x.createdAt, undefined, 'MMM d, h:mm a')}</small>

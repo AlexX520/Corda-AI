@@ -17,3 +17,10 @@ test('room capacity is enforced', () => { const m = meeting(); m.expectedAttende
 test('room overlap and buffer are enforced', () => { const meetings = [meeting('m1'), meeting('m2', 'issuer', '2026-10-19T14:30:00Z')]; const result = optimize({ meetings, cubes: [cube()], roomBufferMinutes: 5 }); assert.equal(result.summary.missingRooms, 1); });
 test('locked assignments are retained', () => { const result = optimize({ coverageAssignments: [{ meetingId: 'm1', bankerId: 'support', coverageRole: 'Support', isLocked: true }], cubeAssignments: [{ meetingId: 'm1', cubeId: 'c1', isLocked: true }] }); assert(result.allocations[0].bankerIds.includes('support')); assert.equal(result.allocations[0].cubeId, 'c1'); });
 test('validation rejects overlaps, insufficient primary coverage and invalid rooms', () => { const meetings = [meeting('m1'), meeting('m2')]; const errors = validateApprovedAllocations({ meetings, bankers: [banker('support')], cubes: [cube('small', 2)], coverage: meetings.map((m) => ({ meetingId: m.id, bankerId: 'support', coverageRole: 'Support', isLocked: false })), rooms: meetings.map((m) => ({ meetingId: m.id, cubeId: 'small', isLocked: false })), bufferMinutes: 0 }); assert(errors.some((e) => e.includes('overlapping'))); assert(errors.some((e) => e.includes('primary'))); assert(errors.some((e) => e.includes('capacity'))); });
+
+test('must-attend conflicts name the clashing meeting, not a generic reason', () => {
+  const meetings = [meeting('m1'), meeting('m2')];
+  const preferences = meetings.map((m) => ({ bankerId: 'primary', issuerId: 'issuer', meetingId: m.id, preferenceLevel: 'Must Attend', preferenceWeight: 120, isMandatory: true }));
+  const result = optimize({ meetings, preferences, bankers: [banker('primary', true), banker('support'), banker('other', true)] });
+  assert(result.allocations.some((a) => a.explanations.some((e) => /Must-attend banker primary is already in m[12]\./.test(e))));
+});

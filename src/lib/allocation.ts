@@ -195,7 +195,15 @@ export function optimizeConference(input: {
     for (const banker of mandatory) {
       if (result.bankerIds.includes(banker.id)) continue;
       if (!eligible.some((b) => b.id === banker.id)) {
-        result.explanations.push(`Must-attend banker ${banker.id} violates a hard constraint.`);
+        const clash = (assignedByBanker.get(banker.id) || []).find((m) => meetingOverlap(m, meeting));
+        const why = clash
+          ? `is already in ${clash.id}`
+          : !banker.authorizedIssuerIds.includes(meeting.issuerId)
+            ? 'is not authorized for this issuer'
+            : effectivePreference(preferences, banker.id, meeting)?.preferenceLevel === 'Cannot Attend'
+              ? 'marked Cannot Attend'
+              : 'is unavailable at this time';
+        result.explanations.push(`Must-attend banker ${banker.id} ${why}.`);
         continue;
       }
       result.bankerIds.push(banker.id);
@@ -332,23 +340,23 @@ export function validateApprovedAllocations(input: {
   for (const meeting of input.meetings) {
     const coverage = input.coverage.filter((a) => a.meetingId === meeting.id);
     if (coverage.length < meeting.requiredBankerCount)
-      errors.push(`${meeting.id}: coverage ${coverage.length}/${meeting.requiredBankerCount}`);
+      errors.push(`${meeting.id} needs ${meeting.requiredBankerCount} bankers and has ${coverage.length}.`);
     for (const assignment of coverage) {
       const banker = input.bankers.find((b) => b.id === assignment.bankerId);
       if (!banker || !banker.authorizedIssuerIds.includes(meeting.issuerId))
-        errors.push(`${meeting.id}: banker ${assignment.bankerId} unauthorized`);
+        errors.push(`${assignment.bankerId} is not authorized to cover ${meeting.id}.`);
       if (!banker || !isResourceAvailable(meeting, banker.availability))
-        errors.push(`${meeting.id}: banker ${assignment.bankerId} unavailable`);
+        errors.push(`${assignment.bankerId} is unavailable for ${meeting.id}.`);
     }
     const primary = coverage.filter((a) => a.coverageRole === 'Primary').length;
     if (primary < meeting.requiredPrimaryCount)
-      errors.push(`${meeting.id}: primary coverage ${primary}/${meeting.requiredPrimaryCount}`);
+      errors.push(`${meeting.id} needs a primary banker (has ${primary} of ${meeting.requiredPrimaryCount}).`);
     const room = input.rooms.find((a) => a.meetingId === meeting.id);
-    if (meeting.requiresCube && !room) errors.push(`${meeting.id}: room missing`);
+    if (meeting.requiresCube && !room) errors.push(`${meeting.id} has no room.`);
     if (room) {
       const cube = input.cubes.find((c) => c.id === room.cubeId);
       if (!cube || cube.status !== 'Active' || cube.capacity < meeting.expectedAttendees || !isResourceAvailable(meeting, cube.availability))
-        errors.push(`${meeting.id}: room ${room.cubeId} violates capacity or availability`);
+        errors.push(`${room.cubeId} does not fit ${meeting.id} (capacity ${cube?.capacity ?? '?'} for ${meeting.expectedAttendees}, or not available).`);
     }
   }
   for (const banker of input.bankers) {
@@ -359,7 +367,7 @@ export function validateApprovedAllocations(input: {
     for (let i = 0; i < assigned.length; i++)
       for (let j = i + 1; j < assigned.length; j++)
         if (meetingOverlap(assigned[i], assigned[j]))
-          errors.push(`${banker.id}: overlapping meetings ${assigned[i].id} / ${assigned[j].id}`);
+          errors.push(`${banker.id} is in overlapping meetings ${assigned[i].id} and ${assigned[j].id}.`);
   }
   for (const cube of input.cubes) {
     const assigned = input.rooms
@@ -369,7 +377,7 @@ export function validateApprovedAllocations(input: {
     for (let i = 0; i < assigned.length; i++)
       for (let j = i + 1; j < assigned.length; j++)
         if (meetingOverlap(assigned[i], assigned[j], input.bufferMinutes))
-          errors.push(`${cube.id}: overlapping meetings ${assigned[i].id} / ${assigned[j].id}`);
+          errors.push(`${cube.id} is booked for overlapping meetings ${assigned[i].id} and ${assigned[j].id}.`);
   }
   return errors;
 }

@@ -113,6 +113,21 @@ async function markMeetingChanged(tx: Tx, user: User, meetingId: string, summary
   return m;
 }
 /** Tell the salesperson on a request (and the account's coverage salesperson) what happened. */
+/** Tell the sales people on an email (sender, forwarder, cc) what happened to one of its asks. */
+async function notifyEmailSales(
+  tx: Tx,
+  user: User,
+  email: { id: string; sender: string; forwardedBy: string | null; cc: string[]; to: string[]; subject: string },
+  text: string,
+) {
+  const addresses = [email.sender, email.forwardedBy, ...email.cc, ...email.to].filter(Boolean).map((x) => x!.toLowerCase());
+  const sales = await tx.user.findMany({ where: { role: 'SALES', email: { in: addresses, mode: 'insensitive' } } });
+  const people = sales.filter((u) => u.id !== user.id);
+  if (people.length)
+    await tx.notification.createMany({
+      data: people.map((u) => ({ userId: u.id, actorId: user.id, kind: 'email-ask', text: `${email.subject}: ${text}`, emailId: email.id })),
+    });
+}
 async function notifyRequest(tx: Tx, user: User, r: { id: string; issuerId: string; investorId: string; salespersonId: string }, text: string) {
   const investor = await tx.investor.findUnique({ where: { id: r.investorId } });
   const issuer = await tx.issuer.findUnique({ where: { id: r.issuerId } });
@@ -1712,6 +1727,8 @@ export async function command(user: User, type: string, input: unknown): Promise
       });
       // Questions to the sender are written in the reply composer (replyPreview / replySave);
       // nothing is drafted until the person saves it.
+      if (p.decision !== 'clarify')
+        await notifyEmailSales(tx, user, email, `“${e.summary || 'request'}” ${status === 'Approved' ? 'done' : 'not done'} by ${user.name}${p.note ? ` — ${p.note}` : ''}`);
       await audit(tx, user, `Ask ${status.toLowerCase()}`, 'Proposal', p.id, { status: proposal.status, extraction: proposal.extraction }, {
         extraction: e,
         note: p.note,

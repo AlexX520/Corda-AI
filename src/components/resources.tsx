@@ -5,6 +5,13 @@ import { Boxes, CalendarClock, CheckCircle2, Lock, Play, SlidersHorizontal, User
 import type { AppState } from '@/lib/types';
 import { Button } from './ui/button';
 import { Badge, Empty, Field, fmt, names, type Run } from './shared';
+import { Dialog } from './ui/dialog';
+
+type AllocationDiff = {
+  changes: { meetingId: string; meeting: string; add: string[]; remove: string[]; room: { from: string; to: string } | null; locked: string[]; keepsLocation: string | null }[];
+  valid: number;
+  skipped: { meeting: string; reason: string }[];
+};
 
 const levels = ['Must Attend', 'High Priority', 'Medium Priority', 'Low Priority', 'No Preference', 'Cannot Attend'];
 
@@ -106,9 +113,39 @@ function ResourceStat({label, value, icon}: {label: string; value: number; icon:
 function AllocationReview({data, conferenceId, proposals, latestRun, run}: {data: AppState; conferenceId: string; proposals: AppState['allocationProposals']; latestRun: AppState['allocationRuns'][number] | undefined; run: Run}) {
   const n = names(data); const c = data.conferences.find((x) => x.id === conferenceId)!;
   const meetings = useMemo(() => new Map(data.meetings.map((m) => [m.id, m])), [data.meetings]);
+  const [diff, setDiff] = useState<AllocationDiff | null>(null);
+  const [diffError, setDiffError] = useState('');
+  async function openDiff() {
+    if (!latestRun) return;
+    setDiffError('');
+    try {
+      const r = await fetch('/api/commands', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'allocationDiff', data: { id: latestRun.id } }) });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error || 'Could not load the changes.');
+      setDiff(out.result);
+    } catch (err) { setDiffError(err instanceof Error ? err.message : 'Could not load the changes.'); }
+  }
+  async function approve() {
+    if (!latestRun) return;
+    if (await run('approveAllocationRun', {id: latestRun.id}, 'Valid allocations approved; unresolved meetings remain in the action queue.')) setDiff(null);
+  }
   if (!latestRun) return <Empty title="No allocation proposal yet" description="Run allocation to match confirmed meetings with authorized bankers and available cubes."/>;
   return <>
-    <div className="allocation-banner"><div><strong>Proposal · {fmt(latestRun.runTimestamp, c.timezone)}</strong></div>{latestRun.runStatus === 'Proposed' && <Button onClick={() => run('approveAllocationRun', {id: latestRun.id}, 'Valid allocations approved; unresolved meetings remain in the action queue.')}>Approve valid</Button>}</div>
+    <div className="allocation-banner"><div><strong>Proposal · {fmt(latestRun.runTimestamp, c.timezone)}</strong></div>{latestRun.runStatus === 'Proposed' && <Button onClick={openDiff}>Approve valid…</Button>}</div>
+    {diffError && <p className="error">{diffError}</p>}
+    <Dialog open={Boolean(diff)} onOpenChange={(o) => { if (!o) setDiff(null); }} title="Approve valid allocations" description="These changes will be written to the master schedule. Locked assignments and manually set locations are kept.">
+      {diff && <div className="alloc-diff">
+        {diff.changes.length ? <ul>{diff.changes.map((c) => <li key={c.meetingId}><strong>{c.meeting}</strong>
+          {c.add.length > 0 && <span className="diff-add">+ {c.add.join(', ')}</span>}
+          {c.remove.length > 0 && <span className="diff-remove">− {c.remove.join(', ')}</span>}
+          {c.room && <span>Room: {c.room.from} → {c.room.to}</span>}
+          {c.keepsLocation && <span className="muted">Location stays “{c.keepsLocation}” (set manually)</span>}
+          {c.locked.length > 0 && <span className="muted"><Lock size={11}/> Locked, unchanged: {c.locked.join(', ')}</span>}
+        </li>)}</ul> : <p>No assignments change: the {diff.valid} valid proposals match the current schedule.</p>}
+        {diff.skipped.length > 0 && <><h4>Not approved ({diff.skipped.length})</h4><ul>{diff.skipped.map((x, i) => <li key={i}><strong>{x.meeting}</strong><span className="muted">{x.reason}</span></li>)}</ul></>}
+        <div className="resource-actions"><Button variant="outline" onClick={() => setDiff(null)}>Cancel</Button><Button onClick={approve}>Approve {diff.changes.length} change{diff.changes.length === 1 ? '' : 's'}</Button></div>
+      </div>}
+    </Dialog>
     <div className="table-scroll"><table><thead><tr><th>Meeting</th><th>Time</th><th>Coverage</th><th>Meeting cube</th><th>Validation</th></tr></thead><tbody>{proposals.map((proposal) => { const meeting = meetings.get(proposal.meetingId); if (!meeting) return null; return <ProposalRow key={proposal.id} proposal={proposal} meeting={meeting} data={data} conferenceId={conferenceId} run={run}/>; })}</tbody></table></div>
     <div className="table-footer"><span><Lock size={12}/> Approval writes the reviewed proposal to the master schedule.</span><span>Algorithm: deterministic constraints + weighted preferences</span></div>
   </>;
@@ -121,5 +158,5 @@ function ProposalRow({proposal, meeting, data, conferenceId, run}: {proposal: Ap
   const bankers = data.users.filter((u) => u.role === 'BANKER' && (authorized.includes(u.id) || data.issuers.find((i) => i.id === meeting.issuerId)?.ownerId === u.id));
   const cube = data.meetingCubes.find((x) => x.id === proposal.proposedCubeId);
   async function save() { if (await run('updateAllocationProposal', {id: proposal.id, bankerIds, cubeId: cubeId || null}, 'Allocation proposal updated.')) setEditing(false); }
-  return <tr><td><strong>{n.issuer(meeting.issuerId)}</strong><small>{n.investor(meeting.investorId)}</small></td><td>{fmt(meeting.start, c.timezone)}<small>to {fmt(meeting.end, c.timezone, 'h:mm a')}</small></td><td>{editing ? <select multiple className="allocation-multi" value={bankerIds} onChange={(e) => setBankerIds(Array.from(e.currentTarget.selectedOptions, (o) => o.value))}>{bankers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select> : <><strong>{proposal.proposedBankerIds.slice(0,2).map(n.user).join(' · ') || 'Unassigned'}</strong><small>{proposal.proposedBankerIds.length > 2 ? `+${proposal.proposedBankerIds.length - 2} additional` : proposal.manualOverride ? 'Manual override' : 'Optimized proposal'}</small></>}</td><td>{editing ? <select className="compact-select" value={cubeId} onChange={(e) => setCubeId(e.target.value)}><option value="">Unassigned</option>{data.meetingCubes.filter((x) => x.conferenceId === conferenceId).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.capacity}</option>)}</select> : <>{cube?.name || 'Unassigned'}<small>{cube?.capacity ? `Capacity ${cube.capacity}` : 'Needs resolution'}</small></>}</td><td><Badge>{proposal.validationStatus}</Badge><small className="allocation-explanation">{proposal.explanation}</small>{proposal.validationStatus !== 'Valid' || editing ? <button className="text-button allocation-edit" onClick={editing ? save : () => setEditing(true)}>{editing ? 'Save assignment' : 'Edit manually'}</button> : null}</td></tr>;
+  return <tr><td><strong>{n.issuer(meeting.issuerId)}</strong><small>{n.investor(meeting.investorId)}</small></td><td>{fmt(meeting.start, c.timezone)}<small>to {fmt(meeting.end, c.timezone, 'h:mm a')}</small></td><td>{editing ? <select multiple className="allocation-multi" value={bankerIds} onChange={(e) => setBankerIds(Array.from(e.currentTarget.selectedOptions, (o) => o.value))}>{bankers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select> : <><strong>{proposal.proposedBankerIds.slice(0,2).map(n.user).join(' · ') || 'Unassigned'}</strong><small>{proposal.proposedBankerIds.length > 2 ? `+${proposal.proposedBankerIds.length - 2} additional` : proposal.manualOverride ? 'Manual override' : 'Optimized proposal'}</small></>}</td><td>{editing ? <select className="compact-select" value={cubeId} onChange={(e) => setCubeId(e.target.value)}><option value="">Unassigned</option>{data.meetingCubes.filter((x) => x.conferenceId === conferenceId).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.capacity}</option>)}</select> : <>{cube?.name || 'Unassigned'}<small>{cube?.capacity ? `Capacity ${cube.capacity}` : 'Needs resolution'}</small></>}</td><td><Badge>{proposal.validationStatus}</Badge>{proposal.validationStatus !== 'Valid' && <small className="allocation-explanation">{proposal.explanation}</small>}{proposal.validationStatus !== 'Valid' || editing ? <button className="text-button allocation-edit" onClick={editing ? save : () => setEditing(true)}>{editing ? 'Save assignment' : 'Edit manually'}</button> : null}</td></tr>;
 }

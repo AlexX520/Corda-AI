@@ -3023,8 +3023,7 @@ th {
 .inbox-main > p,
 .draft-list small,
 .resource-section-title p,
-.allocation-banner p,
-.allocation-explanation { display: none !important; }
+.allocation-banner p { display: none !important; }
 .page-heading {
   margin: 30px 0 20px;
   align-items: flex-end;
@@ -3211,8 +3210,8 @@ button.stat-card:hover { border-color: #c8d4c6; box-shadow: 0 4px 12px #273d1c0d
 /* ---------- v3: Outlook ---------- */
 .outlook-pill { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #e1e6dc; background: #fff; text-align: left; margin-bottom: 8px; }
 .outlook-pill:hover { border-color: #c8d4c6; }
-.outlook-pill .ol-dot { width: 8px; height: 8px; border-radius: 50%; background: #b9c2b8; flex-shrink: 0; }
-.outlook-pill .ol-dot.on { background: #2f8a5f; box-shadow: 0 0 0 3px #2f8a5f22; }
+.ol-dot, .outlook-pill .ol-dot { width: 8px; height: 8px; border-radius: 50%; background: #b9c2b8; flex-shrink: 0; }
+.ol-dot.on, .outlook-pill .ol-dot.on { background: #2f8a5f; box-shadow: 0 0 0 3px #2f8a5f22; }
 .outlook-pill strong { display: block; font-size: 12.5px; color: var(--ink); }
 .outlook-pill small { display: block; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
 .outlook-steps { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: #3f4f45; line-height: 1.5; }
@@ -3504,3 +3503,66 @@ button.danger, .danger { background: #b4412b !important; color: #fff !important;
 .notification { position: relative; }
 .related-item { display: block; }
 .related-item.static { display: flex; }
+
+/* Allocation approval diff */
+.alloc-diff ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; max-height: 50vh; overflow-y: auto; }
+.alloc-diff li { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid var(--line, #e5e7e1); border-radius: 10px; font-size: 13px; }
+.alloc-diff h4 { margin: 14px 0 0; font-size: 13px; }
+.alloc-diff .diff-add { color: #17643f; }
+.alloc-diff .diff-remove { color: #a33a2b; }
+.alloc-diff .muted { color: #6b736c; font-size: 12px; }
+.allocation-explanation { display: block; overflow-wrap: anywhere; font-size: 12px; }
+
+/* Audit trail */
+.audit-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.audit-filters select, .audit-filters input[type='date'] { height: 34px; border: 1px solid var(--border); border-radius: 8px; background: white; padding: 0 8px; font-size: 13px; max-width: 220px; }
+.audit-search { display: flex; align-items: center; gap: 6px; flex: 1 1 260px; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: white; padding: 0 10px; color: var(--muted); }
+.audit-search input { border: 0; outline: 0; flex: 1; min-width: 0; font-size: 13px; background: transparent; }
+.audit-date { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.audit-export { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border: 1px solid #dedfda; border-radius: 8px; background: white; font-size: 13px; color: #3a423c; }
+.audit-export:hover { background: #f5f6f2; }
+.audit-table td { vertical-align: top; }
+.audit-table .nowrap { white-space: nowrap; }
+.audit-links { display: flex; gap: 10px; margin-top: 4px; font-size: 12px; }
+.audit-pager { display: flex; justify-content: center; align-items: center; gap: 14px; padding: 12px; border-top: 1px solid var(--border); }
+.audit-pager button:disabled { opacity: 0.4; cursor: default; }
+.audit-empty { text-align: center; color: var(--muted); padding: 24px; }
+.audit-error { padding: 8px 16px; }
+.table-scroll.loading { opacity: 0.6; transition: opacity 0.2s; }
+.demo-pill { display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px; background: #fff4d6; color: #7a5300; border: 1px solid #f0d78c; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+.login-screen .demo-pill { margin: 4px 0 2px; }
+.login-screen > p { max-width: 460px; text-align: center; }
+
+/* Sales: my emails, request state */
+.sales-emails { list-style: none; margin: 0; padding: 0; }
+.sales-emails > li { padding: 14px 18px; border-bottom: 1px solid var(--border); display: grid; gap: 8px; }
+.se-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.se-head small { color: var(--muted); }
+.sales-emails ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+.sales-emails ol li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: 13px; }
+.se-ask { min-width: 0; overflow-wrap: anywhere; }
+.se-reason { color: var(--muted); font-style: italic; flex-basis: 100%; font-size: 12px; }
+.request-state { display: grid; gap: 4px; }
+.request-state p { margin: 0; font-size: 13px; }
+.settings-panel { padding: 20px 22px; display: grid; gap: 10px; max-width: 760px; }
+.settings-panel h3 { margin: 0; font-size: 16px; }
+.nav-item .ol-dot { margin-left: auto; }
+
+/* Overview tiles at phone width: three compact tiles that fit, no sideways scrolling. */
+@media (max-width: 600px) {
+  .stats-grid.overview-stats,
+  .stats-grid.resource-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; gap: 8px; }
+  .overview-stats .stat-card,
+  .resource-stats .stat-card { min-height: 0; padding: 12px 11px; min-width: 0; }
+  .overview-stats .stat-card > div,
+  .resource-stats .stat-card > div { align-items: flex-start; gap: 4px; }
+  .overview-stats .stat-card > div span,
+  .resource-stats .stat-card > div span { font-size: 11.5px; line-height: 1.3; overflow-wrap: anywhere; }
+  .overview-stats .stat-card > div svg,
+  .resource-stats .stat-card > div svg { display: none; }
+  .overview-stats .stat-card > strong,
+  .resource-stats .stat-card > strong { margin-top: 8px; font-size: 24px; }
+  .overview-stats .stat-card .stat-cta,
+  .overview-stats .stat-card > small,
+  .overview-stats .stat-card > span:last-child { font-size: 11px; }
+}

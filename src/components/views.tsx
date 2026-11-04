@@ -33,6 +33,16 @@ const requestTabs = [
   { id: 'cancelled', label: 'Cancelled', statuses: ['Cancelled'] },
   { id: 'all', label: 'All', statuses: [] as string[] },
 ] as const;
+/** Who actually asked: the email's (original) sender when the request came from an email, else the salesperson. */
+export function requestedBy(r: RequestItem, data: AppState) {
+  const n = names(data);
+  const email = r.sourceEmailId ? data.emails.find((e) => e.id === r.sourceEmailId) : undefined;
+  if (!email) return n.user(r.salespersonId);
+  const address = (email.originalSender || email.sender).toLowerCase();
+  const who = email.originalSenderName || data.users.find((u) => u.email?.toLowerCase() === address)?.name || address;
+  const via = email.forwardedBy ? data.users.find((u) => u.email?.toLowerCase() === email.forwardedBy!.toLowerCase())?.name : null;
+  return via && via !== who ? `${who} (via ${via})` : who;
+}
 /** Plain-language status so nobody has to decode workflow states. */
 export function requestStatus(r: RequestItem, role: string) {
   const sales = role === 'SALES';
@@ -167,11 +177,11 @@ export function RequestsView({
                           <i />
                           <span>
                             {st.text}
-                            {st.hint && <small style={{ display: 'block' }}>{st.hint}</small>}
+                            {(r.reason || st.hint) && <small style={{ display: 'block' }}>{r.reason || st.hint}</small>}
                           </span>
                         </span>
                       </td>
-                      <td>{n.user(sales ? r.bankerId : r.salespersonId)}</td>
+                      <td>{sales ? n.user(r.bankerId) : requestedBy(r, data)}</td>
                       <td>
                         <div className="req-actions">
                           <Button
@@ -313,7 +323,7 @@ function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceI
               </span>
               {result?.proposal && (
                 <span>
-                  Best time <b>{fmt(result.proposal.start, c.timezone, 'EEE h:mm a')}</b> ·{' '}
+                  Best time <b>{fmt(result.proposal.start, c.timezone, 'EEE h:mm')}–{fmt(result.proposal.end, c.timezone, 'h:mm a')}</b> ({p.duration} min) ·{' '}
                   {result.proposal.status === 'Potential Match' ? 'open on both calendars' : result.proposal.status.toLowerCase()}
                 </span>
               )}
@@ -358,7 +368,15 @@ export function RequestDetail({
       description={`${c.name} · ${c.timezone}`}
     >
       <div className="form-grid">
-        <Badge>{r.status}</Badge>
+        {(() => {
+          const st = requestStatus(r, data.user.role);
+          return (
+            <div className="request-state">
+              <span className={`req-status ${st.tone}`}><i /><span>{st.text}</span></span>
+              {r.reason ? <p>{r.reason}</p> : st.hint ? <p className="muted">{st.hint}</p> : null}
+            </div>
+          );
+        })()}
         <div className="request-slot">
           <CalendarDays size={20} />
           <div>
@@ -376,7 +394,7 @@ export function RequestDetail({
           </div>
           <div>
             <small className="muted">Requested by</small>
-            <p>{n.user(r.salespersonId)}</p>
+            <p>{requestedBy(r, data)}</p>
           </div>
         </div>
         {r.notes && <p className="notice">{r.notes}</p>}
@@ -385,7 +403,7 @@ export function RequestDetail({
         )}
         {r.alternatives.length > 0 && (
           <div>
-            <h4 className="mini-title">Available alternatives</h4>
+            <h4 className="mini-title">Open {r.duration}-minute times{new Set(r.alternatives.map((s) => fmt(s.start, c.timezone, 'yyyy-MM-dd'))).size > 1 ? ' across days' : ''}</h4>
             <div className="alternative-list">
               {r.alternatives.map((s, i) => (
                 <button

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRequestText } from '../src/lib/request-parser';
+import { parseDuration, parseRequestText } from '../src/lib/request-parser';
 const ctx = {
   conference: { startDate: '2026-10-19', endDate: '2026-10-21', slotMinutes: 30 },
   issuers: [
@@ -31,4 +31,19 @@ test('range crossing noon keeps the morning start', () => {
 test('lists what is missing instead of guessing', () => {
   const p = parseRequestText('Bayview would like a meeting', ctx);
   assert.deepEqual(p.missing, ['investor', 'day', 'time']);
+});
+
+test('durations are read in all the usual forms (round 2, J)', () => {
+  const cases: [string, number][] = [
+    ['Ally / Vanguard Tuesday 2pm 45-minute', 45],
+    ['Ally / Vanguard Tuesday 2pm for 90 mins', 90],
+    ['Ally / Vanguard Tuesday 2pm, an hour', 60],
+    ['Ally / Vanguard Tuesday 2pm 1.5 hours', 90],
+    ['Ally / Vanguard Tuesday 2pm hour and a half', 90],
+    ['Ally / Vanguard Tuesday 2pm half an hour', 30],
+    ['Ally / Vanguard Tuesday 2pm 2 hrs', 120],
+    ['Ally / Vanguard 11-1pm Tuesday', 30],
+  ];
+  for (const [text, minutes] of cases) assert.equal(parseRequestText(text, ctx).duration, minutes, text);
+  assert.equal(parseDuration('12 pm'), null);
 });

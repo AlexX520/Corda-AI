@@ -12,6 +12,7 @@ import {
   validateApprovedAllocations,
 } from './allocation';
 import { overlaps } from './scheduling';
+import { formatInTimeZone } from 'date-fns-tz';
 
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -37,6 +38,35 @@ async function audit(
   });
 }
 
+/** Replace banker, meeting and cube ids in messages with names people recognise. */
+async function humanizer(tx: Tx | typeof db, conferenceId: string) {
+  const [users, meetings, cubes, issuers, investors, conference] = await Promise.all([
+    tx.user.findMany(),
+    tx.meeting.findMany({ where: { conferenceId } }),
+    tx.meetingCube.findMany({ where: { conferenceId } }),
+    tx.issuer.findMany(),
+    tx.investor.findMany(),
+    tx.conference.findUniqueOrThrow({ where: { id: conferenceId } }),
+  ]);
+  const label = new Map<string, string>();
+  for (const u of users) label.set(u.id, u.name);
+  for (const c of cubes) label.set(c.id, c.name);
+  for (const m of meetings)
+    label.set(
+      m.id,
+      `${issuers.find((i) => i.id === m.issuerId)?.name} × ${investors.find((i) => i.id === m.investorId)?.name} at ${formatInTimeZone(m.start, conference.timezone, 'EEE h:mm a')}`,
+    );
+  const ids = [...label.keys()].sort((a, b) => b.length - a.length);
+  const re = ids.length ? new RegExp(`\\b(${ids.map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'g') : null;
+  return (text: string) => (re ? text.replace(re, (m) => label.get(m) || m) : text);
+}
+const cubeLabel = (cube: { name: string; location: string }) => `${cube.name} · ${cube.location}`;
+/** Empty, TBD or cube-derived locations may be replaced by an approved room; anything else was set by a person. */
+export function isManualLocation(location: string | null, cubeLabels: string[]) {
+  const value = (location || '').trim();
+  if (!value || /^(tbd|tba|to be confirmed)$/i.test(value)) return false;
+  return !cubeLabels.includes(value);
+}
 async function loadInputs(tx: Tx | typeof db, conferenceId: string) {
   const conference = await tx.conference.findUniqueOrThrow({ where: { id: conferenceId } });
   const meetingsRaw = await tx.meeting.findMany({
@@ -272,6 +302,7 @@ export async function handleResourceCommand(user: User, type: string, input: unk
     return db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(817205)`;
       const inputs = await loadInputs(tx, p.conferenceId);
+      const human = await humanizer(tx, p.conferenceId);
       const optimized = optimizeConference({
         meetings: inputs.meetings,
         bankers: inputs.bankers,
@@ -309,7 +340,7 @@ export async function handleResourceCommand(user: User, type: string, input: unk
             validationStatus:
               allocation.coverageComplete && allocation.roomComplete ? 'Valid' : 'Incomplete',
             preferenceScore: allocation.preferenceScore,
-            explanation: allocation.explanations.join(' ') || 'All hard constraints satisfied.',
+            explanation: human(allocation.explanations.join(' ')) || 'All hard constraints satisfied.',
           })),
         });
       const incomplete = optimized.allocations.filter(
@@ -373,7 +404,7 @@ export async function handleResourceCommand(user: User, type: string, input: unk
           proposedBankerIds: uniqueBankers,
           proposedCubeId: p.cubeId,
           validationStatus: requirementErrors.length ? 'Incomplete' : 'Valid',
-          explanation: requirementErrors.join(' ') || 'Manual assignment satisfies meeting-level constraints; run-level validation occurs at approval.',
+          explanation: (await humanizer(tx, run.conferenceId))(requirementErrors.join(' ')) || 'Manual assignment satisfies meeting-level constraints; run-level validation occurs at approval.',
           manualOverride: true,
         },
       });
@@ -440,7 +471,11 @@ export async function handleResourceCommand(user: User, type: string, input: unk
         ],
         bufferMinutes: inputs.conference.roomBufferMinutes,
       });
-      if (errors.length) throw new Error(`Allocation changed or conflicts remain: ${errors.slice(0, 4).join(' ')}`);
+      if (errors.length) {
+        const human = await humanizer(tx, run.conferenceId);
+        throw new Error(`Allocation changed or conflicts remain: ${errors.slice(0, 4).map(human).join(' ')}`);
+      }
+      const cubeLabels = (await tx.meetingCube.findMany({ where: { conferenceId: run.conferenceId } })).flatMap((c) => [cubeLabel(c), c.location]);
       for (const meetingId of validMeetingIds) {
         await tx.meetingCoverageAssignment.deleteMany({ where: { meetingId, isLocked: false } });
         await tx.meetingCubeAssignment.deleteMany({ where: { meetingId, isLocked: false } });
@@ -469,11 +504,14 @@ export async function handleResourceCommand(user: User, type: string, input: unk
         const cube = approvedRoom
           ? await tx.meetingCube.findUnique({ where: { id: approvedRoom.cubeId } })
           : null;
+        const current = await tx.meeting.findUniqueOrThrow({ where: { id: meetingId } });
+        // A location typed by a person (not one derived from a cube) is never overwritten.
+        const keepLocation = isManualLocation(current.location, cubeLabels);
         await tx.meeting.update({
           where: { id: meetingId },
           data: {
             bankerIds: approvedBankers.map((a) => a.bankerId),
-            ...(cube ? { location: `${cube.name} · ${cube.location}` } : {}),
+            ...(cube && !keepLocation ? { location: cubeLabel(cube) } : {}),
           },
         });
       }
@@ -488,6 +526,57 @@ export async function handleResourceCommand(user: User, type: string, input: unk
       });
       return { approved, unresolved: proposals.length - approved };
     });
+  }
+
+  if (type === 'allocationDiff') {
+    // Dry run of "Approve valid": what would change, per meeting, without writing anything.
+    banker(user);
+    const p = z.object({ id: z.string() }).parse(input);
+    const run = await db.allocationRun.findUniqueOrThrow({ where: { id: p.id } });
+    const [proposals, inputs, users, cubes, meetings, label] = await Promise.all([
+      db.allocationProposal.findMany({ where: { allocationRunId: run.id } }),
+      loadInputs(db, run.conferenceId),
+      db.user.findMany(),
+      db.meetingCube.findMany({ where: { conferenceId: run.conferenceId } }),
+      db.meeting.findMany({ where: { conferenceId: run.conferenceId } }),
+      humanizer(db, run.conferenceId),
+    ]);
+    const name = (id: string) => users.find((u) => u.id === id)?.name || id;
+    const cubeName = (id?: string | null) => (id ? cubes.find((c) => c.id === id)?.name || id : 'none');
+    const cubeLabels = cubes.flatMap((c) => [cubeLabel(c), c.location]);
+    const changes = [];
+    for (const proposal of proposals.filter((x) => x.validationStatus === 'Valid')) {
+      const meeting = meetings.find((m) => m.id === proposal.meetingId);
+      if (!meeting) continue;
+      const current = inputs.coverage.filter((a) => a.meetingId === meeting.id);
+      const locked = current.filter((a) => a.isLocked).map((a) => a.bankerId);
+      const before = current.map((a) => a.bankerId);
+      const after = [...new Set([...locked, ...proposal.proposedBankerIds])];
+      const room = inputs.rooms.find((r) => r.meetingId === meeting.id);
+      const roomLocked = Boolean(room?.isLocked);
+      const roomAfter = roomLocked ? room!.cubeId : proposal.proposedCubeId || room?.cubeId || null;
+      const add = after.filter((id) => !before.includes(id)).map(name);
+      const remove = before.filter((id) => !after.includes(id)).map(name);
+      const roomChange = (room?.cubeId || null) !== roomAfter ? { from: cubeName(room?.cubeId), to: cubeName(roomAfter) } : null;
+      const keepsLocation = Boolean(roomChange) && isManualLocation(meeting.location, cubeLabels);
+      if (!add.length && !remove.length && !roomChange) continue;
+      changes.push({
+        meetingId: meeting.id,
+        meeting: label(meeting.id),
+        add,
+        remove,
+        room: roomChange,
+        locked: [...locked.map(name), ...(roomLocked ? [cubeName(room!.cubeId)] : [])],
+        keepsLocation: keepsLocation ? meeting.location : null,
+      });
+    }
+    return {
+      changes,
+      valid: proposals.filter((x) => x.validationStatus === 'Valid').length,
+      skipped: proposals
+        .filter((x) => x.validationStatus !== 'Valid')
+        .map((x) => ({ meeting: label(x.meetingId), reason: label(x.explanation) })),
+    };
   }
 
   if (type === 'toggleCoverageLock') {

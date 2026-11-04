@@ -94,3 +94,61 @@ guesses which meeting, which event or who an email is from.
 - "Active/upcoming" uses today's date; the seeded ABS East (Oct 2026) is in the past, so emails
   about companies on it are assumed to belong to it because they are on no other event.
 - Moving a meeting keeps a free-text location note; changing the cube does not rewrite it.
+
+## Round 2 — simulation fix list (items A–K)
+
+Migration `20261103180000_v4_round2` (additive): forwarded-mail fields, escalation/suspicious flags on
+`Email`, meeting `version`/`changedAt`/`changedBy`/`protected`, issuer change hold, `Investor.coverageSalesId`,
+per-draft recipient allowlist, searchable audit columns (`issuerId`, `meetingId`, `emailId`, `note`),
+`Notification` and `ExportLog` tables.
+
+- **A. Forwarded emails**: the forwarded block is parsed and the inner sender is verified;
+  "forwarded by" is kept, and a SALES forwarder owns the request. Ignored mail is listed under
+  Inbox → Ignored with "Treat as conference email".
+- **B. Same meeting / same thread**: banners show other open asks on the meeting and newer emails in the thread.
+  Asks whose meeting changed after the email are blocked until re-checked. Manual edits send the version they
+  started from and are refused if someone saved first. The owner, bankers and sales are notified of changes.
+- **C. Escalations**: escalations are a flag on the email; its asks are still extracted. Acknowledging pins
+  the item to the owner. "Hold all changes for <issuer>" can be overridden with a reason. Investor threats
+  protect the meeting at risk. "asap" on its own is no longer urgent.
+- **D. Parser**: from…to moves, `1:00–3:30 pm`, `between 2 and 4pm`, durations, conditional asks,
+  attendee counts with a capacity check, "can we get A × B", "offer the freed 1pm to X", `9:30 ET`, and
+  "prefer 3:30 else keep 3". Intro lines no longer create ghost asks. Regression fixtures are in
+  `tests/fixtures/round2-emails.json`.
+- **E. Approve**: conflicts and their reasons show before Approve. The reviewer can extend issuer
+  availability when the issuer asked. A move needs consent from both parties.
+- **F.** "Mark handled manually" for asks done by a manual move or cancel.
+- **G. Allocation**: "Approve valid…" opens a dry-run diff (`allocationDiff`) listing banker and room
+  changes, locked items and skipped meetings. Locked assignments and manually typed locations are never
+  overwritten. Reasons use names, e.g. "Must-attend banker Maya Patel is already in Ally Financial × MetLife at
+  Mon 10:00 AM." Incomplete rows show the reason inline.
+- **H. Replies**: nothing is drafted until Save. There is one combined reply per email. Confirmation drafts
+  prefill verified contacts. The allowlist is exact-domain (thread and meeting parties plus internal). Escalations
+  get an apologetic template. Suspicious mail offers Report phishing / Quarantine.
+- **I. Security & audit**:
+  - Send-time confirmations are audited.
+  - MNPI terms are broader.
+  - Hidden, HTML-comment, defanged and bare-link injections are flagged.
+  - The Origin check is an exact scheme+host+port match. Proxy headers are trusted only with
+    `TRUST_PROXY=true` (or on Vercel/Render).
+  - Prisma errors are never returned raw.
+  - The Origin/Sec-Fetch check also covers GET `/api/outlook/connect`.
+  - Demo mode is labelled on the login picker and in the top bar.
+  - New audit trail page (`/api/audit`): server-side search; filters for person, action, issuer and dates;
+    pagination with no 100-row cap; links to the email or meeting; and a CSV export of the filtered set.
+    Exports are themselves audited.
+- **J. Sales**:
+  - A "My emails" page shows emails the salesperson sent, forwarded or was cc'd on, with each ask's status
+    and the banker's reason.
+  - Coverage: James covers PIMCO, BlackRock, Wellington, Fidelity and Apollo; Emma covers the rest.
+  - The request tracker shows the reason and open times across days.
+  - Find a time reads durations ("45-minute", "1.5 hours", "hour and a half").
+  - State refreshes every 10 s and on tab focus.
+  - Sales are notified when a client request or meeting changes, or when a banker decides an ask on their email.
+- **K. UI**:
+  - Checkbox labels wrap.
+  - Overview tiles fit at 390 px.
+  - The "Human-approved AI" sidebar card is removed.
+  - Outlook moves to a Settings page.
+  - Headlines are direction-aware.
+  - "Requested by" shows the real sender (and "via" the forwarder).

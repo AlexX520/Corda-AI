@@ -159,9 +159,7 @@ export function parseRequestText(
   if (!windowStart && morning) [windowStart, windowEnd] = ['09:00', '12:00'];
   if (!windowStart && afternoon) [windowStart, windowEnd] = ['13:00', '17:00'];
 
-  const minutes = lower.match(/\b(\d{2,3})\s*(?:min|mins|minutes)\b/);
-  const hours = lower.match(/\b(1|one)\s*(?:hr|hour)\b/);
-  const duration = minutes ? Number(minutes[1]) : hours ? 60 : ctx.conference.slotMinutes;
+  const duration = parseDuration(lower) ?? ctx.conference.slotMinutes;
 
   const missing = [
     !issuerId && 'issuer',
@@ -170,4 +168,20 @@ export function parseRequestText(
     !windowStart && 'time',
   ].filter(Boolean) as string[];
   return { issuerId, investorId, date, windowStart, windowEnd, duration, missing };
+}
+
+const WORD_HOURS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3 };
+/** "45 min", "45-minute", "90 mins", "an hour", "1.5 hours", "hour and a half", "half an hour", "2 hrs". */
+export function parseDuration(lower: string): number | null {
+  if (/\bhalf an? hour\b/.test(lower)) return 30;
+  const andHalf = lower.match(/\b(?:(?:an?|one|1)\s*)?(?:hr|hour)s?\s+and\s+a\s+half\b/);
+  if (andHalf) return 90;
+  const minutes = lower.match(/\b(\d{2,3})\s*-?\s*(?:m|min|mins|minute|minutes)\b/);
+  if (minutes) return Number(minutes[1]);
+  const hours = lower.match(/\b(\d(?:\.\d+)?|an?|one|two|three)\s*-?\s*(?:h|hr|hrs|hour|hours)\b/);
+  if (hours) {
+    const h = WORD_HOURS[hours[1]] ?? Number(hours[1]);
+    if (h > 0 && h <= 4) return Math.round(h * 60);
+  }
+  return null;
 }
