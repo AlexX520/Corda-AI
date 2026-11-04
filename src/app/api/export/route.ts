@@ -108,7 +108,7 @@ export async function GET(req: Request) {
         ? ''
         : !previous.meetingIds.includes(m.id)
           ? 'New'
-          : m.changedAt && m.changedAt > previous.createdAt
+          : m.changedAt && m.changedAt > (previous.sentAt || previous.createdAt)
             ? 'Changed'
             : '';
     const removed = previous
@@ -118,7 +118,7 @@ export async function GET(req: Request) {
         })
       : [];
     const sinceNote = previous
-      ? `Changes since the version sent ${formatInTimeZone(previous.createdAt, c.timezone, 'MMM d, h:mm a')}: ${authorized.filter((m) => since(m) === 'New').length} new, ${authorized.filter((m) => since(m) === 'Changed').length} changed, ${removed.length} removed.`
+      ? `Changes since the version sent ${formatInTimeZone(previous.sentAt || previous.createdAt, c.timezone, 'MMM d, h:mm a')}: ${authorized.filter((m) => since(m) === 'New').length} new, ${authorized.filter((m) => since(m) === 'Changed').length} changed, ${removed.length} removed.`
       : 'First version for this recipient.';
     const log = track
       ? await db.exportLog.create({
@@ -344,7 +344,6 @@ export async function GET(req: Request) {
     const info = wb.addWorksheet('Read me');
     info.addRow(['Title', `${c.name} — ${title}`]);
     if (recipient) info.addRow(['Prepared for', recipient]);
-    info.addRow(['Scope', scope]);
     info.addRow(['Timezone', c.timezone]);
     info.addRow(['Since last sent', sinceNote]);
     info.addRow(['Note', withPast ? 'Confirmed meetings, including those already held.' : 'Confirmed meetings still to come.']);

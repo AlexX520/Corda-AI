@@ -139,9 +139,14 @@ export function EmailReview({
           <button className="text-button" onClick={() => setNotify(null)}>Not now</button>
         </div>
       )}
-      {openAsks.length > 1 && !email.suspicious && !email.escalation && (
+      {(openAsks.length > 1 || applyResult) && !email.suspicious && !email.escalation && (
         <div className="apply-all">
-          {!applyAll ? (
+          {applyResult && !openAsks.length ? (
+            <>
+              <strong>Applied</strong>
+              <ul className="apply-result">{applyResult.map((x, i) => <li key={i}>{x}</li>)}</ul>
+            </>
+          ) : !applyAll ? (
             <button className="text-button" onClick={() => setApplyAll(true)}>
               Approve all {openAsks.length} asks…
             </button>

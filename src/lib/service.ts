@@ -624,7 +624,7 @@ function escalationFrom(a: Analysis) {
 }
 async function writeAsks(tx: Tx, user: User, emailId: string, a: Analysis) {
   if (a.protectMeetingId) {
-    const reason = a.escalationReasons.find((r) => /threat/i.test(r)) || 'Investor asked that it not move again';
+    const reason = a.protectQuote || a.escalationReasons.find((r) => /threat/i.test(r)) || 'Investor asked that it not move again';
     await tx.meeting.update({ where: { id: a.protectMeetingId }, data: { protected: true, protectedReason: reason, protectedBy: user.id } });
     await audit(tx, user, 'Meeting protected (investor threat)', 'Meeting', a.protectMeetingId, undefined, { emailId, reason });
   }
@@ -2553,7 +2553,8 @@ function requestReason(
  * asks when every time they propose (and the meeting they refer to) is in the past.
  */
 export async function expirePast(at = now()) {
-  const open = await db.action.findMany({ where: { status: 'Open' } });
+  // Items someone reopened stay open (they may fix the time); only untouched ones expire.
+  const open = await db.action.findMany({ where: { status: 'Open', NOT: { recommendation: { startsWith: 'Reopened' } } } });
   if (!open.length) return 0;
   const [requests, meetings, proposals] = await Promise.all([
     db.meetingRequest.findMany({ where: { id: { in: open.map((a) => a.requestId).filter(Boolean) as string[] } } }),

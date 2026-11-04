@@ -214,6 +214,7 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
   }
   // "Moved a third time and we walk": protect that meeting.
   let protectMeetingId: string | null = null;
+  let protectQuote: string | null = null;
   if (final.threat) {
     const esc = asks.find((a) => a.category === 'Escalation / complaint');
     // The complaining investor is the sender when the text does not name one.
@@ -231,6 +232,11 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
     const byTime = pool.filter((m) => times.includes(+new Date(m.start)));
     if (investorId && byTime.length === 1) protectMeetingId = byTime[0].id;
     else if (investorId && pool.length === 1) protectMeetingId = pool[0].id;
+    // The investor's own words become the protection reason.
+    const quote = content
+      .split(/(?<=[.!?])\s+|\n+/)
+      .find((x) => /\bdo not move|don'?t move|\bHOLD\b|we'?ll (?:pass|walk|skip)|will (?:pass|walk|skip)|third time/i.test(x));
+    if (quote) protectQuote = `${investorId ? investors.find((i) => i.id === investorId)?.name : 'Client'}: “${quote.trim().slice(0, 160)}”`;
   }
   const addressed = users.find(
     (u) => (u.role === 'BANKER' || u.role === 'MANAGER') && p.to.some((t) => t.toLowerCase() === u.email.toLowerCase()),
@@ -249,6 +255,7 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
     escalation: final.escalation,
     escalationReasons: final.reasons,
     protectMeetingId,
+    protectQuote,
     threat: final.threat,
     originalSender: isForward ? forwarded!.fromEmail : null,
     originalSenderName: isForward ? forwarded!.fromName : null,
