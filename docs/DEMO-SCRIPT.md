@@ -5,6 +5,9 @@ Story: *the desk is mid-conference; Corda turns inbox chaos into approved, audit
 
 ## Before the demo (2 minutes)
 
+On the deployed demo (DEMO_MODE=true), sign in as **Morgan Lee** and use **Settings → Reset demo to today**
+(type RESET). It does the same as the command below, in one transaction. Every production deploy also reseeds.
+
 ```bash
 # Move the demo onto today: ABS East runs yesterday → tomorrow, mid-event.
 DEMO_RESEED=true npx tsx prisma/seed.ts          # wipes demo tables only (users/Outlook kept)

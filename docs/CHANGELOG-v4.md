@@ -374,3 +374,14 @@ Migration `20261104150000_v4_round3` (additive) adds:
   - the metrics split and ROI in `tests/metrics.test.ts`;
   - "tomorrow" in Find a time in `tests/request-parser.test.ts`.
 - `docs/DEMO-SCRIPT.md` is the 10-minute boss demo. The emails it uses are in `tests/fixtures/demo-emails.json`.
+
+### Deployment (round 3)
+- **Settings → Reset demo to today** (DEMO_MODE and MANAGER only): a typed RESET confirmation, then one
+  transaction runs `seedDemo` from `src/lib/demo-seed.ts`, the same code as `DEMO_RESEED=true npx tsx prisma/seed.ts`.
+  The reset is audited as the first entry of the new audit trail.
+- `vercel.json`: every production build runs `prisma migrate deploy`, then the seed with `DEMO_RESEED=true`.
+- Upgrade path verified locally:
+  1. A database built from the v3 migrations plus the v3 seed (October demo rows).
+  2. The five v4 migrations applied cleanly on top.
+  3. The v4 seed with `DEMO_RESEED=true` ran.
+  4. All three role homes and Reset demo worked.
