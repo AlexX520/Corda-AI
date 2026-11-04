@@ -38,7 +38,7 @@ export function askSummary(e: Extraction, n: Names, zone = 'America/New_York') {
   const was = e.referenceTime ? local(e.referenceTime, zone, 'EEE h:mm a') : '';
   switch (e.category) {
     case 'Reschedule Request':
-      return `Move ${who}${was ? ` from ${was}` : ''}${at ? ` to ${at}` : ' (new time not stated)'}`;
+      return `Move ${who}${was ? ` from ${was}` : ''}${at ? ` to ${at}` : ' (new time not stated)'}${e.conditional ? ' (conditional)' : ''}`;
     case 'Meeting Cancellation':
       return `Cancel ${who}${was ? ` (${was})` : ''}`;
     case 'New Meeting Request': {
@@ -46,13 +46,17 @@ export function askSummary(e: Extraction, n: Names, zone = 'America/New_York') {
         ? Math.round((+new Date(offered[0].end) - +new Date(offered[0].start)) / 60000)
         : null;
       const parts = [`Add ${who}`];
-      if (at) parts.push(`${at}${len ? `, ${len} min` : ''}`);
+      if (at && e.flexible)
+        parts.push(`any time ${windowLabel(offered[0], zone)} (${e.durationMinutes || 30} min)`);
+      else if (at) parts.push(`${at}${len ? `, ${len} min` : ''}`);
       else parts.push('time not stated');
       if (e.attendees) parts.push(`${e.attendees} attendees`);
       return parts.join(' · ');
     }
     case 'Meeting Confirmation':
       return `Confirm ${who}${at ? ` · ${at}` : ''}`;
+    case 'Meeting Update':
+      return `Update ${who}${e.attendees ? `: ${e.attendees} attendees` : ''}${e.conditional ? ' (conditional)' : ''}`;
     case 'Escalation / complaint':
       return `Escalation${issuer ? ` from ${issuer}` : ''}${investor ? ` about ${investor}` : ''}`;
     case 'Issuer Availability Update': {

@@ -72,8 +72,13 @@ test('recognizes replacement, tentative, cancellation, confirmation and reschedu
 });
 test('rejects unknown structured categories and flags incomplete time', () => {
   assert.throws(() => extractionSchema.parse({ category: 'Invented' }));
+  // v4 round 2: "between 3 and 5 PM" takes PM from the end (spec item D).
   assert.equal(
-    mockExtract('Bayview available Monday between 3 and 5 PM ABS East.', '', ctx).windows.length,
+    mockExtract('Bayview available Monday between 3 and 5 PM ABS East.', '', ctx).windows[0].start,
+    '2026-10-19T19:00:00.000Z',
+  );
+  assert.equal(
+    mockExtract('Bayview available Monday between 3 and 5 at ABS East.', '', ctx).windows.length,
     0,
   );
 });

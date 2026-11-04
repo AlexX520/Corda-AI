@@ -27,8 +27,8 @@ export type SenderTrust = {
   lookalikeOf: string | null;
 };
 
-const sameOrSub = (domain: string, registered: string) =>
-  domain === registered || domain.endsWith(`.${registered}`);
+/** Exact domain match. A subdomain (evil.onemain.example) is not the registered domain. */
+const sameOrSub = (domain: string, registered: string) => domain === registered;
 const label = (domain: string) => domain.split('.')[0];
 function distance(a: string, b: string) {
   const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
@@ -66,12 +66,19 @@ export function senderTrust(
     ...parties.internal,
   ];
   const tokens = domain.split(/[.-]/).filter((t) => t.length >= 3);
+  // Punycode (xn--) labels imitate a name with look-alike characters; compare their ASCII part.
+  const ascii = label(domain).replace(/^xn--/, '').replace(/-[a-z0-9]{2,4}$/, '');
+  const near = (a: string, b: string) => {
+    const d = distance(a, b);
+    return d > 0 && (b.length >= 5 ? d <= 2 : d <= 1);
+  };
   const lookalikeOf =
     registered.find(
       (r) =>
         tokens.includes(label(r)) ||
-        (label(r).length >= 5 && distance(label(domain), label(r)) <= 2),
-    ) || null;
+        near(label(domain), label(r)) ||
+        (domain.includes('xn--') && near(ascii, label(r))),
+    ) || (domain.includes('xn--') ? 'an internationalized (punycode) domain' : null);
   return { ...base, status: 'unverified', lookalikeOf };
 }
 
@@ -79,105 +86,134 @@ export function senderTrust(
 export function securityFlags(subject: string, body: string) {
   const text = `${subject}\n${body}`;
   const flags: string[] = [];
-  const hosts = [...text.matchAll(/\bhttps?:\/\/([^\s/?#)>\]]+)|\bwww\.([^\s/?#)>\]]+)/gi)].map(
-    (m) => (m[1] || `www.${m[2]}`).toLowerCase(),
-  );
+  const hosts = [
+    ...text.matchAll(/\bhttps?:\/\/([^\s/?#)>\]]+)|\bwww\.([^\s/?#)>\]]+)/gi),
+  ].map((m) => (m[1] || `www.${m[2]}`).toLowerCase());
   if (hosts.length)
     flags.push(
       `Contains a link (${[...new Set(hosts)].slice(0, 3).join(', ')}) — don't open or forward it until the sender is confirmed.`,
     );
+  // Defanged ("hxxps://bit[.]ly") and bare ("share-point.example/deck") links are links too.
+  const defanged = [...text.matchAll(/\bhxxps?:\/\/\S+|\b[\w-]+\[\.\][\w.[\]-]+(?:\/\S*)?/gi)].map((m) => m[0]);
+  const bare = [...text.matchAll(/(?<![@\w.\/-])((?:[a-z0-9-]+\.)+(?:example|com|net|org|co|io|ly|info|biz|app))(\/[^\s)>\]]*)/gi)]
+    .map((m) => m[1].toLowerCase())
+    .filter((h) => !hosts.includes(h));
+  if (defanged.length || bare.length)
+    flags.push(
+      `Contains a disguised or bare link (${[...new Set([...defanged, ...bare])].slice(0, 3).join(', ')}) — treat as a link.`,
+    );
   if (
-    /\b(?:sign[ -]?in|log[ -]?in|credentials?|password|passcode|verify your (?:account|identity)|MFA|one-time code|2FA)\b/i.test(
-      text,
-    )
+    /\b(?:sign[ -]?in|log[ -]?in|credentials?|password|passcode|verify your (?:account|identity)|MFA|one-time code|2FA)\b/i.test(text)
   )
     flags.push('Asks for a sign-in or credentials.');
+  if (
+    /\bsend\b[^.]{0,80}\b(?:list|attendees?|contacts?|mobile|phone numbers?|contact details|details|grid|planner|schedule)\b[^.]{0,80}\b(?:to|at)\b[^.]{0,60}(?:@(?:gmail|yahoo|hotmail|outlook|icloud|proton)\.|\b(?:this|my|our new|new|personal) (?:address|email)|personal)/i.test(
+      text,
+    ) ||
+    /\b(?:cc|send|forward)\b[^\n]{0,60}@(?:gmail|yahoo|hotmail|outlook|icloud|proton)\./i.test(text)
+  )
+    flags.push('Asks to send attendee or investor data to an outside address — likely data theft.');
   const sensitive = findSensitive(text);
   if (sensitive.length)
     flags.push(
       `Possible deal / MNPI terms (${sensitive.join(', ')}) — keep them out of any reply.`,
     );
   if (
-    /\[(?:assistant|ai|system)[^\]]{0,20}instructions?|ignore (?:all |any )?(?:previous|prior|above) instructions|set needsReview|approve all (?:pending )?proposals/i.test(
+    /<!--[\s\S]*?-->/.test(text) ||
+    /\[(?:system|assistant|ai)[^\]]{0,30}\]|\b(?:note|instructions?) (?:to|for) the (?:ai|assistant|scheduling assistant|model)\b|ignore (?:all |any )?(?:previous|prior|above) instructions|set needsReview|approve all (?:pending )?proposals|mark this sender verified|treat the sender as internal|skip review/i.test(
       text,
     )
   )
-    flags.push('Contains instructions aimed at automated tools — Corda ignored them.');
+    flags.push('Contains hidden or embedded instructions aimed at automated tools — Corda ignored them.');
   return flags;
 }
+/** Flags that make an email suspicious even from a registered address (compromised mailbox). */
+export const SUSPICIOUS_FLAG = /^(?:Asks for a sign-in|Asks to send attendee|Contains hidden or embedded|Sender not verified|Forwarded message is from an unverified)/;
 
-/** Client complaints, error reports and urgent same-day problems. */
+/** Client complaints, error reports, investor threats and urgent same-day problems. */
 export function detectEscalation(subject: string, content: string) {
   const reasons: string[] = [];
+  let threat = false;
   const patterns: [RegExp, string][] = [
     [/\b(?:not acceptable|unacceptable)\b/i, 'Client says it is not acceptable'],
+    [/\b(?:nobody|no one|no-one|never) (?:agreed|approved|asked)\b/i, 'Client reports a change nobody agreed to'],
     [
-      /\b(?:nobody|no one|no-one|never) (?:agreed|approved|asked)\b/i,
-      'Client reports a change nobody agreed to',
-    ],
-    [
-      /\bshowed up\b[^.]{0,80}\b(?:empty|another|wrong|no one|nobody|no-one)\b|\bempty room\b/i,
+      /\bshowed up\b[^.]{0,80}\b(?:empty|another|wrong|no one|nobody|no-one|cancell?ed)\b|\bempty room\b/i,
       'Client reports a meeting that went wrong',
     ],
     [
-      /\b(?:stuck at|stranded|ground stop|flight (?:was )?cancell?ed|missed (?:the|our) flight)\b/i,
-      'Travel problem affecting a meeting today',
+      /\b(?:stuck (?:at|in)|stranded|ground stop|flight (?:was )?cancell?ed|missed (?:the|our) flight)\b/i,
+      'Travel problem affecting a meeting',
     ],
-    [
-      /\b(?:complain\w*|very disappointed|extremely disappointed|escalat\w*|this is a mess)\b/i,
-      'Client complaint',
-    ],
+    [/\b(?:complain\w*|disappointed|escalat\w*|this is a mess)\b/i, 'Client complaint'],
+    [/\bdo not send any more\b|\bstop sending\b/i, 'Client asks us to stop sending changes'],
   ];
   for (const [re, reason] of patterns) if (re.test(content)) reasons.push(reason);
-  const urgent = /\burgent\b|\basap\b/i.test(`${subject}\n${content}`);
-  const sameDay =
-    /\b(?:today|this morning|this afternoon|tonight|right now|immediately|asap)\b/i.test(content);
+  if (
+    /\b(?:we'?ll|we will|we'?d|will) (?:pass|walk|drop (?:it|the meeting)|pull out)\b|\braise it with\b[^.]{0,40}\bmanagement\b|\b(?:third|3rd) time\b/i.test(
+      content,
+    )
+  ) {
+    reasons.push('Investor threatens to drop the meeting if it moves again');
+    threat = true;
+  }
+  // "asap" alone is not urgent; urgency needs a same-day signal.
+  const urgent = /\burgent\b/i.test(`${subject}\n${content}`);
+  const sameDay = /\b(?:today|this morning|this afternoon|tonight|right now|immediately)\b/i.test(`${subject}\n${content}`);
   if (urgent && sameDay) reasons.push('Urgent same-day request');
-  return [...new Set(reasons)];
+  return { reasons: [...new Set(reasons)], threat };
 }
 
 /**
- * Rules applied after any parser: an escalation becomes one ask with no approval path (a human
- * acknowledges and owns it), and every summary is rebuilt from the final fields.
+ * Rules applied after any parser. An escalation is a flag on the email: it adds an "Escalation"
+ * item that a person acknowledges and owns, and the email's real asks are still extracted (marked
+ * "from an escalation"). Summaries are rebuilt from the final fields.
  */
 export function finalizeAsks(
   asks: Extraction[],
-  opts: { subject: string; content: string; trust: SenderTrust; names: Names; zone?: string },
+  opts: {
+    subject: string;
+    content: string;
+    trust: SenderTrust;
+    names: Names;
+    zone?: string;
+    /** The parser found no sentence that asks for anything and read the email as one item. */
+    whole?: boolean;
+  },
 ) {
-  const reasons =
-    opts.trust.status === 'unverified' ? [] : detectEscalation(opts.subject, opts.content);
+  const { reasons, threat } =
+    opts.trust.status === 'unverified' ? { reasons: [], threat: false } : detectEscalation(opts.subject, opts.content);
   const llmEscalation = asks.find((a) => a.category === 'Escalation / complaint');
-  let out = asks;
-  if (reasons.length || llmEscalation) {
+  let out = asks.filter((a) => a.category !== 'Escalation / complaint');
+  const escalation = Boolean(reasons.length || llmEscalation);
+  if (escalation) {
     const base = llmEscalation || asks[0];
     const issuerId = asks.map((a) => a.issuerId).find(Boolean) || opts.trust.issuerId;
     const investors = [...new Set(asks.map((a) => a.investorId).filter(Boolean))];
-    out = [
-      extractionSchema.parse({
-        ...base,
-        category: 'Escalation / complaint',
-        operation: 'escalate',
-        issuerId,
-        investorId: investors.length === 1 ? investors[0] : null,
-        windows: [],
-        meetingId: null,
-        referenceTime: null,
-        tentative: false,
-        needsReview: true,
-        uncertainties: [
-          ...(reasons.length ? reasons : ['Client escalation']),
-          ...asks
-            .filter((a) => a.category !== 'Escalation / complaint' && a.summary)
-            .map((a) => `Mentioned in the email (machine reading — verify): ${a.summary}`),
-        ],
-        evidence: [...new Set(asks.flatMap((a) => a.evidence))].slice(0, 4),
-        missing: [],
-        vague: [],
-      }),
-    ];
+    const flag = extractionSchema.parse({
+      ...base,
+      category: 'Escalation / complaint',
+      operation: 'escalate',
+      issuerId,
+      investorId: investors.length === 1 ? investors[0] : opts.trust.investorId,
+      windows: [],
+      meetingId: null,
+      referenceTime: null,
+      tentative: false,
+      needsReview: true,
+      conditional: false,
+      condition: '',
+      uncertainties: reasons.length ? reasons : ['Client escalation'],
+      evidence: [...new Set(asks.flatMap((a) => a.evidence))].slice(0, 4),
+      missing: [],
+      vague: [],
+    });
+    // A whole-email reading of a complaint is not a real ask; drop it.
+    out = (opts.whole ? [] : out).map((a) => ({ ...a, fromEscalation: true }));
+    out.unshift(flag);
   }
   for (const a of out) a.summary = askSummary(a, opts.names, opts.zone);
-  return out;
+  return { asks: out, escalation, reasons, threat };
 }
 
 /**

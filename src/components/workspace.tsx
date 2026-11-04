@@ -39,7 +39,7 @@ import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { Avatar, Badge, Empty, Field, fmt, names, Run } from './shared';
 import { EmailForm, RequestForm } from './forms';
-import { DraftEditor, EmailReview } from './review';
+import { DraftEditor, EmailReview, type Compose } from './review';
 import { Sheet } from './ui/sheet';
 import { RequestDecision } from './decision';
 import { AvailabilityView, PlannerView, RequestDetail, RequestsView } from './views';
@@ -129,6 +129,7 @@ export function Workspace() {
     [bellOpen, setBellOpen] = useState(false),
     [meetingId, setMeetingId] = useState<string | null>(null),
     [newMeeting, setNewMeeting] = useState(false),
+    [composer, setComposer] = useState<Compose | null>(null),
     [draftId, setDraftId] = useState<string | null>(null),
     [queueSection, setQueueSection] = useState<'tasks' | 'emails' | 'drafts'>('tasks'),
     [scheduleSection, setScheduleSection] = useState<'schedule' | 'availability'>('schedule'),
@@ -188,6 +189,11 @@ export function Workspace() {
     );
     setOutlookOpen(true);
     history.replaceState(null, '', location.pathname);
+  }, []);
+  // Deep link: ?email=<id> opens that email's review.
+  useEffect(() => {
+    const id = new URLSearchParams(location.search).get('email');
+    if (id) setReview({ emailId: id });
   }, []);
   // Keep a linked inbox fresh while the workspace is open.
   const outlookLinked = Boolean(data?.outlook?.connected);
@@ -281,6 +287,19 @@ export function Workspace() {
     } catch (e) {
       setToast({ message: String(e), error: true });
     }
+  }
+  /** "Reply": reopen the email's draft if there is one, else compose without saving anything. */
+  async function openReply(emailId: string) {
+    const r = await fetch('/api/commands', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'replyPreview', data: { emailId } }),
+    });
+    const out = await r.json();
+    if (!r.ok) return setToast({ message: out.error, error: true });
+    setReview(null);
+    if (out.result.existingDraftId) setDraftId(out.result.existingDraftId);
+    else setComposer({ emailId, ...out.result });
   }
   async function signOut() {
     await fetch('/api/session', { method: 'DELETE' });
@@ -487,29 +506,42 @@ export function Workspace() {
               />
             </div>
             <span className="demo-badge">SYNTHETIC DATA</span>
-            {banker && (
-              <div className="bell-wrap">
-                <button
-                  className="notification"
-                  aria-label="Recent changes"
-                  aria-expanded={bellOpen}
-                  onClick={() => setBellOpen(!bellOpen)}
-                >
-                  <Bell size={18} />
-                  {data.auditLogs.length > 0 && <i />}
-                </button>
-                {bellOpen && (
-                  <RecentChanges
-                    data={data}
-                    onClose={() => setBellOpen(false)}
-                    onOpenAudit={() => {
-                      setBellOpen(false);
-                      navigate('audit');
-                    }}
-                  />
+            <div className="bell-wrap">
+              <button
+                className="notification"
+                aria-label="Notifications"
+                aria-expanded={bellOpen}
+                onClick={() => {
+                  setBellOpen(!bellOpen);
+                  // Opening the bell marks your notices as read.
+                  if (!bellOpen && data.notifications.some((x) => !x.readAt))
+                    void fetch('/api/commands', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ type: 'notificationsRead', data: {} }),
+                    }).then(() => setTimeout(() => void reload(), 4000));
+                }}
+              >
+                <Bell size={18} />
+                {data.notifications.some((x) => !x.readAt) && (
+                  <b className="bell-count">{data.notifications.filter((x) => !x.readAt).length}</b>
                 )}
-              </div>
-            )}
+              </button>
+              {bellOpen && (
+                <RecentChanges
+                  data={data}
+                  onClose={() => setBellOpen(false)}
+                  onOpenAudit={() => {
+                    setBellOpen(false);
+                    navigate('audit');
+                  }}
+                  onOpenMeeting={(id) => {
+                    setBellOpen(false);
+                    setMeetingId(id);
+                  }}
+                />
+              )}
+            </div>
             <Avatar name={data.user.name} color="#436b5e" size="small" />
           </div>
         </header>
@@ -993,7 +1025,8 @@ export function Workspace() {
           data={data}
           close={() => setReview(null)}
           run={run}
-          onOpenDraft={setDraftId}
+          onReply={openReply}
+          onOpenEmail={(id) => setReview({ emailId: id })}
         />
       )}
       {sheetRequest && banker && !['Confirmed', 'Cancelled'].includes(sheetRequest.status) && (
@@ -1117,6 +1150,7 @@ export function Workspace() {
           />
         </Sheet>
       )}
+      {composer && <DraftEditor key={composer.emailId} compose={composer} data={data} close={() => setComposer(null)} run={run} />}
       {draft && (
         <DraftEditor
           key={draft.id}
@@ -1268,8 +1302,9 @@ const emailTabs = [
   {
     id: 'done',
     label: 'Done',
-    match: (s: string) => ['Approved', 'Rejected', 'Ignored', 'Resolved', 'Acknowledged'].includes(s),
+    match: (s: string) => ['Approved', 'Rejected', 'Resolved', 'Acknowledged', 'Quarantined'].includes(s),
   },
+  { id: 'ignored', label: 'Ignored', match: (s: string) => s === 'Ignored' },
   { id: 'all', label: 'All', match: () => true },
 ] as const;
 const shortCategory: Record<string, string> = {
@@ -1327,8 +1362,13 @@ function InboxView({
     (issuer === 'All issuers' || e.issuerId === issuer) &&
     `${e.subject} ${e.sender} ${e.body}`.toLowerCase().includes(search.toLowerCase());
   // Emails tied to no event live only in "Needs triage", not in every conference's lists.
-  const base = data.emails.filter((e) => e.conferenceId === conferenceId && matches(e));
-  const triage = data.emails.filter((e) => !e.conferenceId && e.status !== 'Ignored' && matches(e));
+  // Ignored mail has no event; it is listed under "Ignored" in every conference so nothing is hidden.
+  const base = data.emails.filter(
+    (e) => (e.conferenceId === conferenceId || (e.status === 'Ignored' && !e.conferenceId)) && matches(e),
+  );
+  const triage = data.emails.filter(
+    (e) => !e.conferenceId && !['Ignored', 'Quarantined'].includes(e.status) && matches(e),
+  );
   const inTab = tab === 'triage' ? triage : base.filter((e) => emailTabs.find((t) => t.id === tab)!.match(e.status));
   const filtered = inTab
     .filter((e) => !category || e.category === category)
@@ -1433,8 +1473,12 @@ function InboxView({
                   />
                   <div className="inbox-main">
                     <div>
-                      <strong>{n.issuer(e.issuerId) === 'Unassociated' ? e.sender : n.issuer(e.issuerId)}</strong>
+                      <strong>
+                        {n.issuer(e.issuerId) === 'Unassociated' ? e.originalSenderName || e.sender : n.issuer(e.issuerId)}
+                      </strong>
                       {e.senderStatus === 'unverified' && <span className="mini-flag red">Sender not verified</span>}
+                      {e.status === 'Quarantined' && <span className="mini-flag red">Quarantined</span>}
+                      {e.forwardedBy && <span className="mini-flag gray">Forwarded</span>}
                       {e.category === 'Escalation / complaint' && <span className="mini-flag amber">Escalation</span>}
                       <span>{fmt(e.receivedAt, undefined, 'MMM d, h:mm a')}</span>
                     </div>
@@ -1513,14 +1557,18 @@ function QueueView({
   const text = (a: Action) =>
     `${a.title} ${a.recommendation} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`.toLowerCase().includes(search.toLowerCase());
   const pool = data.actions.filter(
-    (a) => (status === 'All' || a.status === status) && text(a),
+    (a) =>
+      (status === 'All' ||
+        a.status === status ||
+        (status === 'Open' && a.status === 'Acknowledged' && a.assignedTo === data.user.id)) &&
+      text(a),
   );
   const triage = sortActions(pool.filter((a) => !a.conferenceId), data, sort);
   const actions = sortActions(
     pool.filter((a) => a.conferenceId === conferenceId && (focus === 'all' || actionKind(a, data).id === focus)),
     data,
     sort,
-  );
+  ).sort((x, y) => Number(y.status === 'Acknowledged') - Number(x.status === 'Acknowledged'));
   const kindCount = (k: KindId) => work.conference.filter((a) => actionKind(a, data).id === k).length;
   const primaryLabel = (a: AppState['actions'][number]) => {
     if (/escalation/i.test(a.type)) return 'Handle escalation';
@@ -1545,7 +1593,8 @@ function QueueView({
           <div className="decision-kicker">
             <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
             {pos && <span className="ask-pos">{pos}</span>}
-            {a.priority === 'Urgent' && <span className="mini-flag red">Urgent</span>}
+            {a.status === 'Acknowledged' && <span className="mini-flag amber">Acknowledged · yours</span>}
+            {a.priority === 'Urgent' && a.status !== 'Acknowledged' && <span className="mini-flag red">Urgent</span>}
             {email?.senderStatus === 'unverified' && <span className="mini-flag red">Sender not verified</span>}
           </div>
           <h3>
@@ -1777,18 +1826,53 @@ function entityLabel(a: AppState['auditLogs'][number], data: AppState) {
       return a.entityType;
   }
 }
-function RecentChanges({ data, onClose, onOpenAudit }: { data: AppState; onClose: () => void; onOpenAudit: () => void }) {
+function RecentChanges({
+  data,
+  onClose,
+  onOpenAudit,
+  onOpenMeeting,
+}: {
+  data: AppState;
+  onClose: () => void;
+  onOpenAudit: () => void;
+  onOpenMeeting: (id: string) => void;
+}) {
   const n = names(data);
+  const [tab, setTab] = useState<'mine' | 'all'>(data.notifications.length ? 'mine' : 'all');
   const items = data.auditLogs.slice(0, 10);
   return (
-    <div className="bell-pop" role="dialog" aria-label="Recent changes">
+    <div className="bell-pop" role="dialog" aria-label="Notifications">
       <div className="bell-head">
-        <strong>Recent changes</strong>
+        <div className="bell-tabs">
+          <button className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>
+            For you {data.notifications.filter((x) => !x.readAt).length ? `(${data.notifications.filter((x) => !x.readAt).length})` : ''}
+          </button>
+          {data.user.role === 'BANKER' && (
+            <button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>
+              All changes
+            </button>
+          )}
+        </div>
         <button aria-label="Close" onClick={onClose}>
           <X size={14} />
         </button>
       </div>
-      {items.length ? (
+      {tab === 'mine' ? (
+        data.notifications.length ? (
+          data.notifications.slice(0, 15).map((x) => (
+            <button
+              key={x.id}
+              className={`bell-item ${x.readAt ? '' : 'unread'}`}
+              onClick={() => x.meetingId && data.meetings.some((m) => m.id === x.meetingId) && onOpenMeeting(x.meetingId)}
+            >
+              <span>{x.text}</span>
+              <small>{fmt(x.createdAt, undefined, 'MMM d, h:mm a')}</small>
+            </button>
+          ))
+        ) : (
+          <p className="muted">Nothing new for you. Changes others make to your meetings and clients show here.</p>
+        )
+      ) : items.length ? (
         items.map((a) => (
           <div key={a.id} className="bell-item">
             <strong>{a.action}</strong>
@@ -1801,9 +1885,11 @@ function RecentChanges({ data, onClose, onOpenAudit }: { data: AppState; onClose
       ) : (
         <p className="muted">No changes yet.</p>
       )}
-      <button className="text-button" onClick={onOpenAudit}>
-        Open audit trail <ArrowUpRight size={13} />
-      </button>
+      {data.user.role === 'BANKER' && (
+        <button className="text-button" onClick={onOpenAudit}>
+          Open audit trail <ArrowUpRight size={13} />
+        </button>
+      )}
     </div>
   );
 }

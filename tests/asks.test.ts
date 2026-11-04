@@ -3,13 +3,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { mockExtractAsks, type Extraction } from '../src/lib/extraction';
-import {
-  detectEscalation,
-  finalizeAsks,
-  resolveConference,
-  securityFlags,
-  senderTrust,
-} from '../src/lib/email-trust';
+import { detectEscalation, resolveConference, securityFlags, senderTrust } from '../src/lib/email-trust';
+import { analyse } from '../src/lib/analysis';
 import {
   findCandidates,
   isOpenMeeting,
@@ -77,27 +72,31 @@ const names = {
   issuer: (id: string | null) => ctx.issuers.find((i) => i.id === id)?.name || 'Unassociated',
   investor: (id: string | null) => ctx.investors.find((i) => i.id === id)?.name || '—',
 };
-/** The same steps the service runs: sender check → parse with sender hints → escalation rules. */
-function read(key: string) {
+/** The same analysis the service runs on ingest (pure core with in-memory data). */
+async function read(key: string) {
   const e = email(key);
-  const trust = senderTrust(e.sender, { issuers: ctx.issuers, investors: ctx.investors, internal });
-  const trusted = trust.status !== 'unverified';
-  const { asks } = mockExtractAsks(e.body, e.subject, ctx, {
-    defaultConferenceId: 'abs-east',
-    senderIssuerId: trusted ? trust.issuerId : null,
-    senderInvestorId: trusted ? trust.investorId : null,
-    receivedAt: '2026-10-19T12:00:00Z',
-  });
-  return {
-    trust,
-    asks: finalizeAsks(asks, {
-      subject: e.subject,
-      content: e.body,
-      trust,
-      names,
-      zone: 'America/New_York',
-    }),
-  };
+  return readEmail(e);
+}
+async function readEmail(e: { sender: string; to: string[]; cc: string[]; subject: string; body: string }) {
+  const r = await analyse(
+    { ...e, receivedAt: '2026-10-19T12:00:00Z' },
+    {
+      conferences: ctx.conferences,
+      issuers: ctx.issuers,
+      investors: ctx.investors,
+      users: [
+        { id: 'banker-sarah', email: 'sarah.chen@conferenceos.demo', role: 'BANKER' },
+        { id: 'banker-michael', email: 'michael.torres@conferenceos.demo', role: 'BANKER' },
+        { id: 'sales-james', email: 'james.wilson@conferenceos.demo', role: 'SALES' },
+      ],
+      meetings,
+      internal,
+      today: '2026-10-19',
+      involvement: () => ['abs-east'],
+      extract: (body: string, subject: string, c: Parameters<typeof mockExtractAsks>[2], hints: Parameters<typeof mockExtractAsks>[3]) => ({ ...mockExtractAsks(body, subject, c, hints), parser: 'rules' as const }),
+    },
+  );
+  return { ...r, asks: r.asks };
 }
 const at = (iso: string | null | undefined) =>
   iso ? new Date(iso).toISOString().slice(0, 16) : null;
@@ -151,8 +150,8 @@ const meetings = [
 const pickMeeting = (a: Extraction, trusted = true) =>
   findCandidates(a, meetings, { zone: 'America/New_York', trusted, open: isOpenMeeting, n: names });
 
-test('reply-all with three numbered asks becomes three asks', () => {
-  const { asks } = read('ford-replyall-3-asks');
+test('reply-all with three numbered asks becomes three asks', async () => {
+  const { asks } = await read('ford-replyall-3-asks');
   assert.deepEqual(
     asks.map((a) => a.category),
     ['Reschedule Request', 'Meeting Cancellation', 'New Meeting Request'],
@@ -180,7 +179,7 @@ test('reply-all with three numbered asks becomes three asks', () => {
   assert.equal(pickMeeting(cancel).preselectId, 'm-ford-pimco');
 });
 
-test('move … to … is a reschedule even when "cancel" appears elsewhere', () => {
+test('move … to … is a reschedule even when "cancel" appears elsewhere', async () => {
   const { asks } = mockExtractAsks(
     'Please cancel the PIMCO meeting on Tuesday at 1pm. Separately, can we move BlackRock from Monday 10am to Tuesday 2pm?',
     'ABS East 2026',
@@ -195,8 +194,8 @@ test('move … to … is a reschedule even when "cancel" appears elsewhere', () 
   assert.equal(at(asks[1].windows[0].start), '2026-10-20T18:00');
 });
 
-test('clean reschedule names both times and pre-selects the matching meeting', () => {
-  const { asks } = read('ford-clean-reschedule');
+test('clean reschedule names both times and pre-selects the matching meeting', async () => {
+  const { asks } = await read('ford-clean-reschedule');
   assert.equal(asks.length, 1);
   assert.equal(asks[0].operation, 'reschedule');
   assert.equal(at(asks[0].referenceTime), '2026-10-19T14:00');
@@ -206,8 +205,8 @@ test('clean reschedule names both times and pre-selects the matching meeting', (
   assert.match(pick.why, /Time matches/);
 });
 
-test('investor cancellation without event name: one ask per issuer, investor from sender, "still on" ignored', () => {
-  const { trust, asks } = read('pimco-cancel-no-conference');
+test('investor cancellation without event name: one ask per issuer, investor from sender, "still on" ignored', async () => {
+  const { trust, asks } = await read('pimco-cancel-no-conference');
   assert.equal(trust.investorId, 'pimco');
   assert.deepEqual(
     asks.map((a) => [a.operation, a.issuerId, a.investorId]),
@@ -221,8 +220,8 @@ test('investor cancellation without event name: one ask per issuer, investor fro
   assert(!asks.some((a) => a.issuerId === 'bayview'));
 });
 
-test('time zones: ET kept, the UK duplicate ignored, "nothing before 1pm" blocks the morning', () => {
-  const { asks } = read('santander-cfo-timezones');
+test('time zones: ET kept, the UK duplicate ignored, "nothing before 1pm" blocks the morning', async () => {
+  const { asks } = await read('santander-cfo-timezones');
   assert.equal(asks.length, 2);
   const [block, move] = asks;
   assert.equal(block.category, 'Issuer Availability Update');
@@ -244,34 +243,37 @@ test('time zones: ET kept, the UK duplicate ignored, "nothing before 1pm" blocks
   );
 });
 
-test('a time stated in another zone is converted to the conference zone', () => {
+test('a time stated in another zone is converted to the conference zone', async () => {
   const e = mockExtractAsks('Can we move PGIM to Tuesday 9:30am Central?', 'ABS East 2026', ctx, {
     issuerId: 'ford',
   }).asks[0];
   assert.equal(at(e.windows[0].start), '2026-10-20T14:30'); // 9:30 CT = 10:30 ET = 14:30 UTC
 });
 
-test('complaint and urgent same-day emails become a single escalation', () => {
+test('complaint and urgent same-day emails are flagged, with their real asks kept', async () => {
   for (const key of ['pennymac-complaint', 'discover-kkr-urgent']) {
-    const { asks } = read(key);
-    assert.equal(asks.length, 1, key);
-    assert.equal(asks[0].category, 'Escalation / complaint');
-    assert.equal(asks[0].operation, 'escalate');
-    assert.equal(asks[0].windows.length, 0);
+    const r = await read(key);
+    assert.equal(r.escalation, true, key);
+    assert.equal(r.asks[0].category, 'Escalation / complaint');
+    assert.equal(r.asks[0].operation, 'escalate');
+    assert(r.asks.slice(1).every((a) => a.fromEscalation), 'other asks are marked from an escalation');
   }
-  assert.equal(read('discover-kkr-urgent').asks[0].investorId, 'kkr');
-  assert.deepEqual(detectEscalation('Schedule', 'Bayview is available Monday 3-5pm.'), []);
+  const kkr = await read('discover-kkr-urgent');
+  assert.equal(kkr.asks[0].investorId, 'kkr');
+  assert.equal(detectEscalation('Schedule', 'Bayview is available Monday 3-5pm.').reasons.length, 0);
+  assert.equal(detectEscalation('Schedule', 'Pls let me know asap.').reasons.length, 0, '"asap" alone is not urgent');
 });
 
-test('lookalike sender is unverified, links and credential requests are flagged, nothing is pre-selected', () => {
+test('lookalike sender is unverified, links and credential requests are flagged, nothing is pre-selected', async () => {
   const e = email('phishing-lookalike');
-  const { trust, asks } = read('phishing-lookalike');
+  const { trust, asks } = await read('phishing-lookalike');
   assert.equal(trust.status, 'unverified');
   assert.equal(trust.lookalikeOf, 'bayview.example');
   const flags = securityFlags(e.subject, e.body);
   assert(flags.some((f) => f.includes('link')));
   assert(flags.some((f) => f.includes('credentials')));
   assert.equal(asks[0].category, 'Reschedule Request', 'unverified senders are never escalated');
+  assert.equal((await read('phishing-lookalike')).suspicious, true);
   assert.equal(pickMeeting(asks[0], false).preselectId, null);
   assert.equal(senderTrust('treasury@fordcredit.example', { ...ctx, internal }).status, 'verified');
   assert.equal(
@@ -280,9 +282,9 @@ test('lookalike sender is unverified, links and credential requests are flagged,
   );
 });
 
-test('MNPI forward: cancel ask kept, deal terms flagged and kept out of client questions', () => {
+test('MNPI forward: cancel ask kept, deal terms flagged and kept out of client questions', async () => {
   const e = email('mnpi-forward');
-  const { trust, asks } = read('mnpi-forward');
+  const { trust, asks } = await read('mnpi-forward');
   assert.equal(trust.status, 'internal');
   assert.deepEqual(
     asks.map((a) => [a.operation, a.issuerId, a.investorId]),
@@ -307,14 +309,14 @@ test('MNPI forward: cancel ask kept, deal terms flagged and kept out of client q
   assert(!stripped.text.includes('Mustang'));
 });
 
-test('duplicate request is detected; second slot keeps attendees and alternative', () => {
-  const dupe = read('vanguard-duplicate').asks[0];
+test('duplicate request is detected; second slot keeps attendees and alternative', async () => {
+  const dupe = (await read('vanguard-duplicate')).asks[0];
   assert.equal(dupe.category, 'New Meeting Request');
   assert.deepEqual([dupe.issuerId, dupe.investorId], ['onemain', 'vanguard']);
   assert.equal(at(dupe.windows[0].start), '2026-10-21T13:30');
   assert.equal(dupe.durationMinutes, 30);
   assert.equal(duplicatesFor(dupe, meetings, []).length, 1);
-  const second = read('blackrock-2nd-slot').asks[0];
+  const second = (await read('blackrock-2nd-slot')).asks[0];
   assert.deepEqual(
     [second.category, second.issuerId, second.investorId, second.attendees],
     ['New Meeting Request', 'athene', 'blackrock', 6],
@@ -323,8 +325,8 @@ test('duplicate request is detected; second slot keeps attendees and alternative
   assert(second.vague.some((v) => v.includes('after lunch')));
 });
 
-test('typo-heavy vague availability invents no windows and asks for exact times', () => {
-  const { asks } = read('discover-typo-vague');
+test('typo-heavy vague availability invents no windows and asks for exact times', async () => {
+  const { asks } = await read('discover-typo-vague');
   assert.equal(asks.length, 1);
   assert.equal(asks[0].issuerId, 'discover');
   assert.equal(asks[0].windows.length, 0);
@@ -339,7 +341,7 @@ test('typo-heavy vague availability invents no windows and asks for exact times'
   assert(q[0].includes('tues after lunch till ~4ish'));
 });
 
-test('pre-selection rules: investor must match, several candidates need a pick, time mismatch is explained', () => {
+test('pre-selection rules: investor must match, several candidates need a pick, time mismatch is explained', async () => {
   const base = {
     conferenceId: 'abs-east',
     issuerId: 'ford',
@@ -362,7 +364,7 @@ test('pre-selection rules: investor must match, several candidates need a pick, 
   assert.equal(otherInvestor.candidates.length, 0);
 });
 
-test('email status is resolved only when every ask is done', () => {
+test('email status is resolved only when every ask is done', async () => {
   assert.equal(rollupEmailStatus(['Approved', 'Pending', 'Pending']), 'Pending review');
   assert.equal(
     rollupEmailStatus(['Approved', 'Clarification requested']),
@@ -372,7 +374,7 @@ test('email status is resolved only when every ask is done', () => {
   assert.equal(rollupEmailStatus(['Approved', 'Rejected', 'Acknowledged']), 'Resolved');
 });
 
-test('event resolution: only event of the company, else only active event, else ask', () => {
+test('event resolution: only event of the company, else only active event, else ask', async () => {
   const conferences = [
     { id: 'abs-east', name: 'ABS East 2026', endDate: '2026-10-21' },
     { id: 'sf-vegas', name: 'Structured Finance Summit', endDate: '2026-11-04' },
@@ -406,7 +408,7 @@ test('event resolution: only event of the company, else only active event, else 
   assert.match(none.note, /Which event/);
 });
 
-test('a request from an email belongs to the salesperson on it, never the approving banker', () => {
+test('a request from an email belongs to the salesperson on it, never the approving banker', async () => {
   const users = [
     { id: 'banker-sarah', email: 'sarah.chen@conferenceos.demo', role: 'BANKER' },
     { id: 'sales-james', email: 'james.wilson@conferenceos.demo', role: 'SALES' },
@@ -422,7 +424,7 @@ test('a request from an email belongs to the salesperson on it, never the approv
   );
 });
 
-test('recipient allowlist flags unknown domains', () => {
+test('recipient allowlist flags unknown domains', async () => {
   assert.deepEqual(
     outsideAllowlist(
       ['ir@bayview.example', 'x@gmail.example', 'a@conferenceos.demo'],

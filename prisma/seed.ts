@@ -3,6 +3,28 @@ import { PrismaClient } from '@prisma/client';
 import { mockExtractAsks, newEmailContent } from '../src/lib/extraction';
 import { conferenceTime } from '../src/lib/scheduling';
 const db = new PrismaClient();
+/**
+ * Demo dates follow the calendar: ABS East runs Monday–Wednesday of this week (next week from
+ * Thursday on), so "today", "My day" and active-event logic show live data. The second
+ * conference is two weeks later.
+ */
+function demoDates(now = new Date()) {
+  const ymd = (d: Date) => d.toISOString().slice(0, 10);
+  const dow = now.getUTCDay(); // 0 Sun … 6 Sat
+  const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  monday.setUTCDate(monday.getUTCDate() + (dow >= 1 && dow <= 3 ? 1 - dow : (8 - dow) % 7 || 7));
+  const day = (n: number) => {
+    const d = new Date(monday);
+    d.setUTCDate(d.getUTCDate() + n);
+    return ymd(d);
+  };
+  return { abs: [day(0), day(1), day(2)], sf: [day(14), day(15), day(16)] };
+}
+const DATES = process.env.DEMO_FIXED_DATES === 'true'
+  ? { abs: ['2026-10-19', '2026-10-20', '2026-10-21'], sf: ['2026-11-02', '2026-11-03', '2026-11-04'] }
+  : demoDates();
+/** Seed rows were written with day numbers 19/20/21; map them onto the demo week. */
+const absDay = (d: string) => DATES.abs[Number(d) - 19];
 async function main() {
   const users = [
     {
@@ -38,11 +60,11 @@ async function main() {
       name: 'ABS East 2026',
       location: 'Fontainebleau · Miami Beach',
       timezone: 'America/New_York',
-      startDate: '2026-10-19',
-      endDate: '2026-10-21',
+      startDate: DATES.abs[0],
+      endDate: DATES.abs[2],
       slotMinutes: 30,
       roomBufferMinutes: 0,
-      preferenceDeadline: new Date('2026-10-18T21:00:00Z'),
+      preferenceDeadline: new Date(`${DATES.abs[0]}T00:00:00Z`),
       preferenceWeight: 100,
       workloadWeight: 12,
       backToBackWeight: 5,
@@ -52,8 +74,8 @@ async function main() {
       name: 'Structured Finance Summit',
       location: 'Las Vegas, Nevada',
       timezone: 'America/Los_Angeles',
-      startDate: '2026-11-02',
-      endDate: '2026-11-04',
+      startDate: DATES.sf[0],
+      endDate: DATES.sf[2],
       slotMinutes: 30,
     },
   ];
@@ -137,10 +159,12 @@ async function main() {
     { id: 'trowe', name: 'T. Rowe Price', contactEmail: 'meetings@trowe.example' },
     { id: 'invesco', name: 'Invesco', contactEmail: 'meetings@invesco.example' },
   ];
-  for (const i of investors)
-    await db.investor.upsert({ where: { id: i.id }, create: i, update: {} });
-  const time = (day: string, hour: string) =>
-    conferenceTime(`2026-10-${day}`, hour, 'America/New_York');
+  const jamesAccounts = ['pimco', 'blackrock', 'wellington', 'fidelity', 'apollo'];
+  for (const i of investors) {
+    const coverageSalesId = jamesAccounts.includes(i.id) ? 'sales-james' : 'sales-emma';
+    await db.investor.upsert({ where: { id: i.id }, create: { ...i, coverageSalesId }, update: {} });
+  }
+  const time = (day: string, hour: string) => conferenceTime(absDay(day), hour, 'America/New_York');
   for (const [index, i] of issuers.entries())
     for (const day of ['19', '20', '21']) {
       const id = `seed-av-${i.id}-${day}`;

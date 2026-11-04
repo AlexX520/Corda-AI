@@ -5,6 +5,7 @@ export const categories = [
   'Meeting Confirmation',
   'Reschedule Request',
   'Meeting Cancellation',
+  'Meeting Update',
   'Escalation / complaint',
   'General Conference Inquiry',
   'Unrelated Email',
@@ -16,6 +17,7 @@ export const operations = [
   'confirm',
   'reschedule',
   'cancel',
+  'update',
   'escalate',
   'inquiry',
 ] as const;
@@ -60,6 +62,13 @@ export const extractionSchema = z.object({
   missing: z.array(z.enum(missingFacts)).default([]),
   /** Exact phrases from the email that name a time without an exact window. */
   vague: z.array(z.string()).default([]),
+  /** "If 2:30 doesn't work, move to Wed" — never applied with one click. */
+  conditional: z.boolean().default(false),
+  condition: z.string().max(400).default(''),
+  /** Ask found inside an escalation email. */
+  fromEscalation: z.boolean().default(false),
+  /** A request for "any time 10–12": the window is a range to place a shorter meeting in. */
+  flexible: z.boolean().default(false),
 });
 export type Extraction = z.infer<typeof extractionSchema>;
 export type ExtractionWindow = Extraction['windows'][number];
@@ -80,5 +89,8 @@ export type Hints = {
   defaultConferenceId?: string | null;
   senderIssuerId?: string | null;
   senderInvestorId?: string | null;
+  /** The single registered issuer / investor among the other people on the email (to/cc). */
+  partyIssuerId?: string | null;
+  partyInvestorId?: string | null;
   receivedAt?: string;
 };

@@ -7,12 +7,21 @@ import { Sheet } from './ui/sheet';
 import { EmailDecision } from './decision';
 import { EventSelect } from './extraction-form';
 import { Badge, Field, fmt, names, Run } from './shared';
-import { AlertTriangle, CalendarDays, Circle, CircleCheck, MessageCircleQuestion, ShieldAlert } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarDays,
+  Circle,
+  CircleCheck,
+  Mail,
+  MessageCircleQuestion,
+  ShieldAlert,
+} from 'lucide-react';
 import { findSensitive, outsideAllowlist, stripSensitiveQuotes } from '@/lib/outbound';
+
 const ASK_DONE = ['Approved', 'Rejected', 'Acknowledged', 'Resolved'];
 const askState = (status: string) =>
   ASK_DONE.includes(status)
-    ? { icon: <CircleCheck size={15} />, tone: 'done', text: status }
+    ? { icon: <CircleCheck size={15} />, tone: 'done', text: status === 'Resolved' ? 'Handled' : status }
     : status === 'Clarification requested'
       ? { icon: <MessageCircleQuestion size={15} />, tone: 'waiting', text: 'Waiting on reply' }
       : { icon: <Circle size={15} />, tone: 'open', text: 'Needs decision' };
@@ -23,14 +32,16 @@ export function EmailReview({
   data,
   close,
   run,
-  onOpenDraft,
+  onReply,
+  onOpenEmail,
 }: {
   email: EmailItem;
   proposalId?: string | null;
   data: AppState;
   close: () => void;
   run: Run;
-  onOpenDraft?: (id: string) => void;
+  onReply: (emailId: string) => void;
+  onOpenEmail?: (id: string) => void;
 }) {
   const n = names(data);
   const asks = email.proposals;
@@ -45,9 +56,17 @@ export function EmailReview({
   const index = proposal ? asks.indexOf(proposal) : -1;
   const issuerName = n.issuer(email.issuerId);
   const unverified = email.senderStatus === 'unverified';
-  const flags = email.securityFlags.filter((f) => !f.startsWith('Sender not verified'));
-  const senderFlag = email.securityFlags.find((f) => f.startsWith('Sender not verified'));
+  const flags = email.securityFlags.filter(
+    (f) => !f.startsWith('Sender not verified') && !f.startsWith('Forwarded message is from'),
+  );
+  const senderFlags = email.securityFlags.filter(
+    (f) => f.startsWith('Sender not verified') || f.startsWith('Forwarded message is from'),
+  );
   const allPending = asks.every((p) => p.status === 'Pending');
+  const ignored = ['Ignored'].includes(email.status) || !asks.length;
+  const forwardedBy = email.forwardedBy
+    ? data.users.find((u) => u.email?.toLowerCase() === email.forwardedBy?.toLowerCase())?.name || email.forwardedBy
+    : null;
   // After one ask is decided, move on to the next open one.
   const next = () => {
     const rest = asks.filter((p) => p.id !== proposal?.id && !ASK_DONE.includes(p.status));
@@ -65,13 +84,39 @@ export function EmailReview({
           : 'AI prepared the change. Nothing updates until you approve.'
       }
     >
-      {unverified && (
+      <div className="email-head">
+        <div>
+          <strong>{email.originalSenderName || email.originalSender || email.sender}</strong>
+          {email.originalSender && <span> &lt;{email.originalSender}&gt;</span>}
+          {forwardedBy && <span className="fwd-by"> · forwarded by {String(forwardedBy)}</span>}
+          <small>
+            {email.subject} · {fmt(email.receivedAt, undefined, 'EEE MMM d, h:mm a')}
+          </small>
+        </div>
+        {!ignored && !email.suspicious && email.status !== 'Quarantined' && (
+          <Button size="sm" variant="outline" onClick={() => onReply(email.id)}>
+            <Mail size={13} /> Reply
+          </Button>
+        )}
+      </div>
+      {email.status === 'Quarantined' && (
+        <div className="sender-alert" role="alert">
+          <ShieldAlert size={18} />
+          <div>
+            <strong>Reported as phishing</strong>
+            <p>Nothing from this email was applied. Do not reply or open its links.</p>
+          </div>
+        </div>
+      )}
+      {(unverified || senderFlags.length > 0) && email.status !== 'Quarantined' && (
         <div className="sender-alert" role="alert">
           <ShieldAlert size={18} />
           <div>
             <strong>Sender not verified</strong>
-            <p>{senderFlag?.replace(/^Sender not verified: /, '') || `${email.sender} is not a registered contact.`}</p>
-            <p>No one-click approval. Confirm with the registered contact first; approving needs a typed reason.</p>
+            {senderFlags.map((f) => (
+              <p key={f}>{f.replace(/^Sender not verified: /, '')}</p>
+            ))}
+            <p>No one-click approval. Report it, or confirm with the registered contact first.</p>
           </div>
         </div>
       )}
@@ -84,7 +129,31 @@ export function EmailReview({
           ))}
         </div>
       )}
-      {(email.contextNote || !email.conferenceId) && (
+      {email.escalation && email.escalationReasons.length > 0 && (
+        <div className="flag-list escalation" role="note">
+          <span>
+            <AlertTriangle size={13} /> Escalation: {email.escalationReasons.join(' · ')}
+          </span>
+        </div>
+      )}
+      {ignored && (
+        <div className="context-note missing">
+          <CalendarDays size={14} />
+          <span>Corda filed this as not about a conference.</span>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              await run('reassignEmail', { emailId: email.id, treatAsConference: true }, 'Treated as a conference email and read again.');
+              setBusy(false);
+            }}
+          >
+            Treat as conference email
+          </Button>
+        </div>
+      )}
+      {!ignored && (email.contextNote || !email.conferenceId) && (
         <div className={`context-note ${email.conferenceId ? '' : 'missing'}`}>
           <CalendarDays size={14} />
           {email.conferenceId ? (
@@ -148,16 +217,11 @@ export function EmailReview({
           data={data}
           run={run}
           onDone={next}
-          onOpenDraft={(id) => {
-            close();
-            onOpenDraft?.(id);
-          }}
+          onReply={() => onReply(email.id)}
+          onOpenEmail={onOpenEmail}
         />
       ) : (
         <div className="decision-card">
-          <span className="dc-meta">
-            {email.sender} · {fmt(email.receivedAt, undefined, 'MMM d, h:mm a')}
-          </span>
           <h2>{email.subject}</h2>
           <p className="dc-text">This email has no schedule change.</p>
           <pre className="dc-email-body">{email.body}</pre>
@@ -166,57 +230,100 @@ export function EmailReview({
     </Sheet>
   );
 }
+
+export type Compose = {
+  emailId: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;
+  allowedDomains: string[];
+  questionAskIds: string[];
+  kind: string;
+};
+
+/**
+ * Review and send a communication. With `compose`, nothing exists yet: Save creates the draft
+ * (one per email) and only then are the asks marked "waiting on reply".
+ */
 export function DraftEditor({
   draft,
+  compose,
   data,
   close,
   run,
 }: {
-  draft: AppState['drafts'][number];
+  draft?: AppState['drafts'][number];
+  compose?: Compose;
   data: AppState;
   close: () => void;
   run: Run;
 }) {
-  const [to, setTo] = useState(draft.to.join(', ')),
-    [cc, setCc] = useState(draft.cc.join(', ')),
-    [subject, setSubject] = useState(draft.subject),
-    [body, setBody] = useState(draft.body),
+  const src = draft || compose!;
+  const [to, setTo] = useState(src.to.join(', ')),
+    [cc, setCc] = useState(src.cc.join(', ')),
+    [subject, setSubject] = useState(src.subject),
+    [body, setBody] = useState(src.body),
     [approved, setApproved] = useState(false),
     [outsideOk, setOutsideOk] = useState(false),
     [sensitiveOk, setSensitiveOk] = useState(false),
+    [sensitiveReason, setSensitiveReason] = useState(''),
+    [holdOverride, setHoldOverride] = useState(''),
     [busy, setBusy] = useState(false);
-  const meeting = data.meetings.find((m) => m.id === draft.meetingId);
+  const meeting = draft ? data.meetings.find((m) => m.id === draft.meetingId) : undefined;
+  const live = Boolean(data.outlook?.connected);
+  const readonly = Boolean(draft && draft.status !== 'Draft');
   const list = (v: string) =>
     v
       .split(',')
       .map((x) => x.trim())
       .filter(Boolean);
-  const outside = outsideAllowlist([...list(to), ...list(cc)], data.allowedDomains);
+  const allowed = (draft?.allowedDomains?.length ? draft.allowedDomains : compose?.allowedDomains) || data.allowedDomains;
+  const outside = outsideAllowlist([...list(to), ...list(cc)], allowed);
   const sensitive = findSensitive(`${subject}\n${body}`);
-  const live = Boolean(data.outlook?.connected);
-  const readonly = draft.status !== 'Draft';
+  const emailId = draft?.emailId || compose?.emailId;
+  const issuerId = meeting?.issuerId || data.emails.find((e) => e.id === emailId)?.issuerId;
+  const issuer = data.issuers.find((i) => i.id === issuerId) as (AppState['issuers'][number] & { holdChanges?: boolean; holdReason?: string }) | undefined;
+  const onHold = Boolean(issuer?.holdChanges);
+  const historical = draft?.historicalParticipants || [];
   async function save(send: boolean) {
     setBusy(true);
     try {
+      let id = draft?.id;
+      if (!id) {
+        // Compose: the draft is created only now.
+        const r = await fetch('/api/commands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'replySave',
+            data: { emailId: compose!.emailId, to: list(to), cc: list(cc), subject, body, askIds: compose!.questionAskIds },
+          }),
+        });
+        const out = await r.json();
+        if (!r.ok) throw new Error(out.error);
+        id = out.result.id;
+        if (!send) {
+          await run('notificationsRead', {}, 'Reply saved as a draft.');
+          close();
+          return;
+        }
+      }
       if (
         await run(
           'draft',
           {
-            id: draft.id,
-            to: to
-              .split(',')
-              .map((s) => s.trim())
-              .filter(Boolean),
-            cc: cc
-              .split(',')
-              .map((s) => s.trim())
-              .filter(Boolean),
+            id,
+            to: list(to),
+            cc: list(cc),
             subject,
             body,
             send,
             recipientsApproved: approved,
             outsideConfirmed: outsideOk,
             sensitiveConfirmed: sensitiveOk,
+            sensitiveReason,
+            holdOverride: holdOverride || undefined,
           },
           send
             ? live
@@ -226,6 +333,8 @@ export function DraftEditor({
         )
       )
         close();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : 'Could not save the reply');
     } finally {
       setBusy(false);
     }
@@ -234,47 +343,30 @@ export function DraftEditor({
     <Dialog
       open
       onOpenChange={(v) => !v && close()}
-      title="Review communication"
-      description={live ? `Sends from ${data.outlook?.email} via Outlook` : 'Local draft · delivery is simulated until Outlook is connected'}
+      title={compose ? (compose.kind === 'escalation' ? 'Reply to the escalation' : 'Reply') : 'Review communication'}
+      description={live ? `Sends from ${data.outlook?.email} via Outlook` : 'Delivery is simulated until Outlook is connected'}
     >
       <div className="form-grid">
-        <Badge>{draft.status}</Badge>
-        <div className="muted">From: {draft.sender}</div>
-        <Field
-          label="To"
-          hint="Comma-separated recipients. For meeting attachments, use the issuer/investor contact or an internal banker."
-        >
+        {draft ? <Badge>{draft.status}</Badge> : <Badge tone="blue">Not saved yet</Badge>}
+        {onHold && !readonly && (
+          <div className="hold-banner">
+            <strong>All changes for {issuer?.name} are on hold</strong>
+            <span>{issuer?.holdReason}</span>
+            <input className="dc-input" placeholder="Override reason (required to send)" value={holdOverride} onChange={(e) => setHoldOverride(e.target.value)} />
+          </div>
+        )}
+        <Field label="To" hint="Comma-separated. Thread and meeting parties are pre-approved; anyone else needs a second confirmation.">
           <input value={to} disabled={readonly} onChange={(e) => setTo(e.target.value)} />
         </Field>
         <Field label="CC">
           <input value={cc} disabled={readonly} onChange={(e) => setCc(e.target.value)} />
         </Field>
-        {draft.historicalParticipants.length > 0 && (
+        {historical.length > 0 && !readonly && (
           <div className="notice">
-            <strong>Contacts to review</strong>
-            <p>
-              Historical participants are suggestions only. Click a contact to add them
-              deliberately.
-            </p>
+            <strong>Others on the thread</strong>
             <div className="contact-list">
-              {draft.historicalParticipants.map((p) => (
-                <button
-                  disabled={readonly}
-                  key={p}
-                  onClick={() =>
-                    setTo(
-                      [
-                        ...new Set([
-                          ...to
-                            .split(',')
-                            .map((s) => s.trim())
-                            .filter(Boolean),
-                          p,
-                        ]),
-                      ].join(', '),
-                    )
-                  }
-                >
+              {historical.map((p) => (
+                <button key={p} onClick={() => setTo([...new Set([...list(to), p])].join(', '))}>
                   {p} +
                 </button>
               ))}
@@ -285,23 +377,18 @@ export function DraftEditor({
           <input value={subject} disabled={readonly} onChange={(e) => setSubject(e.target.value)} />
         </Field>
         <Field label="Message">
-          <textarea
-            rows={10}
-            value={body}
-            disabled={readonly}
-            onChange={(e) => setBody(e.target.value)}
-          />
+          <textarea rows={11} value={body} disabled={readonly} onChange={(e) => setBody(e.target.value)} />
         </Field>
         {!readonly && outside.length > 0 && (
           <div className="notice warning">
-            <strong>Outside the registered domains</strong>
+            <strong>Not a party to this thread</strong>
             <p>
-              {outside.join(', ')} {outside.length === 1 ? 'is' : 'are'} not a registered issuer, investor or bank address.
-              Check the address before sending.
+              {outside.join(', ')} {outside.length === 1 ? 'is' : 'are'} outside the parties on this thread/meeting and the
+              bank. Check the address before sending.
             </p>
             <label className="check">
               <input type="checkbox" checked={outsideOk} onChange={(e) => setOutsideOk(e.target.checked)} />
-              I confirm {outside.length === 1 ? 'this recipient is' : 'these recipients are'} correct.
+              <span>I confirm {outside.length === 1 ? 'this recipient is' : 'these recipients are'} correct.</span>
             </label>
           </div>
         )}
@@ -309,22 +396,16 @@ export function DraftEditor({
           <div className="notice danger">
             <strong>Possible deal / MNPI terms</strong>
             <p>The message contains: {sensitive.join(', ')}. Client emails must not carry deal information.</p>
-            <div className="flex gap-3 items-center">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  const r = stripSensitiveQuotes(body);
-                  setBody(r.text);
-                }}
-              >
-                Remove quoted sensitive text
-              </Button>
-              <label className="check">
-                <input type="checkbox" checked={sensitiveOk} onChange={(e) => setSensitiveOk(e.target.checked)} />
-                Compliance-approved; send as written
-              </label>
-            </div>
+            <Button size="sm" variant="outline" onClick={() => setBody(stripSensitiveQuotes(body).text)}>
+              Remove quoted sensitive text
+            </Button>
+            <label className="check">
+              <input type="checkbox" checked={sensitiveOk} onChange={(e) => setSensitiveOk(e.target.checked)} />
+              <span>Compliance-approved; send as written</span>
+            </label>
+            {sensitiveOk && (
+              <input className="dc-input" placeholder="Who approved it and why (recorded in the audit trail)" value={sensitiveReason} onChange={(e) => setSensitiveReason(e.target.value)} />
+            )}
           </div>
         )}
         {meeting && (
@@ -334,36 +415,30 @@ export function DraftEditor({
               {names(data).issuer(meeting.issuerId)} × {names(data).investor(meeting.investorId)}
             </p>
             <p>
-              {fmt(
-                meeting.start,
-                data.conferences.find((c) => c.id === meeting.conferenceId)?.timezone,
-              )}{' '}
-              · {meeting.location || 'Location to be confirmed'}
+              {fmt(meeting.start, data.conferences.find((c) => c.id === meeting.conferenceId)?.timezone)} ·{' '}
+              {meeting.location || 'Location to be confirmed'}
             </p>
-            <a
-              href={`/api/export?conferenceId=${meeting.conferenceId}&scope=meeting&id=${meeting.id}&format=ics`}
-            >
-              Download calendar attachment ↗
-            </a>
           </div>
         )}
         {!readonly && (
           <>
             <label className="check">
-              <input
-                type="checkbox"
-                checked={approved}
-                onChange={(e) => setApproved(e.target.checked)}
-              />
-              I reviewed the recipients, content, and attachment audience.
+              <input type="checkbox" checked={approved} onChange={(e) => setApproved(e.target.checked)} />
+              <span>I reviewed the recipients, content, and attachment audience.</span>
             </label>
             <div className="flex justify-end gap-3">
               <Button disabled={busy} variant="outline" onClick={() => save(false)}>
-                Save draft
+                {compose ? 'Save draft' : 'Save draft'}
               </Button>
               {data.user.role === 'BANKER' && (
                 <Button
-                  disabled={busy || !approved || (outside.length > 0 && !outsideOk) || (sensitive.length > 0 && !sensitiveOk)}
+                  disabled={
+                    busy ||
+                    !approved ||
+                    (outside.length > 0 && !outsideOk) ||
+                    (sensitive.length > 0 && (!sensitiveOk || sensitiveReason.trim().length < 5)) ||
+                    (onHold && holdOverride.trim().length < 5)
+                  }
                   onClick={() => save(true)}
                 >
                   {live ? 'Send via Outlook' : 'Approve simulated delivery'}

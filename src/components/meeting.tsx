@@ -26,7 +26,27 @@ export function MeetingDrawer({
   const c = data.conferences.find((x) => x.id === meeting.conferenceId)!;
   const [mode, setMode] = useState<'view' | 'edit' | 'cancel'>('view');
   const [reason, setReason] = useState('');
+  const [holdOverride, setHoldOverride] = useState('');
   const [busy, setBusy] = useState(false);
+  const [formKey, setFormKey] = useState(0);
+  const issuer = data.issuers.find((i) => i.id === meeting.issuerId) as
+    | (AppState['issuers'][number] & { holdChanges?: boolean; holdReason?: string })
+    | undefined;
+  // Open email asks about this meeting: after a manual change they can be closed as handled.
+  const openAsks = data.emails.flatMap((x) =>
+    x.proposals
+      .filter((p) => ['Pending', 'Clarification requested'].includes(p.status))
+      .filter((p) => {
+        const e = p.extraction as unknown as { meetingId?: string; issuerId?: string; investorId?: string; operation?: string };
+        return (
+          e?.meetingId === meeting.id ||
+          (e?.issuerId === meeting.issuerId &&
+            e?.investorId === meeting.investorId &&
+            ['cancel', 'reschedule', 'update', 'confirm'].includes(e?.operation || ''))
+        );
+      })
+      .map((p) => ({ p, email: x })),
+  );
   const banker = data.user.role === 'BANKER';
   const coverage = data.coverageAssignments.filter((a) => a.meetingId === meeting.id);
   const room = data.cubeAssignments.find((a) => a.meetingId === meeting.id);
@@ -48,8 +68,15 @@ export function MeetingDrawer({
     >
       {mode === 'view' && (
         <section className="decision-card">
+          {issuer?.holdChanges && (
+            <div className="hold-banner">
+              <strong>All changes for {issuer.name} are on hold</strong>
+              <span>{issuer.holdReason}</span>
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <Badge>{meeting.status}</Badge>
+            {meeting.protected && <Badge tone="red">Protected — investor asked it not move again</Badge>}
             {coverage.some((a) => a.assignmentStatus === 'Needs Review') && (
               <Badge tone="amber">Resources need review</Badge>
             )}
@@ -97,6 +124,47 @@ export function MeetingDrawer({
               </Button>
             </div>
           )}
+          {meeting.changedAt && (
+            <p className="muted-line">
+              Last changed {fmt(meeting.changedAt, c.timezone, 'MMM d, h:mm a')} by {n.user(meeting.changedBy)}:{' '}
+              {meeting.changeSummary}
+            </p>
+          )}
+          {openAsks.length > 0 && (
+            <div className="related">
+              <span className="dc-label">Open email asks about this meeting</span>
+              {openAsks.map(({ p, email }) => (
+                <div key={p.id} className="related-item static">
+                  <span>
+                    <strong>{p.summary}</strong> · from {email.originalSenderName || email.sender}
+                  </span>
+                  {banker && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() =>
+                        run(
+                          'review',
+                          {
+                            id: p.id,
+                            decision: 'handled',
+                            meetingId: meeting.id,
+                            note: meeting.changeSummary
+                              ? `Meeting changed manually: ${meeting.changeSummary}`
+                              : 'Handled in the meeting editor',
+                          },
+                          'Marked as handled manually.',
+                        )
+                      }
+                    >
+                      Mark handled manually
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           {history.length > 0 && (
             <div className="meeting-history">
               <span className="dc-label">Changes</span>
@@ -122,6 +190,8 @@ export function MeetingDrawer({
           conferenceId={meeting.conferenceId}
           onCancel={() => setMode('view')}
           onSaved={() => setMode('view')}
+          onReload={() => setFormKey((k) => k + 1)}
+          key={formKey}
         />
       )}
       {mode === 'cancel' && (
@@ -138,18 +208,25 @@ export function MeetingDrawer({
               placeholder="e.g. Investor called — PM flying home early"
             />
           </Field>
+          {issuer?.holdChanges && (
+            <Field label={`Hold override for ${issuer.name} (required)`}>
+              <input value={holdOverride} onChange={(e) => setHoldOverride(e.target.value)} />
+            </Field>
+          )}
           <div className="dc-actions">
             <Button
-              disabled={busy || reason.trim().length < 3}
+              disabled={
+                busy || reason.trim().length < 3 || (Boolean(issuer?.holdChanges) && holdOverride.trim().length < 5)
+              }
               onClick={async () => {
                 setBusy(true);
                 const ok = await run(
                   'meetingCancel',
-                  { id: meeting.id, reason },
+                  { id: meeting.id, reason, version: meeting.version, holdOverride: holdOverride || undefined },
                   'Meeting cancelled and recorded.',
                 );
                 setBusy(false);
-                if (ok) close();
+                if (ok) setMode('view');
               }}
             >
               Cancel meeting
@@ -172,6 +249,7 @@ export function MeetingForm({
   conferenceId,
   onCancel,
   onSaved,
+  onReload,
 }: {
   data: AppState;
   run: Run;
@@ -179,7 +257,10 @@ export function MeetingForm({
   conferenceId: string;
   onCancel: () => void;
   onSaved: () => void;
+  onReload?: () => void;
 }) {
+  const [baseVersion] = useState(meeting?.version ?? 0);
+  const [holdOverride, setHoldOverride] = useState('');
   const c = data.conferences.find((x) => x.id === conferenceId)!;
   const zone = c.timezone;
   const days = eachDayOfInterval({ start: parseISO(c.startDate), end: parseISO(c.endDate) }).map(
@@ -248,18 +329,27 @@ export function MeetingForm({
   const reasonOk = meeting
     ? reason.trim().length >= 3
     : !check?.soft.length || reason.trim().length >= 3;
+  const issuerRow = data.issuers.find((i) => i.id === (meeting?.issuerId || issuerId)) as
+    | (AppState['issuers'][number] & { holdChanges?: boolean; holdReason?: string })
+    | undefined;
+  const changedMeanwhile = Boolean(meeting && meeting.version !== baseVersion);
+  const movesProtected = Boolean(
+    meeting?.protected && (date !== fmt(meeting.start, zone, 'yyyy-MM-dd') || time !== fmt(meeting.start, zone, 'HH:mm')),
+  );
   const blocked =
     Boolean(check?.hard.length) ||
-    (Boolean(check?.soft.length) && !override) ||
+    ((Boolean(check?.soft.length) || movesProtected) && !override) ||
     !reasonOk ||
     !issuerId ||
-    !investorId;
+    !investorId ||
+    changedMeanwhile ||
+    (Boolean(issuerRow?.holdChanges) && holdOverride.trim().length < 5);
   async function save() {
     setBusy(true);
     const ok = meeting
       ? await run(
           'meetingUpdate',
-          { ...payload, id: meeting.id, reason, override },
+          { ...payload, id: meeting.id, reason, override, version: baseVersion, holdOverride: holdOverride || undefined },
           'Meeting updated. Change recorded with your reason.',
         )
       : await run(
@@ -273,6 +363,37 @@ export function MeetingForm({
   return (
     <section className="decision-card meeting-form">
       <h2>{meeting ? 'Edit meeting' : 'New meeting'}</h2>
+      {changedMeanwhile && meeting && (
+        <div className="dc-issue hard">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>
+              Changed by {data.users.find((u) => u.id === meeting.changedBy)?.name || 'someone else'} while you were editing
+            </strong>
+            <p>{meeting.changeSummary}. Load the latest values and reapply your change.</p>
+            <Button size="sm" variant="outline" onClick={onReload}>
+              Load latest values
+            </Button>
+          </div>
+        </div>
+      )}
+      {issuerRow?.holdChanges && (
+        <div className="hold-banner">
+          <strong>All changes for {issuerRow.name} are on hold</strong>
+          <span>{issuerRow.holdReason}</span>
+          <input
+            className="dc-input"
+            placeholder="Override reason (required)"
+            value={holdOverride}
+            onChange={(e) => setHoldOverride(e.target.value)}
+          />
+        </div>
+      )}
+      {meeting?.protected && (
+        <p className="dc-why">
+          Protected: {meeting.protectedReason}. Moving it needs “Schedule anyway” and a reason.
+        </p>
+      )}
       {!meeting && (
         <div className="two-cols">
           <Field label="Issuer">
@@ -375,12 +496,12 @@ export function MeetingForm({
           })}
         </div>
       </Field>
-      {check && (check.hard.length > 0 || check.soft.length > 0) ? (
+      {check && (check.hard.length > 0 || check.soft.length > 0 || movesProtected) ? (
         <div className={`dc-issue ${check.hard.length ? 'hard' : ''}`}>
           <AlertTriangle size={15} />
           <div>
             <strong>{check.hard.length ? 'This time does not work' : 'Check before saving'}</strong>
-            {[...check.hard, ...check.soft].map((x) => (
+            {[...check.hard, ...check.soft, ...(movesProtected ? [`Protected meeting: ${meeting?.protectedReason}`] : [])].map((x) => (
               <p key={x}>{x}</p>
             ))}
             {!check.hard.length && (
@@ -390,7 +511,7 @@ export function MeetingForm({
                   checked={override}
                   onChange={(e) => setOverride(e.target.checked)}
                 />
-                Schedule anyway (the reason below is recorded)
+                <span>Schedule anyway (the reason below is recorded)</span>
               </label>
             )}
           </div>

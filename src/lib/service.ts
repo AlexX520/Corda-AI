@@ -11,7 +11,7 @@ import {
   generateDraft,
   type Extraction,
 } from './extraction';
-import { namedContext } from './rule-parser';
+import { analyse, type Analysis } from './analysis';
 import { availableSlots, conferenceTime, evaluate, isAvailable, overlaps, validateInterval } from './scheduling';
 import {
   domainOf,
@@ -20,6 +20,8 @@ import {
   resolveConference,
   securityFlags,
   senderTrust,
+  SUSPICIOUS_FLAG,
+  type SenderTrust,
 } from './email-trust';
 import {
   askSummary,
@@ -32,7 +34,7 @@ import {
   type Names,
 } from './review-rules';
 import {
-  clarificationBody,
+  stripSensitiveQuotes,
   clientQuestions,
   findSensitive,
   outsideAllowlist,
@@ -55,16 +57,87 @@ async function audit(
   before?: unknown,
   after?: unknown,
 ) {
+  // Searchable columns: the issuer, meeting and email the change is about, and its reason.
+  const pick = (k: string) => {
+    for (const o of [after, before] as Record<string, unknown>[])
+      if (o && typeof o === 'object' && typeof o[k] === 'string' && o[k]) return o[k] as string;
+    return null;
+  };
   await tx.auditLog.create({
     data: {
       actorId: user.id,
       action,
       entityType,
       entityId,
+      issuerId: pick('issuerId'),
+      meetingId: entityType === 'Meeting' ? entityId : pick('meetingId'),
+      emailId: entityType === 'Email' ? entityId : pick('emailId') || pick('sourceEmailId'),
+      note: pick('reason') || pick('note'),
       ...(before ? { before: json(before) } : {}),
       ...(after ? { after: json(after) } : {}),
     },
   });
+}
+/**
+ * Record a schedule change on a meeting (optimistic-concurrency version, "changed since" stamp)
+ * and tell the people who own it — issuer owner, its bankers, the requesting salesperson and the
+ * investor's coverage salesperson — unless they made the change themselves.
+ */
+async function markMeetingChanged(tx: Tx, user: User, meetingId: string, summary: string) {
+  const m = await tx.meeting.update({
+    where: { id: meetingId },
+    data: { version: { increment: 1 }, changedAt: new Date(), changedBy: user.id, changeSummary: summary },
+  });
+  const [issuer, investor, request, coverage] = await Promise.all([
+    tx.issuer.findUnique({ where: { id: m.issuerId } }),
+    tx.investor.findUnique({ where: { id: m.investorId } }),
+    m.requestId ? tx.meetingRequest.findUnique({ where: { id: m.requestId } }) : null,
+    tx.meetingCoverageAssignment.findMany({ where: { meetingId } }),
+  ]);
+  const people = new Set(
+    [issuer?.ownerId, request?.salespersonId, investor?.coverageSalesId, ...m.bankerIds, ...coverage.map((c) => c.bankerId)].filter(
+      (x): x is string => Boolean(x) && x !== user.id,
+    ),
+  );
+  if (people.size)
+    await tx.notification.createMany({
+      data: [...people].map((userId) => ({
+        userId,
+        actorId: user.id,
+        kind: 'meeting-changed',
+        text: `${user.name}: ${issuer?.name} × ${investor?.name} — ${summary}`,
+        meetingId,
+        requestId: m.requestId,
+      })),
+    });
+  return m;
+}
+/** Tell the salesperson on a request (and the account's coverage salesperson) what happened. */
+async function notifyRequest(tx: Tx, user: User, r: { id: string; issuerId: string; investorId: string; salespersonId: string }, text: string) {
+  const investor = await tx.investor.findUnique({ where: { id: r.investorId } });
+  const issuer = await tx.issuer.findUnique({ where: { id: r.issuerId } });
+  const people = new Set([r.salespersonId, investor?.coverageSalesId].filter((x): x is string => Boolean(x) && x !== user.id));
+  if (people.size)
+    await tx.notification.createMany({
+      data: [...people].map((userId) => ({
+        userId,
+        actorId: user.id,
+        kind: 'request-changed',
+        text: `${investor?.name} × ${issuer?.name}: ${text}`,
+        requestId: r.id,
+      })),
+    });
+}
+/** Issuers on hold (from an escalation) need an explicit override reason for any change. */
+async function checkHold(tx: Tx, issuerId: string | null | undefined, override: string | undefined) {
+  if (!issuerId) return null;
+  const issuer = await tx.issuer.findUnique({ where: { id: issuerId } });
+  if (!issuer?.holdChanges) return null;
+  if (!override || override.trim().length < 5)
+    throw new Error(
+      `All changes for ${issuer.name} are on hold (${issuer.holdReason || 'client escalation'}). Give an override reason to proceed.`,
+    );
+  return `Hold override for ${issuer.name}: ${override.trim()}`;
 }
 async function lock(tx: Tx) {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(817204)`;
@@ -154,6 +227,142 @@ async function validateReferences(
   if (investorId) await tx.investor.findUniqueOrThrow({ where: { id: investorId } });
   return c;
 }
+/**
+ * Domains a draft may go to without a second confirmation: the exact registered domains of the
+ * parties on this thread or meeting, plus the bank's own. Anything else is "outside".
+ */
+async function draftDomains(tx: Tx | typeof db, at: { emailId?: string | null; meetingId?: string | null }) {
+  const [issuers, investors] = await Promise.all([tx.issuer.findMany(), tx.investor.findMany()]);
+  const registered = new Set([...issuers, ...investors].map((x) => domainOf(x.contactEmail)));
+  const out = new Set(internalDomains());
+  if (at.emailId) {
+    const email = await tx.email.findUnique({ where: { id: at.emailId } });
+    const thread = email ? await tx.email.findMany({ where: { threadId: email.threadId } }) : [];
+    for (const e of thread)
+      for (const a of [e.sender, e.originalSender || '', ...e.to, ...e.cc]) {
+        const d = domainOf(a);
+        if (d && registered.has(d)) out.add(d);
+      }
+  }
+  if (at.meetingId) {
+    const m = await tx.meeting.findUnique({ where: { id: at.meetingId } });
+    if (m) {
+      const i = issuers.find((x) => x.id === m.issuerId),
+        v = investors.find((x) => x.id === m.investorId);
+      for (const x of [i, v]) if (x) out.add(domainOf(x.contactEmail));
+    }
+  }
+  return [...out];
+}
+/**
+ * One reply per email covering all its asks: what was done, what we need to know, and open
+ * alternatives where a requested time does not work. Escalations get an apologetic, human note.
+ * Nothing is written to the database.
+ */
+async function buildReply(tx: Tx | typeof db, user: User, emailId: string) {
+  const email = await tx.email.findUniqueOrThrow({ where: { id: emailId }, include: { proposals: { orderBy: { askIndex: 'asc' } } } });
+  const [issuers, investors, conferences, actions] = await Promise.all([
+    tx.issuer.findMany(),
+    tx.investor.findMany(),
+    tx.conference.findMany(),
+    tx.action.findMany({ where: { emailId } }),
+  ]);
+  const names = namesFrom(issuers, investors);
+  const internal = internalDomains();
+  const allowed = await draftDomains(tx, { emailId });
+  const outer = senderTrust(email.sender, { issuers, investors, internal });
+  const client = senderTrust(email.originalSender || email.sender, { issuers, investors, internal });
+  const perspective = client.issuerId ? 'issuer' : client.investorId ? 'investor' : 'other';
+  const to = outer.status === 'unverified' ? [] : [email.sender];
+  const cc = outer.status === 'unverified'
+    ? []
+    : email.cc.filter((x) => x.toLowerCase() !== user.email.toLowerCase() && allowed.includes(domainOf(x)));
+  const signature = /\n\s*([A-Z][a-z]+)(?:\s+[A-Z][a-z]+)?\s*(?:\n|$)/.exec(`\n${email.newContent}`.split(/\n(?:thanks|thx|best|regards|cheers)[^\n]*\n/i).pop() || '');
+  // The reply goes to whoever sent it to us: greet the colleague when they forwarded it.
+  const forwarder = email.forwardedBy
+    ? (await tx.user.findFirst({ where: { email: { equals: email.forwardedBy, mode: 'insensitive' } } }))?.name
+    : null;
+  const first = (forwarder || email.originalSenderName || '').split(' ')[0] || signature?.[1] || '';
+  const hi = first ? `Hi ${first},` : 'Hi,';
+  const asks = email.proposals.map((x) => ({ p: x, e: x.extraction as unknown as Extraction }));
+  if (email.escalation) {
+    const esc = asks.find((a) => a.e.category === 'Escalation / complaint');
+    const owner = actions.find((a) => a.proposalId === esc?.p.id)?.assignedTo;
+    const ownerName = owner ? (await tx.user.findUnique({ where: { id: owner } }))?.name : null;
+    const issuer = esc?.e.issuerId ? names.issuer(esc.e.issuerId) : 'your';
+    const body = [
+      hi,
+      '',
+      `I'm sorry — you're right to raise this, and it should not have happened.`,
+      `${ownerName && ownerName !== user.name ? `${ownerName} is` : 'I am'} now your single point of contact for the ${issuer === 'your' ? '' : `${issuer} `}schedule and will call you today.`,
+      '',
+      'We will not make any further changes to your schedule until we have spoken.',
+      '',
+      'Best regards,',
+      user.name,
+    ].join('\n');
+    return { to, cc, subject: replySubject(email.subject), body, allowedDomains: allowed, kind: 'escalation', questionAskIds: [] as string[] };
+  }
+  const done: string[] = [],
+    questions: string[] = [],
+    alternatives: string[] = [],
+    questionAskIds: string[] = [];
+  for (const { p, e } of asks) {
+    const zone = conferences.find((c) => c.id === e.conferenceId)?.timezone || 'America/New_York';
+    const other = perspective === 'issuer' ? names.investor(e.investorId) : perspective === 'investor' ? names.issuer(e.issuerId) : `${names.issuer(e.issuerId)} / ${names.investor(e.investorId)}`;
+    const target = e.windows.find((w) => w.kind === 'availability');
+    if (p.status === 'Approved') {
+      if (e.operation === 'reschedule' && target) done.push(`We've moved the ${other} meeting to ${formatInTimeZone(target.start, zone, 'EEEE h:mm a')}.`);
+      else if (e.operation === 'cancel') done.push(`We've cancelled the ${other} meeting.`);
+      else if (e.category === 'New Meeting Request') done.push(`We've passed the ${other} request on and will confirm the time shortly.`);
+      else if (e.category === 'Issuer Availability Update') done.push(`We've updated your availability.`);
+      else if (e.operation === 'update') done.push(`We've noted ${e.attendees} attendees for the ${other} meeting.`);
+      continue;
+    }
+    if (!['Pending', 'Clarification requested'].includes(p.status)) continue;
+    // A requested time that is taken: offer the nearest open times instead of asking blindly.
+    if (target && e.conferenceId && e.issuerId && e.investorId && ['reschedule', 'inquiry'].includes(e.operation)) {
+      const c = conferences.find((x) => x.id === e.conferenceId)!;
+      const free = await resources(tx as Tx, c.id, e.issuerId, e.investorId, e.meetingId || undefined);
+      const len = (+new Date(target.end) - +new Date(target.start)) / 60000;
+      const fits = e.flexible
+        ? availableSlots(free.windows, free.busy, e.durationMinutes || c.slotMinutes, c.slotMinutes).some(
+            (x) => +new Date(x.start) >= +new Date(target.start) && +new Date(x.end) <= +new Date(target.end),
+          )
+        : isAvailable(target, free.windows, free.busy);
+      if (!fits) {
+        const near = availableSlots(free.windows, free.busy, len, c.slotMinutes)
+          .sort((a, b) => Math.abs(+new Date(a.start) - +new Date(target.start)) - Math.abs(+new Date(b.start) - +new Date(target.start)))
+          .slice(0, 3)
+          .sort((a, b) => +new Date(a.start) - +new Date(b.start))
+          .map((x) => formatInTimeZone(x.start, zone, 'EEE h:mm a'));
+        alternatives.push(
+          `${formatInTimeZone(target.start, zone, 'EEEE h:mm a')} isn't available for the ${other} meeting${near.length ? ` — we could offer ${near.join(', ')}` : ''}. Would one of those work?`,
+        );
+        questionAskIds.push(p.id);
+        continue;
+      }
+    }
+    const q = e.missing.length || e.conditional
+      ? clientQuestions(e, { issuer: e.issuerId ? names.issuer(e.issuerId) : null, investor: e.investorId ? names.investor(e.investorId) : null, conference: null }, perspective, zone)
+      : [];
+    if (e.conditional) q.push(`Just to confirm — should we go ahead with the change only if ${e.condition.replace(/[.\s]+$/, '').replace(/^(?:if|or)\s+/i, '')}?`);
+    if (q.length) {
+      questions.push(...q);
+      questionAskIds.push(p.id);
+    }
+  }
+  const parts = [hi, '', 'Thanks for your note.'];
+  if (done.length) parts.push('', ...done);
+  if (alternatives.length) parts.push('', ...alternatives);
+  if (questions.length)
+    parts.push('', questions.length === 1 ? questions[0] : `Could you help with the following:\n${[...new Set(questions)].map((q) => `- ${q}`).join('\n')}`);
+  if (!done.length && !alternatives.length && !questions.length) parts.push("We're on it and will confirm shortly.");
+  if (questionAskIds.length) parts.push('', "We haven't changed anything else on the schedule yet.");
+  parts.push('', 'Best regards,', user.name);
+  const { text } = stripSensitiveQuotes(parts.join('\n'));
+  return { to, cc, subject: replySubject(email.subject), body: text, allowedDomains: allowed, kind: 'reply', questionAskIds };
+}
 async function makeConfirmationDraft(tx: Tx, user: User, meetingId: string) {
   const m = await tx.meeting.findUniqueOrThrow({ where: { id: meetingId } }),
     c = await tx.conference.findUniqueOrThrow({ where: { id: m.conferenceId } }),
@@ -162,18 +371,20 @@ async function makeConfirmationDraft(tx: Tx, user: User, meetingId: string) {
   const email = m.sourceEmailId
     ? await tx.email.findUnique({ where: { id: m.sourceEmailId } })
     : null;
-  // Recipients are never pre-filled: everyone on the chain is offered as a suggestion and the
-  // banker adds them deliberately (see "Contacts to review" in the draft editor).
+  // To: the meeting's registered contacts (verified). Others on the chain are suggestions only.
   const chain = email ? [email.sender, ...email.to, ...email.cc] : [];
+  await tx.draft.updateMany({ where: { meetingId: m.id, status: 'Draft', kind: 'confirmation' }, data: { status: 'Superseded' } });
   return tx.draft.create({
     data: {
       meetingId: m.id,
       emailId: email?.id,
       createdBy: user.id,
       sender: user.email,
-      to: [],
+      kind: 'confirmation',
+      to: [i.contactEmail, v.contactEmail],
       cc: [],
-      historicalParticipants: [...new Set([i.contactEmail, v.contactEmail, ...chain])],
+      allowedDomains: await draftDomains(tx, { emailId: email?.id, meetingId: m.id }),
+      historicalParticipants: [...new Set(chain)].filter((x) => ![i.contactEmail, v.contactEmail].includes(x)),
       subject: `${c.name} | ${i.name} × ${v.name} — meeting confirmation`,
       body: `Hello,\n\nYour meeting is confirmed for ${formatInTimeZone(m.start, c.timezone, 'EEEE, MMMM d, h:mm a')}–${formatInTimeZone(m.end, c.timezone, 'h:mm a')} (${c.timezone}).\n\nIssuer: ${i.name}\nInvestor: ${v.name}\nLocation: ${m.location || 'To be confirmed'}\n\nA meeting-specific calendar attachment will accompany this draft.\n\nBest regards,\n${user.name}`,
     },
@@ -215,6 +426,7 @@ async function confirmRequest(
     data: { status: 'Resolved' },
   });
   await makeConfirmationDraft(tx, user, m.id);
+  await notifyRequest(tx, user, r, `confirmed for ${formatInTimeZone(m.start, (await tx.conference.findUniqueOrThrow({ where: { id: m.conferenceId } })).timezone, 'EEE h:mm a')}`);
   await audit(tx, user, 'Meeting approved', 'Meeting', m.id, r, m);
   await refresh(tx, r.conferenceId);
   return m;
@@ -304,82 +516,35 @@ const ingestSchema = z.object({
   skipUnrelated: z.boolean().default(false),
 });
 type IngestInput = z.infer<typeof ingestSchema>;
-/** Read an email into reviewable asks: sender check, event, parsing, escalation and meeting match. */
+/** Load what the analysis needs from the database and read the email. */
 async function analyseEmail(p: IngestInput) {
-  const [conferences, issuers, investors, users] = await Promise.all([
+  const [conferences, issuers, investors, users, meetings] = await Promise.all([
     db.conference.findMany(),
     db.issuer.findMany(),
     db.investor.findMany(),
     db.user.findMany(),
+    db.meeting.findMany({ where: { status: 'Confirmed' } }),
   ]);
-  const ctx = { conferences, issuers, investors };
-  const trust = senderTrust(p.sender, { issuers, investors, internal: internalDomains() });
-  const content = newEmailContent(p.body);
-  const names = namesFrom(issuers, investors);
-  // Which event: named in the email, else the only event of the sender's company (or the company
-  // the email names), else the only active event — and say that it was assumed.
-  let defaultConferenceId: string | null = null,
-    contextNote = '';
-  const named = namedContext(p.body, p.subject, ctx);
-  if (!p.conferenceId && !named.conferenceId) {
-    const issuerIds = trust.issuerId ? [trust.issuerId] : trust.investorId ? [] : named.issuerIds.slice(0, 1);
-    const investorIds = trust.investorId ? [trust.investorId] : trust.issuerId ? [] : issuerIds.length ? [] : named.investorIds.slice(0, 1);
-    const resolved = resolveConference({
-      conferences,
-      involved: await involvement(issuerIds, investorIds),
-      entityName: issuerIds.length ? names.issuer(issuerIds[0]) : investorIds.length ? names.investor(investorIds[0]) : null,
-      today: new Date().toISOString().slice(0, 10),
-    });
-    defaultConferenceId = resolved.conferenceId;
-    contextNote = resolved.note;
-  }
-  const extracted = await extractEmail(p.body, p.subject, ctx, {
-    conferenceId: p.conferenceId,
-    issuerId: p.issuerId,
-    defaultConferenceId,
-    senderIssuerId: trust.status === 'unverified' ? null : trust.issuerId,
-    senderInvestorId: trust.status === 'unverified' ? null : trust.investorId,
-    receivedAt: p.receivedAt || new Date().toISOString(),
+  return analyse(p, {
+    conferences,
+    issuers,
+    investors,
+    users,
+    meetings,
+    internal: internalDomains(),
+    today: new Date().toISOString().slice(0, 10),
+    involvement,
+    extract: extractEmail,
   });
-  for (const e of extracted.asks)
-    if (
-      (e.conferenceId && !conferences.some((c) => c.id === e.conferenceId)) ||
-      (e.issuerId && !issuers.some((i) => i.id === e.issuerId)) ||
-      (e.investorId && !investors.some((i) => i.id === e.investorId))
-    )
-      throw new Error('Unknown extracted association.');
-  const zoneOf = (id: string | null) => conferences.find((c) => c.id === id)?.timezone || 'America/New_York';
-  const asks = finalizeAsks(extracted.asks, {
-    subject: p.subject,
-    content,
-    trust,
-    names,
-    zone: zoneOf(extracted.asks[0]?.conferenceId || defaultConferenceId),
-  });
-  // Suggest the affected meeting only when the rules allow it (see findCandidates).
-  const meetings = await db.meeting.findMany({ where: { status: 'Confirmed' } });
-  const trusted = trust.status !== 'unverified';
-  for (const e of asks) {
-    if (!['cancel', 'reschedule'].includes(e.operation)) continue;
-    const r = findCandidates(e, meetings, { zone: zoneOf(e.conferenceId), trusted, open: isOpenMeeting, n: names });
-    e.meetingId = r.preselectId;
-    if (!r.preselectId && trusted && e.issuerId && !e.missing.includes('meeting')) e.missing.push('meeting');
-  }
-  const flags = securityFlags(p.subject, p.body);
-  if (trust.status === 'unverified')
-    flags.unshift(
-      trust.lookalikeOf
-        ? `Sender not verified: ${trust.domain} looks like ${trust.lookalikeOf} but is not the registered domain.`
-        : `Sender not verified: ${trust.domain} is not a registered issuer, investor or bank domain.`,
-    );
-  const addressed = users.find(
-    (u) => u.role === 'BANKER' && p.to.some((t) => t.toLowerCase() === u.email.toLowerCase()),
-  );
-  return { asks, trust, flags, contextNote, content, issuers, addressed, parser: extracted.parser };
 }
-type Analysis = Awaited<ReturnType<typeof analyseEmail>>;
+
 /** One proposal and one queue action per ask. */
-async function writeAsks(tx: Tx, emailId: string, a: Analysis) {
+async function writeAsks(tx: Tx, user: User, emailId: string, a: Analysis) {
+  if (a.protectMeetingId) {
+    const reason = a.escalationReasons.find((r) => /threat/i.test(r)) || 'Investor asked that it not move again';
+    await tx.meeting.update({ where: { id: a.protectMeetingId }, data: { protected: true, protectedReason: reason } });
+    await audit(tx, user, 'Meeting protected (investor threat)', 'Meeting', a.protectMeetingId, undefined, { emailId, reason });
+  }
   for (const [askIndex, e] of a.asks.filter((x) => x.needsReview).entries()) {
     const proposal = await tx.proposal.create({
       data: { emailId, askIndex, summary: e.summary, extraction: json(e) },
@@ -388,7 +553,7 @@ async function writeAsks(tx: Tx, emailId: string, a: Analysis) {
     const escalation = e.category === 'Escalation / complaint';
     const owner = escalation ? a.addressed?.id || issuer?.ownerId : issuer?.ownerId;
     const doubts = e.uncertainties.filter((u) => !u.startsWith(SELECT_UNCERTAINTY));
-    const trusted = a.trust.status !== 'unverified';
+    const trusted = !a.suspicious;
     await tx.action.create({
       data: {
         type: e.category,
@@ -401,11 +566,11 @@ async function writeAsks(tx: Tx, emailId: string, a: Analysis) {
         meetingId: e.meetingId,
         assignedTo: owner || null,
         ccUserIds: escalation && issuer?.ownerId && issuer.ownerId !== owner ? [issuer.ownerId] : [],
-        priority: escalation ? 'Urgent' : !trusted || doubts.length ? 'High' : 'Normal',
+        priority: escalation ? 'Urgent' : !trusted || doubts.length || e.fromEscalation ? 'High' : 'Normal',
         recommendation: escalation
           ? 'Acknowledge, assign one owner and reply to the client today.'
           : !trusted
-            ? 'Sender not verified — confirm with the registered contact before acting.'
+            ? 'Suspicious email — report it, or confirm with the registered contact before acting.'
             : doubts.length
               ? 'Resolve uncertainty and review proposed changes'
               : 'Review source evidence and approve changes',
@@ -414,13 +579,20 @@ async function writeAsks(tx: Tx, emailId: string, a: Analysis) {
   }
 }
 const emailFields = (a: Analysis) => {
-  const first = a.asks[0];
-  const categories = [...new Set(a.asks.map((x) => x.category))];
+  const real = a.asks.filter((x) => x.category !== 'Escalation / complaint');
+  const first = real[0] || a.asks[0];
+  const categories = [...new Set((real.length ? real : a.asks).map((x) => x.category))];
   return {
     conferenceId: first.conferenceId,
-    issuerId: first.issuerId,
-    investorId: a.asks.length === 1 ? first.investorId : null,
+    issuerId: first.issuerId || a.asks[0].issuerId,
+    investorId: real.length <= 1 ? first.investorId : null,
     category: categories.length > 1 ? 'Multiple asks' : first.category,
+    originalSender: a.originalSender,
+    originalSenderName: a.originalSenderName,
+    forwardedBy: a.forwardedBy,
+    escalation: a.escalation,
+    escalationReasons: a.escalationReasons,
+    suspicious: a.suspicious,
     status: a.asks.some((x) => x.needsReview) ? 'Pending review' : 'Ignored',
     senderStatus: a.trust.status,
     securityFlags: a.flags,
@@ -452,7 +624,7 @@ async function ingestEmail(user: User, input: unknown) {
         ...(p.receivedAt ? { receivedAt: new Date(p.receivedAt) } : {}),
       },
     });
-    await writeAsks(tx, mail.id, a);
+    await writeAsks(tx, user, mail.id, a);
     await audit(tx, user, 'Email ingested', 'Email', mail.id, undefined, {
       asks: a.asks,
       parser: a.parser,
@@ -466,11 +638,15 @@ async function ingestEmail(user: User, input: unknown) {
 /** "Which event?" — re-read an email for the event the banker picked (only while nothing is decided). */
 async function reassignEmail(user: User, input: unknown) {
   banker(user);
-  const p = z.object({ emailId: z.string(), conferenceId: z.string() }).parse(input);
+  const p = z
+    .object({ emailId: z.string(), conferenceId: z.string().optional(), treatAsConference: z.boolean().default(false) })
+    .parse(input);
   const email = await db.email.findUniqueOrThrow({ where: { id: p.emailId }, include: { proposals: true } });
   if (email.proposals.some((x) => x.status !== 'Pending'))
     throw new Error('Some asks were already decided; correct the event on each remaining ask instead.');
-  const conference = await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } });
+  const conference = p.conferenceId
+    ? await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } })
+    : null;
   const a = await analyseEmail({
     ...ingestSchema.parse({
       messageId: email.messageId,
@@ -482,20 +658,52 @@ async function reassignEmail(user: User, input: unknown) {
       body: email.body,
       receivedAt: email.receivedAt.toISOString(),
     }),
-    conferenceId: conference.id,
+    conferenceId: conference?.id,
   });
-  a.contextNote = `Event set to ${conference.name} by ${user.name}.`;
+  if (conference) a.contextNote = `Event set to ${conference.name} by ${user.name}.`;
+  if (p.treatAsConference) {
+    // "Treat as conference email": an ignored email goes to review as a question at least.
+    for (const ask of a.asks)
+      if (ask.category === 'Unrelated Email')
+        Object.assign(ask, { category: 'General Conference Inquiry', operation: 'inquiry', needsReview: true });
+    a.contextNote = [a.contextNote, `Marked as a conference email by ${user.name}.`].filter(Boolean).join(' ');
+  }
   return db.$transaction(async (tx) => {
     await tx.action.deleteMany({ where: { emailId: email.id, status: 'Open' } });
     await tx.proposal.deleteMany({ where: { emailId: email.id } });
     await tx.email.update({ where: { id: email.id }, data: emailFields(a) });
-    await writeAsks(tx, email.id, a);
-    await audit(tx, user, 'Email event set', 'Email', email.id, { conferenceId: email.conferenceId, asks: email.proposals.map((x) => x.extraction) }, { conferenceId: conference.id, asks: a.asks });
+    await writeAsks(tx, user, email.id, a);
+    await audit(
+      tx,
+      user,
+      p.treatAsConference ? 'Ignored email treated as conference email' : 'Email event set',
+      'Email',
+      email.id,
+      { conferenceId: email.conferenceId, status: email.status, asks: email.proposals.map((x) => x.extraction) },
+      { conferenceId: conference?.id ?? a.asks[0]?.conferenceId, asks: a.asks },
+    );
     return { ok: true };
   });
 }
 
 /* ------------------------------------------------------------------ manual meeting control */
+
+/** Open email asks about this meeting (same issuer + investor), offered as "Mark handled manually". */
+async function openAsksFor(tx: Tx, m: { id: string; issuerId: string; investorId: string; conferenceId: string }) {
+  const proposals = await tx.proposal.findMany({
+    where: { status: { in: ['Pending', 'Clarification requested'] } },
+    include: { email: { select: { subject: true, sender: true } } },
+  });
+  return proposals
+    .filter((x) => {
+      const e = x.extraction as unknown as Extraction;
+      return (
+        e.meetingId === m.id ||
+        (e.issuerId === m.issuerId && e.investorId === m.investorId && ['cancel', 'reschedule', 'update', 'confirm'].includes(e.operation))
+      );
+    })
+    .map((x) => ({ id: x.id, summary: x.summary, subject: x.email.subject, sender: x.email.sender }));
+}
 
 const meetingFields = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -607,15 +815,33 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
   }
   if (type === 'meetingUpdate') {
     const p = meetingFields
-      .extend({ id: z.string(), reason: z.string().trim().min(3, 'Give a reason for the change.').max(500), override: z.boolean().default(false) })
+      .extend({
+        id: z.string(),
+        reason: z.string().trim().min(3, 'Give a reason for the change.').max(500),
+        override: z.boolean().default(false),
+        /** The version the editor started from; a newer one means someone else changed it. */
+        version: z.number().int().optional(),
+        holdOverride: z.string().max(500).optional(),
+      })
       .parse(input);
     return db.$transaction(async (tx) => {
       await lock(tx);
       const m = await tx.meeting.findUniqueOrThrow({ where: { id: p.id } });
       if (m.status !== 'Confirmed') throw new Error('Only confirmed meetings can be edited.');
+      if (p.version !== undefined && p.version !== m.version) {
+        const who = m.changedBy ? (await tx.user.findUnique({ where: { id: m.changedBy } }))?.name : null;
+        throw new Error(
+          `Changed by ${who || 'someone else'} while you were editing (${m.changeSummary || 'updated'}). Reload the meeting and reapply your change.`,
+        );
+      }
+      const holdNote = await checkHold(tx, m.issuerId, p.holdOverride);
       const c = await tx.conference.findUniqueOrThrow({ where: { id: m.conferenceId } });
       const start = conferenceTime(p.date, p.time, c.timezone),
         end = addMinutes(start, p.duration);
+      if (m.protected && (+start !== +m.start || +end !== +m.end) && !p.override)
+        throw new Error(
+          `The investor said this meeting must not move again (${m.protectedReason}). Tick "Schedule anyway" with your reason to move it.`,
+        );
       const check = await slotCheck(tx, { ...m, id: m.id, start, end, bankerIds: p.bankerIds, attendees: p.attendees, cubeId: p.cubeId });
       if (check.hard.length) throw new Error(check.hard.join(' '));
       if (check.soft.length && !p.override) throw new Error(`${check.soft.join(' ')} Tick "Schedule anyway" to keep it.`);
@@ -644,30 +870,50 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
         await tx.draft.updateMany({ where: { meetingId: m.id, status: 'Draft' }, data: { status: 'Superseded' } });
         await makeConfirmationDraft(tx, user, m.id);
       }
+      const summary = [
+        moved && `moved to ${formatInTimeZone(start, c.timezone, 'EEE h:mm a')}`,
+        changed.includes('room') && `room ${location || 'cleared'}`,
+        changed.includes('bankers') && 'bankers changed',
+        changed.includes('attendees') && `${p.attendees} attendees`,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      const final = await markMeetingChanged(tx, user, m.id, summary || 'details updated');
       await audit(tx, user, `Meeting edited (${changed.join(', ') || 'no change'})`, 'Meeting', m.id, before, {
         ...updated,
         coverage: p.bankerIds,
         cubeId: p.cubeId,
-        reason: p.reason,
+        reason: [p.reason, holdNote].filter(Boolean).join(' · '),
         overrides: p.override ? check.soft : [],
       });
       await refresh(tx, m.conferenceId);
-      return updated;
+      return { ...final, openAsks: await openAsksFor(tx, final) };
     });
   }
   if (type === 'meetingCancel') {
-    const p = z.object({ id: z.string(), reason: z.string().trim().min(3, 'A reason is required to cancel.').max(500) }).parse(input);
+    const p = z
+      .object({
+        id: z.string(),
+        reason: z.string().trim().min(3, 'A reason is required to cancel.').max(500),
+        version: z.number().int().optional(),
+        holdOverride: z.string().max(500).optional(),
+      })
+      .parse(input);
     return db.$transaction(async (tx) => {
       await lock(tx);
       const m = await tx.meeting.findUniqueOrThrow({ where: { id: p.id } });
       if (m.status === 'Cancelled') throw new Error('Meeting already cancelled.');
+      if (p.version !== undefined && p.version !== m.version)
+        throw new Error(`Changed by someone else while you were looking (${m.changeSummary || 'updated'}). Reload and try again.`);
+      const holdNote = await checkHold(tx, m.issuerId, p.holdOverride);
       const updated = await tx.meeting.update({ where: { id: m.id }, data: { status: 'Cancelled' } });
       if (m.requestId) await tx.meetingRequest.update({ where: { id: m.requestId }, data: { status: 'Cancelled' } });
       await tx.draft.updateMany({ where: { meetingId: m.id, status: 'Draft' }, data: { status: 'Superseded' } });
       await tx.action.updateMany({ where: { meetingId: m.id, status: 'Open' }, data: { status: 'Resolved' } });
-      await audit(tx, user, 'Meeting cancelled', 'Meeting', m.id, m, { ...updated, reason: p.reason });
+      const final = await markMeetingChanged(tx, user, m.id, `Cancelled: ${p.reason}`);
+      await audit(tx, user, 'Meeting cancelled', 'Meeting', m.id, m, { ...updated, reason: [p.reason, holdNote].filter(Boolean).join(' · ') });
       await refresh(tx, m.conferenceId);
-      return updated;
+      return { ...final, openAsks: await openAsksFor(tx, final) };
     });
   }
   if (type === 'meetingCreate') {
@@ -708,6 +954,7 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
       await tx.meetingCoverageRequirement.create({ data: { meetingId: m.id, requiredBankerCount: 2, requiredPrimaryCount: 1 } });
       await assignResources(tx, user, m.id, p.bankerIds, p.cubeId);
       await makeConfirmationDraft(tx, user, m.id);
+      await markMeetingChanged(tx, user, m.id, 'Created manually');
       await audit(tx, user, 'Meeting created manually', 'Meeting', m.id, undefined, {
         ...m,
         cubeId: p.cubeId,
@@ -723,6 +970,149 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
 export async function command(user: User, type: string, input: unknown): Promise<unknown> {
   if (type === 'ingest') return ingestEmail(user, input);
   if (type === 'reassignEmail') return reassignEmail(user, input);
+  if (type === 'replyPreview') {
+    banker(user);
+    const p = z.object({ emailId: z.string() }).parse(input);
+    const existing = await db.draft.findFirst({
+      where: { emailId: p.emailId, status: 'Draft', kind: { in: ['reply', 'escalation', ''] } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return { ...(await buildReply(db, user, p.emailId)), existingDraftId: existing?.id || null };
+  }
+  if (type === 'replySave') {
+    banker(user);
+    const p = z
+      .object({
+        emailId: z.string(),
+        to: z.array(z.string().email()),
+        cc: z.array(z.string().email()),
+        subject: z.string().min(1).max(500),
+        body: z.string().min(1).max(10000),
+        /** Asks the reply asks about; they move to "Waiting on reply". */
+        askIds: z.array(z.string()).default([]),
+      })
+      .parse(input);
+    return db.$transaction(async (tx) => {
+      const email = await tx.email.findUniqueOrThrow({ where: { id: p.emailId } });
+      const preview = await buildReply(tx, user, email.id);
+      // One reply draft per email: saving again updates it.
+      const existing = await tx.draft.findFirst({
+        where: { emailId: email.id, status: 'Draft', kind: { in: ['reply', 'escalation', ''] } },
+      });
+      const data = { to: p.to, cc: p.cc, subject: p.subject, body: p.body, allowedDomains: preview.allowedDomains, kind: preview.kind };
+      const d = existing
+        ? await tx.draft.update({ where: { id: existing.id }, data })
+        : await tx.draft.create({
+            data: {
+              ...data,
+              emailId: email.id,
+              createdBy: user.id,
+              sender: user.email,
+              historicalParticipants: [...new Set([email.sender, ...email.to, ...email.cc])].filter(
+                (x) => x.toLowerCase() !== user.email.toLowerCase() && !p.to.includes(x) && !p.cc.includes(x),
+              ),
+            },
+          });
+      const asks = await tx.proposal.findMany({ where: { id: { in: p.askIds }, emailId: email.id, status: 'Pending' } });
+      for (const a of asks) {
+        await tx.proposal.update({ where: { id: a.id }, data: { status: 'Clarification requested', reviewerId: user.id } });
+        await tx.action.updateMany({
+          where: { proposalId: a.id },
+          data: { recommendation: 'Waiting on the client; follow up on the reply' },
+        });
+      }
+      if (asks.length) {
+        const statuses = (await tx.proposal.findMany({ where: { emailId: email.id } })).map((x) => x.status);
+        await tx.email.update({ where: { id: email.id }, data: { status: rollupEmailStatus(statuses) } });
+      }
+      await audit(tx, user, existing ? 'Reply draft updated' : 'Reply drafted', 'Draft', d.id, existing || undefined, {
+        ...d,
+        emailId: email.id,
+        issuerId: email.issuerId,
+        askedAbout: asks.map((a) => a.summary),
+      });
+      return d;
+    });
+  }
+  if (type === 'reviewCheck') {
+    // What would block or complicate approving this ask, before anyone clicks Approve.
+    banker(user);
+    const p = z.object({ id: z.string(), extraction: extractionSchema.optional(), meetingId: z.string().optional() }).parse(input);
+    const proposal = await db.proposal.findUniqueOrThrow({ where: { id: p.id }, include: { email: true } });
+    const e: Extraction = p.extraction || extractionSchema.parse(proposal.extraction);
+    const [issuers, investors] = await Promise.all([db.issuer.findMany(), db.investor.findMany()]);
+    const asker = senderTrust(proposal.email.originalSender || proposal.email.sender, { issuers, investors, internal: internalDomains() });
+    const target = e.windows.find((w) => w.kind === 'availability');
+    const meeting = p.meetingId ? await db.meeting.findUnique({ where: { id: p.meetingId } }) : null;
+    const issuer = issuers.find((i) => i.id === e.issuerId);
+    const out = {
+      hard: [] as string[],
+      soft: [] as string[],
+      issuerAsked: Boolean(e.issuerId && asker.status === 'verified' && asker.issuerId === e.issuerId),
+      investorAsked: Boolean(e.investorId && asker.status === 'verified' && asker.investorId === e.investorId),
+      stale: null as string | null,
+      hold: issuer?.holdChanges ? issuer.holdReason || 'Client escalation' : null,
+      protected: meeting?.protected ? meeting.protectedReason : null,
+    };
+    if (meeting?.changedAt && +meeting.changedAt > +(proposal.refreshedAt ?? proposal.createdAt)) {
+      const who = meeting.changedBy ? (await db.user.findUnique({ where: { id: meeting.changedBy } }))?.name : null;
+      out.stale = `${meeting.changeSummary || 'Updated'}${who ? ` by ${who}` : ''}`;
+    }
+    if (target && e.conferenceId && e.issuerId && e.investorId && !e.flexible && ['reschedule', 'inquiry'].includes(e.operation)) {
+      try {
+        const check = await slotCheck(db, {
+          id: meeting?.id,
+          conferenceId: e.conferenceId,
+          issuerId: e.issuerId,
+          investorId: e.investorId,
+          start: new Date(target.start),
+          end: new Date(target.end),
+          bankerIds: meeting?.bankerIds || [],
+          attendees: e.attendees || meeting?.expectedAttendees || 1,
+        });
+        out.hard = check.hard;
+        out.soft = check.soft;
+      } catch (err) {
+        out.hard = [err instanceof Error ? err.message : 'Invalid time'];
+      }
+    }
+    if (e.operation === 'update' && meeting && e.attendees) {
+      const room = await db.meetingCubeAssignment.findUnique({ where: { meetingId: meeting.id } });
+      const cube = room ? await db.meetingCube.findUnique({ where: { id: room.cubeId } }) : null;
+      if (!cube) out.soft.push(`No room assigned yet for ${e.attendees} people.`);
+      else if (cube.capacity < e.attendees) out.soft.push(`${cube.name} seats ${cube.capacity}; ${e.attendees} expected — a bigger room is needed.`);
+    }
+    return out;
+  }
+  if (type === 'issuerHold') {
+    banker(user);
+    const p = z.object({ issuerId: z.string(), hold: z.boolean(), reason: z.string().max(500).default('') }).parse(input);
+    if (p.hold && p.reason.trim().length < 3) throw new Error('Say why changes are on hold.');
+    return db.$transaction(async (tx) => {
+      const before = await tx.issuer.findUniqueOrThrow({ where: { id: p.issuerId } });
+      const after = await tx.issuer.update({
+        where: { id: p.issuerId },
+        data: p.hold
+          ? { holdChanges: true, holdReason: p.reason.trim(), holdSetBy: user.id, holdSetAt: new Date() }
+          : { holdChanges: false, holdReason: '', holdSetBy: null, holdSetAt: null },
+      });
+      if (before.ownerId && before.ownerId !== user.id)
+        await tx.notification.create({
+          data: {
+            userId: before.ownerId,
+            actorId: user.id,
+            kind: 'hold',
+            text: p.hold ? `${user.name} put all ${before.name} changes on hold: ${p.reason}` : `${user.name} released the hold on ${before.name}`,
+          },
+        });
+      await audit(tx, user, p.hold ? 'Issuer changes put on hold' : 'Issuer hold released', 'Issuer', p.issuerId, { holdChanges: before.holdChanges, issuerId: p.issuerId }, { holdChanges: after.holdChanges, issuerId: p.issuerId, reason: p.reason });
+      return after;
+    });
+  }
+  if (type === 'notificationsRead') {
+    await db.notification.updateMany({ where: { userId: user.id, readAt: null }, data: { readAt: new Date() } });
+    return { ok: true };
+  }
   if (type === 'request') {
     const p = requestSchema.parse(input);
     return db.$transaction(async (tx) => {
@@ -798,6 +1188,7 @@ export async function command(user: User, type: string, input: unknown): Promise
           recommendation: 'Obtain consent and approve the selected slot',
         },
       });
+      await notifyRequest(tx, user, r, `time changed to an alternative by ${user.name}`);
       await audit(tx, user, 'Alternative selected', 'MeetingRequest', r.id, r, updated);
       return updated;
     });
@@ -853,7 +1244,7 @@ export async function command(user: User, type: string, input: unknown): Promise
     const p = z
       .object({
         id: z.string(),
-        decision: z.enum(['approve', 'reject', 'clarify', 'edit', 'acknowledge']),
+        decision: z.enum(['approve', 'reject', 'clarify', 'edit', 'acknowledge', 'refresh', 'handled', 'quarantine']),
         extraction: extractionSchema.optional(),
         note: z.string().max(2000).default(''),
         uncertaintyResolved: z.boolean().default(false),
@@ -866,6 +1257,16 @@ export async function command(user: User, type: string, input: unknown): Promise
         /** The reviewer confirmed a second meeting between the same issuer and investor. */
         duplicateConfirmed: z.boolean().default(false),
         assignTo: z.string().optional(),
+        /** Reason to change an issuer that is on hold after an escalation. */
+        holdOverride: z.string().max(500).optional(),
+        /** Reason to move/cancel a meeting an investor said must not move again. */
+        protectedOverride: z.string().max(500).optional(),
+        /** The reviewer confirmed the condition of a conditional ask holds. */
+        conditionMet: z.boolean().default(false),
+        /** Who agreed to a move: both the issuer and the investor must have. */
+        consentParties: z.array(z.enum(['issuer', 'investor'])).default([]),
+        /** The issuer asked for a time outside its stated availability: extend it (audited). */
+        extendAvailability: z.boolean().default(false),
       })
       .parse(input);
     return db.$transaction(async (tx) => {
@@ -874,6 +1275,27 @@ export async function command(user: User, type: string, input: unknown): Promise
         where: { id: p.id },
         include: { email: true },
       });
+      if (p.decision === 'quarantine') {
+        // Report phishing: nothing in this email is applied; every open ask is closed.
+        const email = proposal.email;
+        await tx.proposal.updateMany({
+          where: { emailId: email.id, status: { in: ['Pending', 'Clarification requested'] } },
+          data: { status: 'Rejected', reviewerId: user.id, reviewNote: `Reported as phishing: ${p.note}`.trim() },
+        });
+        await tx.email.update({ where: { id: email.id }, data: { status: 'Quarantined' } });
+        await tx.action.updateMany({
+          where: { emailId: email.id, status: { in: ['Open', 'Acknowledged'] } },
+          data: { status: 'Rejected', recommendation: 'Reported as phishing and quarantined' },
+        });
+        await tx.draft.updateMany({ where: { emailId: email.id, status: 'Draft' }, data: { status: 'Superseded' } });
+        await audit(tx, user, 'Reported as phishing', 'Email', email.id, { status: email.status }, {
+          status: 'Quarantined',
+          sender: email.sender,
+          securityFlags: email.securityFlags,
+          note: p.note,
+        });
+        return { ok: true };
+      }
       if (!['Pending', 'Clarification requested'].includes(proposal.status))
         throw new Error('This ask has already been reviewed.');
       const [issuers, investors, conferences, users] = await Promise.all([
@@ -889,6 +1311,29 @@ export async function command(user: User, type: string, input: unknown): Promise
       const email = proposal.email;
       const issuerName = issuers.find((i) => i.id === e.issuerId)?.name;
       const actionScope = { OR: [{ proposalId: p.id }, { emailId: email.id, proposalId: null }] };
+      if (p.decision === 'refresh') {
+        // The reviewer has looked at what changed on the meeting since the email arrived.
+        await tx.proposal.update({ where: { id: p.id }, data: { refreshedAt: new Date(), extraction: json(e) } });
+        await audit(tx, user, 'Ask re-checked after a meeting change', 'Proposal', p.id, undefined, { emailId: email.id, note: p.note });
+        return { ok: true };
+      }
+      if (p.decision === 'handled') {
+        // Done outside the email flow (e.g. a manual move); recorded, not rejected.
+        await tx.proposal.update({
+          where: { id: p.id },
+          data: { status: 'Resolved', reviewerId: user.id, reviewNote: `Handled manually${p.note ? `: ${p.note}` : ''}` },
+        });
+        await tx.action.updateMany({ where: actionScope, data: { status: 'Resolved', recommendation: 'Handled manually' } });
+        const statuses = (await tx.proposal.findMany({ where: { emailId: email.id } })).map((x) => x.status);
+        await tx.email.update({ where: { id: email.id }, data: { status: rollupEmailStatus(statuses) } });
+        await audit(tx, user, 'Ask handled manually', 'Proposal', p.id, { status: proposal.status }, {
+          emailId: email.id,
+          issuerId: e.issuerId,
+          meetingId: p.meetingId,
+          note: p.note,
+        });
+        return { ok: true };
+      }
       if (p.decision === 'edit') {
         await tx.proposal.update({
           where: { id: p.id },
@@ -927,7 +1372,8 @@ export async function command(user: User, type: string, input: unknown): Promise
           where: actionScope,
           data: {
             assignedTo: owner.id,
-            status: 'Open',
+            // Acknowledged ≠ resolved: it stays with its owner until they close it.
+            status: 'Acknowledged',
             priority: 'Urgent',
             recommendation: `Acknowledged by ${user.name}. ${owner.name} owns the follow-up${p.note.trim() ? `: ${p.note.trim()}` : '.'}`,
           },
@@ -942,6 +1388,40 @@ export async function command(user: User, type: string, input: unknown): Promise
           throw new Error('Escalations are acknowledged and assigned to an owner, not approved.');
         if (email.senderStatus === 'unverified' && (!p.senderOverride || p.note.trim().length < 10))
           throw new Error('Sender not verified. Type why you trust this email (at least 10 characters) before approving.');
+        if (!e.conferenceId || !e.issuerId)
+          throw new Error('Associate a conference and issuer before approval.');
+        const [confId, issId] = [e.conferenceId, e.issuerId];
+        const holdNote = await checkHold(tx, e.issuerId, p.holdOverride);
+        if (e.conditional && !p.conditionMet)
+          throw new Error(`This ask is conditional (“${e.condition}”). Confirm the condition holds before approving.`);
+        const affected = p.meetingId ? await tx.meeting.findUnique({ where: { id: p.meetingId } }) : null;
+        if (affected?.changedAt && +affected.changedAt > +(proposal.refreshedAt ?? proposal.createdAt))
+          throw new Error(
+            `This meeting changed after the email arrived (${affected.changeSummary || 'updated'} by ${users.find((u) => u.id === affected.changedBy)?.name || 'someone'}). Review the change and refresh this ask first.`,
+          );
+        if (affected?.protected && ['cancel', 'reschedule'].includes(e.operation) && (p.protectedOverride || '').trim().length < 5)
+          throw new Error(
+            `The investor said this meeting must not move again (${affected.protectedReason || 'protected'}). Give an override reason to proceed.`,
+          );
+        if (e.operation === 'reschedule' && !(p.consentParties.includes('issuer') && p.consentParties.includes('investor')))
+          throw new Error('A move needs the agreement of both the issuer and the investor. Record both before approving.');
+        // The issuer itself asked for this time: offering to extend its availability is fair.
+        const asker = senderTrust(email.originalSender || email.sender, { issuers, investors, internal: internalDomains() });
+        const extendFor =
+          p.extendAvailability && asker.status === 'verified' && asker.issuerId === e.issuerId
+            ? e.windows.filter((w) => w.kind === 'availability')
+            : [];
+        if (p.extendAvailability && !extendFor.length)
+          throw new Error('Availability can only be extended when the issuer itself asked for this time.');
+        for (const w of extendFor) {
+          await tx.availability.create({
+            data: { conferenceId: confId, issuerId: issId, start: new Date(w.start), end: new Date(w.end), kind: 'Available', approvedBy: user.id, sourceEmailId: email.id },
+          });
+          await audit(tx, user, 'Availability extended (issuer asked)', 'Availability', issId, undefined, { ...w, issuerId: issId, emailId: email.id });
+        }
+        if (holdNote) p.note = [p.note, holdNote].filter(Boolean).join('\n');
+        if (p.protectedOverride) p.note = [p.note, `Protected meeting override: ${p.protectedOverride}`].join('\n');
+        if (p.consentParties.length) p.note = [p.note, `Agreed by: ${p.consentParties.join(' and ')}`].join('\n');
         if (!e.conferenceId || !e.issuerId)
           throw new Error('Associate a conference and issuer before approval.');
         const c = await validateReferences(
@@ -960,8 +1440,18 @@ export async function command(user: User, type: string, input: unknown): Promise
           const windows = e.windows.filter((w) => w.kind === 'availability');
           if (windows.length !== 1)
             throw new Error('Provide one explicit requested meeting interval.');
-          const w = windows[0];
+          let w = windows[0];
           validateInterval(w, c);
+          if (e.flexible) {
+            // "Any time 10–12": place the meeting in the first slot open for both sides.
+            const len = e.durationMinutes || c.slotMinutes;
+            const free = await resources(tx, c.id, e.issuerId, e.investorId);
+            const slot = availableSlots(free.windows, free.busy, len, c.slotMinutes).find(
+              (x) => +new Date(x.start) >= +new Date(w.start) && +new Date(x.end) <= +new Date(w.end),
+            );
+            const start = slot ? new Date(slot.start) : new Date(w.start);
+            w = { ...w, start: start.toISOString(), end: addMinutes(start, len).toISOString() };
+          }
           const duration = (+new Date(w.end) - +new Date(w.start)) / 60000;
           if (duration < 15 || duration > 180)
             throw new Error('Requested duration must be between 15 and 180 minutes.');
@@ -1057,6 +1547,43 @@ export async function command(user: User, type: string, input: unknown): Promise
           )
             throw new Error('Selected request does not match the email associations.');
           await confirmRequest(tx, user, p.requestId, '', proposal.emailId);
+        } else if (e.operation === 'cancel' && !p.meetingId && p.requestId) {
+          // "Please drop the Apollo request": the ask is about a request, not a booked meeting.
+          const r = await tx.meetingRequest.findUniqueOrThrow({ where: { id: p.requestId } });
+          if (r.issuerId !== e.issuerId || (e.investorId && r.investorId !== e.investorId))
+            throw new Error('Selected request does not match the email.');
+          if (!isOpenRequest(r.status)) throw new Error('That request is already closed.');
+          await tx.meetingRequest.update({ where: { id: r.id }, data: { status: 'Cancelled' } });
+          await tx.action.updateMany({ where: { requestId: r.id, status: 'Open' }, data: { status: 'Resolved' } });
+          await audit(tx, user, 'Request cancelled from email', 'MeetingRequest', r.id, r, { status: 'Cancelled', emailId: email.id, issuerId: r.issuerId, note: p.note });
+        } else if (e.operation === 'update') {
+          // New headcount for an existing meeting; the room is re-checked against it.
+          if (!p.meetingId) throw new Error('Select the meeting this update is about.');
+          if (!e.attendees) throw new Error('The update has no attendee count.');
+          const m = await tx.meeting.findUniqueOrThrow({ where: { id: p.meetingId } });
+          if (m.issuerId !== e.issuerId || (e.investorId && m.investorId !== e.investorId))
+            throw new Error('Meeting does not match the email.');
+          await tx.meeting.update({ where: { id: m.id }, data: { expectedAttendees: e.attendees } });
+          const room = await tx.meetingCubeAssignment.findUnique({ where: { meetingId: m.id } });
+          const cube = room ? await tx.meetingCube.findUnique({ where: { id: room.cubeId } }) : null;
+          if (!cube || cube.capacity < e.attendees) {
+            if (room) await tx.meetingCubeAssignment.update({ where: { meetingId: m.id }, data: { assignmentStatus: 'Needs Review' } });
+            await tx.action.create({
+              data: {
+                conferenceId: m.conferenceId,
+                issuerId: m.issuerId,
+                investorId: m.investorId,
+                meetingId: m.id,
+                type: 'Resource allocation',
+                title: `${names.issuer(m.issuerId)} × ${names.investor(m.investorId)} needs a room for ${e.attendees}`,
+                assignedTo: user.id,
+                priority: 'High',
+                recommendation: cube ? `${cube.name} seats ${cube.capacity}; ${e.attendees} expected.` : `No room assigned; ${e.attendees} expected.`,
+              },
+            });
+          }
+          await markMeetingChanged(tx, user, m.id, `Attendees now ${e.attendees}`);
+          await audit(tx, user, 'Meeting attendees updated from email', 'Meeting', m.id, m, { expectedAttendees: e.attendees, emailId: email.id, issuerId: m.issuerId, note: p.note });
         } else {
           if (!p.meetingId || !p.consent)
             throw new Error('Select a meeting and attest approval for this change.');
@@ -1112,6 +1639,15 @@ export async function command(user: User, type: string, input: unknown): Promise
             data: { status: 'Superseded' },
           });
           if (e.operation === 'reschedule') await makeConfirmationDraft(tx, user, m.id);
+          const moved = e.windows.find((w) => w.kind === 'availability');
+          await markMeetingChanged(
+            tx,
+            user,
+            m.id,
+            e.operation === 'cancel'
+              ? 'Cancelled at the client’s request'
+              : `Moved to ${moved ? formatInTimeZone(moved.start, zone || 'America/New_York', 'EEE h:mm a') : 'a new time'}`,
+          );
           await audit(
             tx,
             user,
@@ -1174,46 +1710,8 @@ export async function command(user: User, type: string, input: unknown): Promise
               : 'Review completed',
         },
       });
-      if (p.decision === 'clarify') {
-        // A short, human question about the missing fact. Internal notes and parser
-        // diagnostics never go into a client email.
-        const trust = senderTrust(email.sender, { issuers, investors, internal: internalDomains() });
-        const meetings = await tx.meeting.findMany({ where: { status: 'Confirmed' } });
-        const pick =
-          ['cancel', 'reschedule'].includes(e.operation) && !e.meetingId
-            ? findCandidates(e, meetings, { zone: zone || 'America/New_York', trusted: true, open: isOpenMeeting, n: names })
-            : null;
-        const questions = clientQuestions(
-          e,
-          {
-            issuer: e.issuerId ? names.issuer(e.issuerId) : null,
-            investor: e.investorId ? names.investor(e.investorId) : null,
-            conference: conferences.find((c) => c.id === e.conferenceId)?.name || null,
-          },
-          trust.issuerId ? 'issuer' : trust.investorId ? 'investor' : 'other',
-          zone,
-          pick && !pick.preselectId ? ['meeting'] : [],
-        );
-        const allowed = await allowedDomains(tx);
-        const external = trust.status === 'verified';
-        const cc = external
-          ? email.cc.filter((x) => x.toLowerCase() !== user.email.toLowerCase() && !outsideAllowlist([x], allowed).length)
-          : [];
-        await tx.draft.create({
-          data: {
-            emailId: proposal.emailId,
-            createdBy: user.id,
-            sender: user.email,
-            to: external ? [email.sender] : [],
-            cc,
-            historicalParticipants: [...new Set([email.sender, ...email.to, ...email.cc])].filter(
-              (x) => x.toLowerCase() !== user.email.toLowerCase() && !(external && (x === email.sender || cc.includes(x))),
-            ),
-            subject: replySubject(email.subject),
-            body: clarificationBody(questions, user.name),
-          },
-        });
-      }
+      // Questions to the sender are written in the reply composer (replyPreview / replySave);
+      // nothing is drafted until the person saves it.
       await audit(tx, user, `Ask ${status.toLowerCase()}`, 'Proposal', p.id, { status: proposal.status, extraction: proposal.extraction }, {
         extraction: e,
         note: p.note,
@@ -1255,6 +1753,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         throw new Error('Confirmed meetings require a banker-reviewed cancellation email.');
       await tx.meetingRequest.update({ where: { id: r.id }, data: { status: 'Cancelled' } });
       await tx.action.updateMany({ where: { requestId: r.id }, data: { status: 'Resolved' } });
+      await notifyRequest(tx, user, r, `request declined by ${user.name}`);
       await audit(tx, user, 'Request cancelled', 'MeetingRequest', r.id, r);
       return { ok: true };
     });
@@ -1313,27 +1812,46 @@ export async function command(user: User, type: string, input: unknown): Promise
         recipientsApproved: z.boolean().default(false),
         /** Second confirmation for recipients outside the registered/internal domains. */
         outsideConfirmed: z.boolean().default(false),
-        /** Confirmation that possible deal / MNPI terms in the body are intended. */
+        /** Confirmation that possible deal / MNPI terms in the body are intended, with a reason. */
         sensitiveConfirmed: z.boolean().default(false),
+        sensitiveReason: z.string().max(500).default(''),
+        holdOverride: z.string().max(500).optional(),
       })
       .parse(input);
     return db.$transaction(async (tx) => {
       await lock(tx);
       const d = await tx.draft.findUniqueOrThrow({ where: { id: p.id } });
+      let sendConfirmations: Record<string, unknown> = {};
       if (user.role !== 'BANKER' && d.createdBy !== user.id) throw new Error('Forbidden');
       if (d.status !== 'Draft') throw new Error('This draft is no longer editable.');
       if (p.send) {
         banker(user);
         if (!p.recipientsApproved || !p.to.length)
           throw new Error('Review and approve at least one recipient.');
-        const outside = outsideAllowlist([...p.to, ...p.cc], await allowedDomains(tx));
+        const allowed = d.allowedDomains.length ? d.allowedDomains : await allowedDomains(tx);
+        const outside = outsideAllowlist([...p.to, ...p.cc], allowed);
         if (outside.length && !p.outsideConfirmed)
           throw new Error(
-            `${outside.join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the registered issuer, investor and bank domains. Confirm to send anyway.`,
+            `${outside.join(', ')} ${outside.length === 1 ? 'is' : 'are'} outside the parties on this thread and the bank. Confirm to send anyway.`,
           );
         const sensitive = findSensitive(`${p.subject}\n${p.body}`);
-        if (sensitive.length && !p.sensitiveConfirmed)
-          throw new Error(`The draft contains possible deal / MNPI terms (${sensitive.join(', ')}). Remove them or confirm.`);
+        if (sensitive.length && (!p.sensitiveConfirmed || p.sensitiveReason.trim().length < 5))
+          throw new Error(
+            `The draft contains possible deal / MNPI terms (${sensitive.join(', ')}). Remove them, or confirm with a reason.`,
+          );
+        const draftIssuer = d.meetingId
+          ? (await tx.meeting.findUnique({ where: { id: d.meetingId } }))?.issuerId
+          : d.emailId
+            ? (await tx.email.findUnique({ where: { id: d.emailId } }))?.issuerId
+            : null;
+        const holdNote = await checkHold(tx, draftIssuer, p.holdOverride);
+        sendConfirmations = {
+          outsideRecipients: outside,
+          outsideConfirmed: outside.length ? p.outsideConfirmed : undefined,
+          sensitiveTerms: sensitive,
+          sensitiveReason: sensitive.length ? p.sensitiveReason : undefined,
+          holdOverride: holdNote || undefined,
+        };
         if (d.meetingId) {
           const m = await tx.meeting.findUniqueOrThrow({ where: { id: d.meetingId } });
           if (m.status !== 'Confirmed') throw new Error('Meeting is no longer confirmed.');
@@ -1385,7 +1903,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         'Draft',
         d.id,
         d,
-        updated,
+        { ...updated, ...sendConfirmations, reason: (sendConfirmations.sensitiveReason as string) || undefined },
       );
       return updated;
     }, { timeout: 30000, maxWait: 10000 });
@@ -1515,8 +2033,33 @@ async function applyAvailability(
     });
   // Confirmed meetings are preserved; refresh() flags gaps after the entire update.
 }
+/** Investors a salesperson covers. */
+async function clientIds(user: User) {
+  if (user.role !== 'SALES') return [];
+  return (await db.investor.findMany({ where: { coverageSalesId: user.id }, select: { id: true } })).map((x) => x.id);
+}
+/** Plain reason a request is not simply open: who already has the time, or the issuer's hours. */
+function requestReason(
+  r: { start: Date; end: Date; issuerId: string; investorId: string; status: string },
+  busy: { start: Date; end: Date; issuerId?: string; investorId?: string; kind?: string }[],
+  windows: { start: Date; end: Date }[],
+  n: Names,
+  zone: string,
+) {
+  if (['Confirmed', 'Cancelled'].includes(r.status)) return '';
+  if (!windows.length) return `${n.issuer(r.issuerId)} has not sent availability yet.`;
+  const clash = busy.find((b) => overlaps(b, r));
+  if (clash && 'investorId' in clash && clash.issuerId && clash.investorId)
+    return `${n.issuer(clash.issuerId)} already meets ${n.investor(clash.investorId)} ${formatInTimeZone(clash.start, zone, 'EEE h:mm a')}.`;
+  if (clash) return `${n.issuer(r.issuerId)} marked that time as ${(clash.kind || 'blocked').toLowerCase()}.`;
+  if (!isAvailable(r, windows, [])) return `Outside ${n.issuer(r.issuerId)}'s availability.`;
+  return '';
+}
 export async function getState(user: User) {
   const resourceStatePromise = getResourceState(user);
+  const clients = await clientIds(user);
+  // Sales see their own requests and everything for the accounts they cover.
+  const salesRequests = { OR: [{ salespersonId: user.id }, { investorId: { in: clients } }] };
   const [
     conferences,
     issuers,
@@ -1536,19 +2079,32 @@ export async function getState(user: User) {
     db.user.findMany(),
     db.availability.findMany(),
     db.meetingRequest.findMany({
-      where: user.role === 'SALES' ? { salespersonId: user.id } : {},
+      where: user.role === 'SALES' ? salesRequests : {},
       orderBy: { createdAt: 'desc' },
     }),
     db.meeting.findMany({
-      where: user.role === 'SALES' ? { request: { salespersonId: user.id } } : {},
+      where:
+        user.role === 'SALES'
+          ? { OR: [{ request: { salespersonId: user.id } }, { investorId: { in: clients } }] }
+          : {},
       orderBy: { start: 'asc' },
     }),
-    user.role === 'BANKER'
-      ? db.email.findMany({
-          include: { proposals: { orderBy: { askIndex: 'asc' } } },
-          orderBy: { receivedAt: 'desc' },
-        })
-      : [],
+    // Sales: "My emails" — emails they sent, forwarded, or were on.
+    db.email.findMany({
+      where:
+        user.role === 'BANKER'
+          ? {}
+          : {
+              OR: [
+                { sender: { equals: user.email, mode: 'insensitive' } },
+                { forwardedBy: { equals: user.email, mode: 'insensitive' } },
+                { cc: { has: user.email } },
+                { to: { has: user.email } },
+              ],
+            },
+      include: { proposals: { orderBy: { askIndex: 'asc' } } },
+      orderBy: { receivedAt: 'desc' },
+    }),
     user.role === 'BANKER' ? db.action.findMany({ orderBy: { createdAt: 'desc' } }) : [],
     db.draft.findMany({
       where: user.role === 'BANKER' ? {} : { createdBy: user.id },
@@ -1558,22 +2114,32 @@ export async function getState(user: User) {
       ? db.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 100 })
       : [],
   ]);
+  const names = namesFrom(issuers, investors);
   const computed = [];
   for (const r of requests) {
     const { windows, busy } = await resources(db, r.conferenceId, r.issuerId, r.investorId);
-    const result = evaluate(
-      r,
-      windows,
-      busy,
-      r.duration,
-      conferences.find((c) => c.id === r.conferenceId)!.slotMinutes,
-    );
+    const c = conferences.find((x) => x.id === r.conferenceId)!;
+    const result = evaluate(r, windows, busy, r.duration, c.slotMinutes);
+    // Alternatives across days: up to two per day, nearest to the requested time of day.
+    const minuteOfDay = (d: Date | string) => {
+      const [h, m] = formatInTimeZone(d, c.timezone, 'H:m').split(':').map(Number);
+      return h * 60 + m;
+    };
+    const byDay = new Map<string, typeof result.alternatives>();
+    for (const slot of availableSlots(windows, busy, r.duration, c.slotMinutes)
+      .filter((x) => +new Date(x.start) !== +r.start)
+      .sort((a, b) => Math.abs(minuteOfDay(a.start) - minuteOfDay(r.start)) - Math.abs(minuteOfDay(b.start) - minuteOfDay(r.start)))) {
+      const day = formatInTimeZone(slot.start, c.timezone, 'yyyy-MM-dd');
+      const list = byDay.get(day) || [];
+      if (list.length < 2) byDay.set(day, [...list, slot]);
+    }
+    const alternatives = [...byDay.values()].flat().sort((a, b) => +new Date(a.start) - +new Date(b.start)).slice(0, 6);
+    const status = ['Confirmed', 'Cancelled', 'Awaiting Banker Approval'].includes(r.status) ? r.status : result.status;
     computed.push({
       ...r,
-      status: ['Confirmed', 'Cancelled', 'Awaiting Banker Approval'].includes(r.status)
-        ? r.status
-        : result.status,
-      alternatives: ['Confirmed', 'Cancelled'].includes(r.status) ? [] : result.alternatives,
+      status,
+      reason: requestReason({ ...r, status }, busy as never, windows, names, c.timezone),
+      alternatives: ['Confirmed', 'Cancelled'].includes(r.status) ? [] : alternatives,
     });
   }
   const slots = [];
@@ -1588,6 +2154,21 @@ export async function getState(user: User) {
     }
   const resourceState = await resourceStatePromise;
   const outlook = user.role === 'BANKER' ? await outlookStatus(user.id) : null;
+  const notifications = await db.notification.findMany({
+    where: { userId: user.id },
+    orderBy: { createdAt: 'desc' },
+    take: 40,
+  });
+  // Sales see each ask's status and the reviewer's reason, not the raw extraction or flags.
+  const visibleEmails =
+    user.role === 'BANKER'
+      ? emails
+      : emails.map((e) => ({
+          ...e,
+          body: '',
+          securityFlags: [],
+          proposals: e.proposals.map((x) => ({ ...x, extraction: {} as Prisma.JsonValue, reviewNote: x.reviewNote })),
+        }));
   return {
     user,
     outlook,
@@ -1597,8 +2178,10 @@ export async function getState(user: User) {
         ? i
         : { id: i.id, name: i.name, sector: i.sector, color: i.color, ownerId: i.ownerId },
     ),
-    investors: investors.map((i) => ({ id: i.id, name: i.name })),
-    users: users.map((u) => ({ id: u.id, name: u.name, role: u.role })),
+    investors: investors.map((i) => ({ id: i.id, name: i.name, coverageSalesId: i.coverageSalesId })),
+    clients,
+    notifications,
+    users: users.map((u) => ({ id: u.id, name: u.name, role: u.role, email: u.email })),
     /** Recipient allowlist (registered issuer/investor domains + internal) for draft warnings. */
     allowedDomains:
       user.role === 'BANKER'
@@ -1619,7 +2202,7 @@ export async function getState(user: User) {
           })),
     requests: computed,
     meetings,
-    emails,
+    emails: visibleEmails,
     actions,
     drafts,
     auditLogs,

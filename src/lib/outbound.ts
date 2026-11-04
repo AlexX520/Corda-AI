@@ -10,11 +10,18 @@ import type { Extraction } from './extraction-schema';
 export const MNPI_KEYWORDS = [
   'project ',
   'acquisition',
+  'merger',
   'not public',
+  'not yet announced',
   'restricted list',
   'wall-cross',
   'wall cross',
+  'over the wall',
+  'under nda',
+  'insider',
   'inside information',
+  'confidential until launch',
+  'pricing',
   'mnpi',
 ];
 export function findSensitive(text: string) {
@@ -123,6 +130,7 @@ export function outsideAllowlist(addresses: string[], allowedDomains: string[]) 
   const allowed = allowedDomains.map((d) => d.toLowerCase());
   return addresses.filter((a) => {
     const d = a.trim().toLowerCase().split('@').pop() || '';
-    return !allowed.some((x) => d === x || d.endsWith(`.${x}`));
+    // Exact domains only: evil.onemain.example is not onemain.example.
+    return !allowed.includes(d);
   });
 }

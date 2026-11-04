@@ -27,20 +27,56 @@ export async function currentUser() {
 export function banker(user: { role: string }) {
   if (user.role !== 'BANKER') throw new Error('Forbidden');
 }
-/** State-changing routes accept only same-origin browser requests; a missing Origin is refused. */
+/** The origin this request was addressed to. Proxy headers count only when TRUST_PROXY=true. */
+function expectedOrigin(req: Request) {
+  const url = new URL(req.url);
+  const proxied = process.env.TRUST_PROXY === 'true' || Boolean(process.env.VERCEL || process.env.RENDER);
+  const proto = (proxied && req.headers.get('x-forwarded-proto')?.split(',')[0].trim()) || url.protocol.replace(':', '');
+  const host = (proxied && req.headers.get('x-forwarded-host')?.split(',')[0].trim()) || req.headers.get('host') || url.host;
+  return `${proto}://${host}`.toLowerCase();
+}
+/**
+ * State-changing routes accept only same-origin browser requests: the Origin header must match
+ * scheme, host and port exactly. A missing or malformed Origin is refused.
+ */
 export function sameOrigin(req: Request) {
   const origin = req.headers.get('origin');
   if (!origin) throw new Error('Forbidden');
-  let host: string;
+  let actual: string;
   try {
-    host = new URL(origin).host;
+    actual = new URL(origin).origin.toLowerCase();
   } catch {
     throw new Error('Forbidden');
   }
-  const allowed = [req.headers.get('x-forwarded-host'), req.headers.get('host'), new URL(req.url).host].filter(Boolean);
-  if (!allowed.includes(host)) throw new Error('Forbidden');
+  if (actual !== expectedOrigin(req)) throw new Error('Forbidden');
+}
+/**
+ * For GET routes that start something (e.g. Outlook sign-in): refuse cross-site navigations.
+ * Browsers send Sec-Fetch-Site; Origin/Referer, when present, must match exactly.
+ */
+export function sameSiteNavigation(req: Request) {
+  const site = req.headers.get('sec-fetch-site');
+  if (site && !['same-origin', 'none'].includes(site)) throw new Error('Forbidden');
+  for (const h of ['origin', 'referer']) {
+    const v = req.headers.get(h);
+    if (!v) continue;
+    let o: string;
+    try {
+      o = new URL(v).origin.toLowerCase();
+    } catch {
+      throw new Error('Forbidden');
+    }
+    if (o !== expectedOrigin(req)) throw new Error('Forbidden');
+  }
+  if (!site && !req.headers.get('origin') && !req.headers.get('referer')) throw new Error('Forbidden');
 }
 export function errorResponse(error: unknown) {
+  // Database errors never reach the client verbatim (they can name tables, columns and values).
+  if (error instanceof Error && /^Prisma|PrismaClient/.test(error.name || error.constructor?.name || '')) {
+    const notFound = /No .* found|Record to update not found|P2025/.test(error.message);
+    if (!notFound) console.error(error);
+    return Response.json({ error: notFound ? 'Not found.' : 'The request could not be completed.' }, { status: notFound ? 404 : 400 });
+  }
   const message = error instanceof Error ? error.message : 'Unknown error';
   if (error instanceof Error && error.name === 'ZodError') {
     const issues = (error as unknown as { issues: { message: string; path: (string | number)[] }[] }).issues;

@@ -30,6 +30,39 @@ export function newEmailContent(body: string) {
     .trim();
 }
 
+/* ---------------------------------------------------------------- forwarded messages */
+
+const FWD_MARK =
+  /\r?\n[ \t>]*(?:-{2,}\s*(?:Original Message|Forwarded message)\s*-*|_{5,}|Begin forwarded message:)[ \t]*\r?\n/i;
+const HEADER = /^[ \t>]*(From|Sent|Date|To|Cc|Subject):[ \t]*(.*)$/i;
+export type Forwarded = { fromName: string | null; fromEmail: string | null; subject: string | null; body: string };
+/** The short note on top of a forward and the message that was forwarded (with its own From). */
+export function splitForward(body: string): { note: string; forwarded: Forwarded | null } {
+  const m = FWD_MARK.exec(`\n${body}`);
+  if (!m) return { note: body.trim(), forwarded: null };
+  const at = Math.max(0, m.index - 1);
+  const note = body.slice(0, at).trim();
+  const lines = body.slice(at + m[0].length - 1).replace(/^\r?\n/, '').split(/\r?\n/);
+  const headers: Record<string, string> = {};
+  let i = 0;
+  for (; i < lines.length; i++) {
+    const h = HEADER.exec(lines[i]);
+    if (h) headers[h[1].toLowerCase()] = h[2].trim();
+    else if (Object.keys(headers).length && !lines[i].trim()) break;
+    else if (Object.keys(headers).length) break;
+    else if (lines[i].trim()) break;
+  }
+  const from = headers.from || '';
+  const email = /<?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)>?/.exec(from)?.[1]?.toLowerCase() || null;
+  const name = from.replace(/<[^>]*>/, '').replace(/[\w.+-]+@[\w.-]+/, '').replace(/["']/g, '').trim() || null;
+  const rest = lines
+    .slice(i)
+    .join('\n')
+    .replace(/^[ \t]*>[ \t]?/gm, '')
+    .trim();
+  return { note, forwarded: rest ? { fromName: name, fromEmail: email, subject: headers.subject || null, body: rest } : null };
+}
+
 /* ---------------------------------------------------------------- text preparation */
 
 const SIGNOFF =
@@ -46,8 +79,8 @@ function prepare(body: string): Prepared {
   if (cut > 0) text = lines.slice(0, cut).join('\n').trimEnd();
   let scan = text.replace(/\b([ap])\.\s?m\.?/gi, (m, x: string) => `${x}m`.padEnd(m.length, ' '));
   // "2:30pm ET (7:30pm UK)": the bracketed time repeats the same moment in another zone.
-  scan = scan.replace(/\(\s*\d{1,2}(?::\d{2})?\s*[ap]m[^)\n]{0,24}\)/gi, (m) =>
-    ' '.repeat(m.length),
+  scan = scan.replace(/\(\s*\d{1,2}(?::\d{2})?\s*(?:[ap]m)?[^)\n\d]{0,24}\)/gi, (m) =>
+    /\d{1,2}(?::\d{2}|\s*[ap]m)/i.test(m) ? ' '.repeat(m.length) : m,
   );
   // Greeting line ("Sarah, all -") carries no ask.
   const first = scan.split('\n')[0];
@@ -106,29 +139,54 @@ function segment(scan: string): Seg[] {
 
 /* ---------------------------------------------------------------- classification */
 
-type Op = 'reschedule' | 'cancel' | 'request' | 'confirm' | 'availability' | 'nochange' | null;
+type Op =
+  | 'reschedule'
+  | 'cancel'
+  | 'request'
+  | 'confirm'
+  | 'update'
+  | 'availability'
+  | 'nochange'
+  | null;
 const RESCHEDULE =
-  /\b(?:reschedul\w*|move|moved|moving|push(?:ed|ing)?|shift(?:ed|ing)?|bring (?:it |that |the meeting )?forward)\b|\binstead of\b(?=[^.]*\b(?:meeting|1x1|slot)\b)/i;
+  /\b(?:reschedul\w*|move|moved|moving|push(?:ed|ing)?|shift(?:ed|ing)?|bring (?:it |that |the meeting )?forward|instead do|do [^.?]{0,20}instead)\b|\binstead of\b(?=[^.]*\b(?:meeting|1x1|slot)\b)/i;
+/** "She'd prefer 3:30 if Fidelity can do it": a conditional move to a preferred time. */
+const PREFER = /\bprefer\b[^.]{0,40}\d/i;
 const CANCEL =
-  /\b(?:cancel\w*|call(?:ing)? off|drop (?:the|our|that|anything)|scrap|won'?t be (?:able to )?(?:attend|make)(?: it)?)\b/i;
+  /\b(?:cancel\w*|call(?:ing)? off|drop (?:the|our|that|it|anything)|drop\b(?=[^.]{0,30}\b(?:meeting|request|1x1|slot)\b)|scrap|won'?t be (?:able to )?(?:attend|make)(?: it)?)\b/i;
+/** A move or cancellation is an ask only when someone asks for it, not when it is narrated. */
+const CUE =
+  /\b(?:can|could|would|will you|please|pls|plz|kindly|let'?s|needs? to|want to|like to|we'?d|asks?|asked to|have to|must|instead)\b|\?|^\W*(?:\d+\W+)?(?:cancel|move|reschedule|push|drop|shift)\b/i;
+const TO_TIME = /\b(?:to|until)\s+(?:(?:mon|tue|wed|thu|fri)[a-z]*\b|\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b)/i;
 const REQUEST =
-  /\b(?:add\b(?![^.]{0,25}\b(?:availability|availabilities|times|windows|hours|to (?:the|our|your) (?:schedule|calendar|grid))\b)|request(?:ing)? (?:a |an )?(?:meeting|1x1|slot)|would (?:also )?(?:like|love) (?:a|an|to (?:meet|request|add|set up|schedule|have))\b|(?:second|2nd|another|separate|additional) (?:slot|meeting|1x1)|set up (?:a |an )?(?:1x1|meeting)|1x1s? with|meeting with|meet with|slot with)/i;
+  /\b(?:add\b(?!-)(?![^.]{0,25}\b(?:availability|availabilities|times|windows|hours|to (?:the|our|your) (?:schedule|calendar|grid))\b)|request(?:ing)? (?:a |an )?(?:meeting|1x1|slot)|would (?:also )?(?:like|love) (?:a|an|to (?:meet|see|request|add|set up|schedule|have))\b|(?:second|2nd|another|separate|additional) (?:slot|meeting|1x1)|set up (?:a |an )?(?:1x1|meeting)|1x1s? with|meeting with|meet with|slot with|(?:can|could) we (?:get|have|book|fit|squeeze|set up|do a)\b|wants? to (?:see|meet)|offer (?:it|that|the [^.]{0,30}?) to|fit (?:them|it) in|^\W*new:)/i;
+const UPDATE =
+  /\b(?:now have|will (?:now )?(?:have|be)|we'?ll (?:now )?(?:have|be)|headcount|bringing|party of)\b[^.]{0,30}\b(?:\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b[^.]{0,12}\b(?:people|of us|attendees|ppl|pax|persons)?/i;
 const CONFIRM = /\b(?:confirms|confirmed|we confirm|confirming|is confirmed|agree to|accepts?)\b/i;
 const NOT_CONFIRM =
   /\b(?:thanks? (?:you )?for confirming|please confirm|pls confirm|can you confirm|could you confirm|confirm by|to confirm)\b/i;
 const NOCHANGE =
   /\b(?:unchanged|as is|still (?:on|ok|okay|good|fine|works?)|stays? (?:on|as|at)|keep (?:that|it|this|that one|them)|no change)\b/i;
 const AVAIL =
-  /\b(?:availab\w*|accommodate|take meetings|can (?:do|meet|take)|could do|works? for (?:us|me)|free\b|open\b|block(?:ed)?|no longer|not before|nothing (?:before|after)|(?:does|do|will)(?: not|n't) work|won'?t work|not work|can(?:no|')t do|out of office)/i;
+  /\b(?:availab\w*|accommodate|take meetings|can (?:only )?(?:do|meet|take)|could do|works? for (?:us|me)|free\b|open\b|block(?:ed)?|no longer|not before|nothing (?:before|after)|(?:does|do|will)(?: not|n't) work|won'?t work|not work|can(?:no|')t do|out of office)/i;
+/** Ask is applied only if a condition holds ("if 2:30 doesn't work", "or we'd rather", "else keep 3"). */
+const CONDITIONAL =
+  /\b(?:if [^,.]{0,40}(?:doesn'?t|does not|can'?t|cannot|won'?t|can) (?:work|do it|make it|fit)|or we'?d rather|we'?d rather|else keep|unless\b)/i;
 function classify(s: string): Op {
-  if (RESCHEDULE.test(s)) return 'reschedule';
-  if (CANCEL.test(s)) return 'cancel';
+  const cue = CUE.test(s) || TO_TIME.test(s);
+  if (RESCHEDULE.test(s) && cue) return 'reschedule';
+  if (CANCEL.test(s) && cue) return 'cancel';
   if (REQUEST.test(s)) return 'request';
+  if (PREFER.test(s)) return 'reschedule';
+  if (UPDATE.test(s)) return 'update';
   if (CONFIRM.test(s) && !NOT_CONFIRM.test(s)) return 'confirm';
   if (NOCHANGE.test(s)) return 'nochange';
   if (AVAIL.test(s)) return 'availability';
   return null;
 }
+const WORD_NUMBERS: Record<string, number> = {
+  one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12,
+};
 
 /* ---------------------------------------------------------------- entities */
 
@@ -140,6 +198,9 @@ function aliases(name: string) {
   const out = [name];
   const short = name.replace(SUFFIX, '');
   if (short !== name && short.length >= 2) out.push(short);
+  // "GM Financial" → "GMF": an acronym first word plus the initial of the rest.
+  const words = name.split(/\s+/);
+  if (words.length === 2 && /^[A-Z]{2,4}$/.test(words[0])) out.push(`${words[0]}${words[1][0]}`);
   return out;
 }
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -317,14 +378,9 @@ function timeTokens(scan: string): TimeTok[] {
       out.push({ ...tok, error: 'Invalid clock time.' });
       continue;
     }
-    // Compact ranges like "2–4pm" (2pm–4pm) or "11-1pm" (11am–1pm) take AM/PM from the end.
-    // Spelled-out ranges ("between 3 and 5 PM") go to manual review.
+    // Ranges like "2–4pm", "between 2 and 4pm" (2pm–4pm) or "11-1pm" (11am–1pm) take AM/PM
+    // from the end when that gives a forward range.
     let startMer = m[3];
-    const compact = /^\d{1,2}(?::\d{2})?\s*[–—-]/.test(m[0]);
-    if (!startMer && !compact) {
-      out.push({ ...tok, error: `Missing AM/PM for range start: “${m[0]}”` });
-      continue;
-    }
     if (!startMer) {
       const endMin = minutesOf(clock(m[5], m[6], m[7]));
       startMer = minutesOf(clock(m[1], m[2], m[7])) < endMin ? m[7] : 'am';
@@ -334,6 +390,27 @@ function timeTokens(scan: string): TimeTok[] {
       }
     }
     out.push({ ...tok, from: clock(m[1], m[2], startMer), to: clock(m[5], m[6], m[7]) });
+  }
+  // "10-12 ET": a range without AM/PM but with a zone, in conference hours (7–12).
+  for (const m of scan.matchAll(
+    /\b(\d{1,2})(?::(\d{2}))?\s*[–—-]\s*(\d{1,2})(?::(\d{2}))?(?=\s*(?:ET|EST|EDT|CT|CST|CDT|PT|PST|PDT|Eastern|Central|Pacific)\b)/g,
+  )) {
+    const index = m.index!,
+      end = index + m[0].length;
+    if (taken.some(([a, b]) => index < b && end > a)) continue;
+    const [h1, h2] = [+m[1], +m[3]];
+    if (h1 < 7 || h2 > 12 || h2 <= h1) continue;
+    taken.push([index, end]);
+    out.push({
+      index,
+      end,
+      kind: 'range',
+      from: `${String(h1).padStart(2, '0')}:${m[2] || '00'}`,
+      to: `${String(h2).padStart(2, '0')}:${m[4] || '00'}`,
+      connector: '-',
+      zone: zoneAfter(scan, end),
+      raw: m[0],
+    });
   }
   const single =
     /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b|\b(\d{1,2}):(\d{2})\b(?!\s*(?:am|pm))|\b(noon|midday)\b/gi;
@@ -356,8 +433,10 @@ function timeTokens(scan: string): TimeTok[] {
       const h = +m[4],
         min = +m[5];
       if (h > 23 || min > 59) continue;
-      // 24-hour style "11:00" / "14:30" is clear; "2:30" without AM/PM is not.
+      // 24-hour style "11:00" / "14:30" is clear; "2:30" without AM/PM is read as a conference-
+      // hours afternoon time (meetings do not happen at 2:30 at night).
       if (h >= 7) hhmm = `${String(h).padStart(2, '0')}:${m[5]}`;
+      else if (h >= 1) hhmm = `${String(h + 12).padStart(2, '0')}:${m[5]}`;
       else error = `AM/PM not stated for “${m[0]}”.`;
     }
     out.push({
@@ -415,7 +494,9 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
   const issuerHere = within(info.issuerMentions, segs);
   const issuerId =
     hints.issuerId ||
-    (issuerHere.length ? unique(issuerHere) : hints.senderIssuerId || unique(info.issuerMentions));
+    (issuerHere.length
+      ? unique(issuerHere)
+      : hints.senderIssuerId || unique(info.issuerMentions) || hints.partyIssuerId || null);
   const notIssuer = (ms: Mention[]) =>
     ms.filter((m) => !info.issuerMentions.some((i) => m.index < i.end && m.end > i.index));
   const investorHere = notIssuer(within(info.investorMentions, segs));
@@ -423,7 +504,8 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
   const wantsInvestor = op !== 'availability' && op !== null && op !== 'nochange';
   const investorId = investorHere.length
     ? unique(investorHere)
-    : hints.senderInvestorId || (wantsInvestor ? unique(investorAll) : null);
+    : hints.senderInvestorId ||
+      (wantsInvestor ? unique(investorAll) || hints.partyInvestorId || null : null);
 
   let category: Extraction['category'] = 'General Conference Inquiry',
     operation: Extraction['operation'] = 'inquiry';
@@ -431,6 +513,7 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
   else if (op === 'cancel') [category, operation] = ['Meeting Cancellation', 'cancel'];
   else if (op === 'confirm') [category, operation] = ['Meeting Confirmation', 'confirm'];
   else if (op === 'request') category = 'New Meeting Request';
+  else if (op === 'update') [category, operation] = ['Meeting Update', 'update'];
   else if (op === 'availability') {
     category = 'Issuer Availability Update';
     // "No longer" usually explains why a time stopped working; the times themselves say whether
@@ -448,6 +531,7 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
   const windows: ExtractionWindow[] = [];
   const vague: string[] = [];
   let referenceTime: string | null = null;
+  let flexible = false;
   const days = dayTokens(
     scan,
     conference?.startDate.slice(0, 4) || String(new Date().getFullYear()),
@@ -463,23 +547,25 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
   };
   // Day for a time: the nearest day named before it in the same sentence, else after it in the
   // same sentence, else the day carried over from the previous sentence of this ask.
-  let carried: DayTok | undefined;
-  const dayFor = new Map<TimeTok, DayTok | undefined>();
-  for (const s of segs) {
-    const inSeg = days.filter((d) => d.index >= s.start && d.index < s.end);
-    for (const t of tokens.filter((x) => x.index >= s.start && x.index < s.end)) {
-      const before = inSeg.filter((d) => d.index < t.index).at(-1);
-      const after = inSeg.find((d) => d.index > t.index);
-      dayFor.set(t, before || after || carried);
+  const dayAt = (index: number): DayTok | undefined => {
+    let carried: DayTok | undefined;
+    for (const s of segs) {
+      const inSeg = days.filter((d) => d.index >= s.start && d.index < s.end);
+      if (index >= s.start && index < s.end) {
+        const before = inSeg.filter((d) => d.index < index).at(-1);
+        const after = inSeg.find((d) => d.index > index);
+        return before || after || carried;
+      }
+      if (inSeg.length) carried = inSeg.at(-1);
     }
-    if (inSeg.length) carried = inSeg.at(-1);
-  }
+    return carried;
+  };
   const multiDay = (s: Seg) =>
     new Set(
       days.filter((d) => d.index >= s.start && d.index < s.end).map((d) => d.date || d.weekday),
     ).size > 1;
   const dateOf = (t: TimeTok): string | null => {
-    const d = dayFor.get(t);
+    const d = dayAt(t.index);
     if (!d) {
       uncertainties.push(
         conference
@@ -621,13 +707,26 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
         });
       } else singles.push(t);
     }
-    for (const t of singles) {
+    // A time in a negative clause ("couldn't make the Tuesday 1pm slot") is never the target.
+    const negativeAt = (t: TimeTok) => {
+      const seg = segOf(t.index);
+      const from = Math.max(
+        seg.start,
+        ...[',', ' - ', '. ', '? ', '(', ')'].map((c) => scan.lastIndexOf(c, t.index - 1) + c.length),
+      );
+      return /\b(?:couldn'?t|can'?t|cannot|not|still goes|already|no longer)\b/i.test(scan.slice(from, t.index));
+    };
+    const candidates =
+      op === 'request' || op === 'confirm'
+        ? [...singles.filter((t) => t.kind === 'range' && !negativeAt(t)), ...singles.filter((t) => !negativeAt(t))]
+        : singles;
+    for (const t of candidates) {
       const seg = segOf(t.index);
       const lead = scan.slice(Math.max(seg.start, t.index - 45), t.index);
       if (!target && (op !== 'reschedule' || TO_BEFORE.test(lead) || PROPOSE_BEFORE.test(lead)))
         target = t;
     }
-    if (op === 'cancel') [target, reference] = [undefined, singles[0]];
+    if (op === 'cancel' || op === 'update') [target, reference] = [undefined, singles[0]];
     else if (op === 'reschedule') {
       // A window ("to 3:00-3:30 PM") is always the new slot; else the last of two times.
       if (!target) target = singles.find((t) => t.kind === 'range');
@@ -652,6 +751,11 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
             ? instant(date, target.to, zone)
             : new Date(+new Date(start) + slotLength * 60000).toISOString();
         addWindow({ start, end, kind: 'availability', evidence: sentence, source: 'email' });
+        const minutes = (+new Date(end) - +new Date(start)) / 60000;
+        flexible =
+          op === 'request' &&
+          target.kind === 'range' &&
+          (minutes > (durationMinutes || 60) || /\bany ?time\b/i.test(sentence));
       }
     }
     if (op === 'reschedule' && !target) uncertainties.push('The new time is not stated.');
@@ -684,7 +788,8 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
       if (!quote || vague.some((v) => v.includes(quote) || quote.includes(v))) continue;
       vague.push(quote);
       const hasTarget = windows.some((w) => w.kind === 'availability');
-      if (ALTERNATIVE.test(clause) && hasTarget) continue; // an alternative to an exact time
+      // With an exact proposed time, a vague phrase is context ("Tuesday morning, ideally 9:30").
+      if (hasTarget && (ALTERNATIVE.test(clause) || op !== 'availability')) continue;
       uncertainties.push(`Explicit time needed: “${quote}”`);
     }
   }
@@ -709,7 +814,16 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
     uncertainties.push(
       'Select and verify the existing meeting or request before applying this change.',
     );
-  const tentative = /\b(tentative|tentatively|may|might|possibly|pencil|hold)\b/i.test(askScan);
+  const conditionMatch = CONDITIONAL.exec(askScan);
+  const conditional = Boolean(conditionMatch) && category !== 'Issuer Availability Update';
+  const condition = conditional
+    ? (segs
+        .map((s) => text.slice(s.start, s.end))
+        .find((t) => CONDITIONAL.test(t)) || conditionMatch![0]
+      ).trim()
+    : '';
+  if (conditional) uncertainties.push(`Conditional: “${condition}” — confirm the condition holds.`);
+  const tentative = /\b(tentative|tentatively|may|might|possibly|pencil)\b/i.test(askScan);
   if (tentative)
     uncertainties.push('Tentative language detected; obtain explicit consent before confirmation.');
 
@@ -724,6 +838,7 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
         'Meeting Cancellation',
         'Meeting Confirmation',
         'New Meeting Request',
+        'Meeting Update',
       ].includes(category)
     )
       missing.push('investor');
@@ -755,13 +870,15 @@ function parseAsk(group: Group, info: EmailInfo, legacyOp?: Op): Extraction {
     needsReview: category !== 'Unrelated Email',
     meetingId: null,
     referenceTime,
-    attendees:
-      category === 'New Meeting Request' || category === 'Meeting Confirmation'
-        ? info.attendees
-        : null,
+    attendees: ['New Meeting Request', 'Meeting Confirmation', 'Meeting Update'].includes(category)
+      ? info.attendees
+      : null,
     durationMinutes,
     missing,
     vague,
+    conditional,
+    condition,
+    flexible,
   });
   const names = {
     issuer: (id: string | null) => ctx.issuers.find((i) => i.id === id)?.name || 'Unassociated',
@@ -783,12 +900,16 @@ function emailInfo(body: string, subject: string, ctx: Context, hints: Hints): E
     named(ctx.conferences) ||
     named(ctx.conferences.map((c) => ({ ...c, name: c.name.replace(/\s+\d{4}$/, '') })));
   const conferenceId = namedConference || hints.defaultConferenceId || null;
+  const num = (x: string) => (/^\d+$/.test(x) ? +x : WORD_NUMBERS[x.toLowerCase()] || 0);
   const counts = [
     ...prepared.scan.matchAll(
-      /\b(\d{1,3})\s+(?:of us|attendees|people|ppl|pax|persons|analysts|from our side|in total)\b/gi,
+      /\b(\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s+(?:of us|attendees|people|ppl|pax|persons|analysts|from our side|in total)\b/gi,
     ),
+    ...prepared.scan.matchAll(/\bparty of (\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/gi),
     ...prepared.scan.matchAll(/\b(\d{1,2})\s+PMs\b/g),
-  ].map((m) => +m[1]);
+  ]
+    .map((m) => num(m[1]))
+    .filter((x) => x > 0);
   return {
     prepared,
     ctx,
@@ -827,9 +948,11 @@ export function mockExtract(
 ): Extraction {
   const info = emailInfo(body, subject, ctx, hints || {});
   const { scan } = info.prepared;
-  const op = classify(scan);
+  const segs = sentenceSegs(scan, 0, scan.length);
+  // The first sentence that asks for something decides; narrated verbs elsewhere do not.
+  const op = segs.map((x) => classify(scan.slice(x.start, x.end))).find((o) => o && o !== 'nochange') ?? null;
   return parseAsk(
-    { segs: sentenceSegs(scan, 0, scan.length), op },
+    { segs, op },
     info,
     op === 'nochange' ? null : op,
   );
@@ -841,7 +964,7 @@ export function mockExtractAsks(
   subject: string,
   ctx: Context,
   hints?: Hints,
-): { asks: Extraction[] } {
+): { asks: Extraction[]; whole?: boolean } {
   const info = emailInfo(body, subject, ctx, hints || {});
   const { scan } = info.prepared;
   const groups: Group[] = [];
@@ -870,8 +993,13 @@ export function mockExtractAsks(
     }
     const open = last && !last.segs.some((x) => x.item) ? last : undefined;
     if (op) {
+      const piece = scan.slice(s.start, s.end);
+      const separate =
+        /^\W*(?:separately|also|additionally|on another note|new:|p\.?s\.?)\b/i.test(piece) ||
+        (op === 'availability' && timeTokens(piece).some((t) => t.kind === 'range'));
       const merge =
         open &&
+        !separate &&
         !newCounterpart(open, s) &&
         (op === open.op ||
           (op === 'availability' && COUNTERPART_OPS.includes(open.op)) ||
@@ -882,7 +1010,8 @@ export function mockExtractAsks(
       } else groups.push({ segs: [s], op });
     } else if (open && hasWhen(s)) open.segs.push(s);
   }
-  if (!groups.length) return { asks: [mockExtract(body, subject, info.ctx, info.hints)] };
+  // No sentence asks for anything: read the email as one item (usually a question or update).
+  if (!groups.length) return { asks: [mockExtract(body, subject, info.ctx, info.hints)], whole: true };
   // "cancel ALL our Tuesday meetings (Rocket Mortgage 10am, Ford Credit 1pm)": one ask per company.
   const split: Group[] = [];
   for (const g of groups) {
@@ -906,5 +1035,14 @@ export function mockExtractAsks(
       split.push({ segs: prefix.end > prefix.start ? [prefix, piece] : [piece], op: g.op });
     });
   }
-  return { asks: split.map((g) => parseAsk(g, info)) };
+  let asks = split.map((g) => parseAsk(g, info));
+  // An availability remark with no exact time next to real asks ("…so the 10am won't work. Can we
+  // move it to…") is context for those asks, not an ask of its own.
+  const real = asks.filter((a) => a.category !== 'Issuer Availability Update' || a.windows.length);
+  if (real.length && real.length < asks.length) {
+    const extra = asks.filter((a) => !real.includes(a)).flatMap((a) => a.vague);
+    real[0].vague = [...new Set([...real[0].vague, ...extra])];
+    asks = real;
+  }
+  return { asks };
 }

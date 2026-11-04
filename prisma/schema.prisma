@@ -12,6 +12,8 @@ model User {
   role String
   /// Bumped on sign-out so every earlier session token stops working.
   sessionVersion Int @default(0)
+  /// Start of the previous visit, for "What changed since you were last here".
+  lastSeenAt DateTime?
 }
 model Conference {
   id String @id
@@ -34,11 +36,18 @@ model Issuer {
   color String
   contactEmail String
   ownerId String?
+  /// "Hold all changes": set from an escalation; every change for this issuer needs an override reason.
+  holdChanges Boolean @default(false)
+  holdReason String @default("")
+  holdSetBy String?
+  holdSetAt DateTime?
 }
 model Investor {
   id String @id
   name String
   contactEmail String
+  /// Salesperson covering this account.
+  coverageSalesId String?
 }
 model Email {
   id String @id @default(cuid())
@@ -64,6 +73,15 @@ model Email {
   securityFlags String[] @default([])
   /// How the conference was chosen when the email did not name one.
   contextNote String @default("")
+  /// Forwarded mail: who wrote the forwarded message, and who forwarded it.
+  originalSender String?
+  originalSenderName String?
+  forwardedBy String?
+  /// Client escalation (complaint, threat, urgent same-day); the email's asks are still extracted.
+  escalation Boolean @default(false)
+  escalationReasons String[] @default([])
+  /// Unverified sender, credential/portal links, data-exfiltration requests or hidden instructions.
+  suspicious Boolean @default(false)
   proposals Proposal[]
 }
 /// One ask inside an email. A reply-all with three changes has three proposals.
@@ -77,6 +95,8 @@ model Proposal {
   status String @default("Pending")
   reviewerId String?
   reviewNote String?
+  /// Reviewer re-checked the ask after its meeting changed.
+  refreshedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@unique([emailId, askIndex])
@@ -130,6 +150,14 @@ model Meeting {
   approvedBy String
   expectedAttendees Int @default(4)
   requiresCube Boolean @default(true)
+  /// Optimistic concurrency + "changed since": bumped on every schedule change.
+  version Int @default(0)
+  changedAt DateTime?
+  changedBy String?
+  changeSummary String @default("")
+  /// An investor threatened to drop it if it moves again.
+  protected Boolean @default(false)
+  protectedReason String @default("")
   updatedAt DateTime @updatedAt
   @@index([conferenceId, issuerId])
 }
@@ -170,6 +198,9 @@ model Draft {
   simulatedSentAt DateTime?
   deliveryMode String?
   deliveryReceipt String?
+  /// Exact domains allowed without a second confirmation (thread/meeting parties + internal).
+  allowedDomains String[] @default([])
+  kind String @default("")
   createdAt DateTime @default(now())
 }
 model AuditLog {
@@ -180,7 +211,38 @@ model AuditLog {
   entityId String
   before Json?
   after Json?
+  issuerId String?
+  meetingId String?
+  emailId String?
+  note String?
   createdAt DateTime @default(now())
+  @@index([createdAt])
+}
+
+/// Per-person notices: a change to "your" meeting by someone else, a client's request moving, etc.
+model Notification {
+  id String @id @default(cuid())
+  userId String
+  actorId String?
+  kind String
+  text String
+  meetingId String?
+  emailId String?
+  requestId String?
+  readAt DateTime?
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
+}
+
+/// When a planner was exported for an audience, to mark "changed since last sent".
+model ExportLog {
+  id String @id @default(cuid())
+  conferenceId String
+  scope String
+  audienceId String?
+  userId String
+  createdAt DateTime @default(now())
+  @@index([conferenceId, scope, audienceId])
 }
 
 model BankerPreference {

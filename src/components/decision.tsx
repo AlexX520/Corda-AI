@@ -14,22 +14,20 @@ type Action = AppState['actions'][number];
  *  Picking it in the card resolves it, so it is not shown as a separate warning. */
 const SELECT_UNCERTAINTY = 'Select and verify the existing meeting or request';
 const realUncertainties = (e?: Extraction | null) =>
-  (e?.uncertainties || []).filter((u) => !u.startsWith(SELECT_UNCERTAINTY));
-
-type DraftRow = AppState['drafts'][number];
-async function newestDraft(match: (d: DraftRow) => boolean) {
-  try {
-    const s = (await (await fetch('/api/state', { cache: 'no-store' })).json()) as AppState;
-    return s.drafts
-      .filter((d) => d.status === 'Draft' && match(d))
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  } catch {
-    return undefined;
-  }
-}
+  (e?.uncertainties || []).filter((u) => !u.startsWith(SELECT_UNCERTAINTY) && !u.startsWith('Conditional:'));
 
 type ProposalItem = EmailItem['proposals'][number];
 const DONE = ['Approved', 'Rejected', 'Acknowledged', 'Resolved'];
+type Check = {
+  hard: string[];
+  soft: string[];
+  issuerAsked: boolean;
+  investorAsked: boolean;
+  stale: string | null;
+  hold: string | null;
+  protected: string | null;
+};
+const MEETING_OPS = ['cancel', 'reschedule', 'update'];
 
 export function EmailDecision({
   email,
@@ -37,14 +35,16 @@ export function EmailDecision({
   data,
   run,
   onDone,
-  onOpenDraft,
+  onReply,
+  onOpenEmail,
 }: {
   email: EmailItem;
   proposal: ProposalItem;
   data: AppState;
   run: Run;
   onDone: () => void;
-  onOpenDraft: (id: string) => void;
+  onReply: () => void;
+  onOpenEmail?: (id: string) => void;
 }) {
   const n = names(data);
   const original = proposal.extraction as unknown as Extraction;
@@ -57,19 +57,28 @@ export function EmailDecision({
   const [note, setNote] = useState(proposal.reviewNote || '');
   const [trustReason, setTrustReason] = useState('');
   const [extraMeeting, setExtraMeeting] = useState(false);
+  const [conditionMet, setConditionMet] = useState(false);
+  const [consent, setConsent] = useState<{ issuer: boolean; investor: boolean }>({ issuer: false, investor: false });
+  const [extend, setExtend] = useState(false);
+  const [holdOverride, setHoldOverride] = useState('');
+  const [protectedOverride, setProtectedOverride] = useState('');
+  const [holdReason, setHoldReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [check, setCheck] = useState<Check | null>(null);
   const action = data.actions.find((a) => a.proposalId === proposal.id);
   const [owner, setOwner] = useState(action?.assignedTo || data.user.id);
   const op = e.operation;
   const unverified = email.senderStatus === 'unverified';
+  const suspicious = email.suspicious;
   const escalation = e.category === 'Escalation / complaint';
-  const needsMeeting = ['cancel', 'reschedule'].includes(op);
+  const needsMeeting = MEETING_OPS.includes(op);
   const needsRequest = op === 'confirm';
-  const meetingPick = findCandidates(e, data.meetings, { zone, trusted: !unverified, open: isOpenMeeting, n });
-  const requestPick = findCandidates(e, data.requests, { zone, trusted: !unverified, open: isOpenRequest, n, noun: 'request' });
+  const meetingPick = findCandidates(e, data.meetings, { zone, trusted: !suspicious, open: isOpenMeeting, n });
+  const requestPick = findCandidates(e, data.requests, { zone, trusted: !suspicious, open: isOpenRequest, n, noun: 'request' });
+  // "Please drop the Apollo request": a cancellation can be about an open request.
+  const cancelRequest = op === 'cancel' && !meetingPick.candidates.length && requestPick.candidates.length > 0;
   const [meetingId, setMeetingId] = useState(meetingPick.preselectId || '');
   const [requestId, setRequestId] = useState(requestPick.preselectId || '');
-  // A pick that no longer fits the edited issuer/investor is dropped.
   useEffect(() => {
     if (meetingId && !meetingPick.candidates.some((c) => c.item.id === meetingId)) setMeetingId('');
     if (requestId && !requestPick.candidates.some((c) => c.item.id === requestId)) setRequestId('');
@@ -81,14 +90,34 @@ export function EmailDecision({
   const dupes = e.category === 'New Meeting Request' ? duplicatesFor(e, data.meetings, data.requests) : [];
   const waiting = proposal.status === 'Clarification requested';
   const done = DONE.includes(proposal.status);
-  const draft = data.drafts.find((d) => d.emailId === email.id && d.status === 'Draft');
-  const [openNewDraft, setOpenNewDraft] = useState(false);
+  const issuerRow = data.issuers.find((i) => i.id === e.issuerId) as (AppState['issuers'][number] & { holdChanges?: boolean; holdReason?: string }) | undefined;
+  // Live check of what would stop this approval: real conflicts, staleness, holds.
+  const checkKey = JSON.stringify([proposal.id, e.windows, e.issuerId, e.investorId, e.operation, e.attendees, meetingId, data.meetings.find((m) => m.id === meetingId)?.version]);
   useEffect(() => {
-    if (openNewDraft && draft) {
-      setOpenNewDraft(false);
-      onOpenDraft(draft.id);
-    }
-  }, [openNewDraft, draft, onOpenDraft]);
+    if (done || escalation) return;
+    let live = true;
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/commands', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type: 'reviewCheck', data: { id: proposal.id, extraction: e, meetingId: meetingId || undefined } }),
+        });
+        const out = await r.json();
+        if (live && r.ok) {
+          setCheck(out.result);
+          setConsent((c) => ({ issuer: c.issuer || out.result.issuerAsked, investor: c.investor || out.result.investorAsked }));
+        }
+      } catch {
+        /* the approval re-checks on the server */
+      }
+    }, 250);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkKey, done, escalation]);
   const newWindows = e.windows.filter((w) => w.kind === 'availability');
   const blockedWindows = e.windows.filter((w) => w.kind === 'unavailable');
   const current = data.availability.filter(
@@ -97,51 +126,78 @@ export function EmailDecision({
   const issuer = e.issuerId ? n.issuer(e.issuerId) : 'an issuer (not named)';
   const investor = e.investorId ? n.investor(e.investorId) : meeting ? n.investor(meeting.investorId) : '';
   const quote = email.newContent.replace(/\s+/g, ' ').trim();
-  // Who "Ask …" writes to: the sender's company when the sender is a registered contact.
-  const senderDomain = email.sender.split('@').pop()?.toLowerCase();
-  const senderIssuer = data.issuers.find((i) => 'contactEmail' in i && String(i.contactEmail).toLowerCase().endsWith(`@${senderDomain}`));
-  const askLabel = email.senderStatus === 'internal' ? 'Ask sender' : senderIssuer ? `Ask ${senderIssuer.name}` : e.investorId && email.senderStatus === 'verified' ? `Ask ${n.investor(e.investorId)}` : 'Ask sender';
-
+  // Same meeting, other emails; newer replies on this thread.
+  const otherAsks = data.emails.filter((x) => x.threadId !== email.threadId).flatMap((x) =>
+    x.proposals
+      .filter((p) => p.id !== proposal.id && ['Pending', 'Clarification requested'].includes(p.status))
+      .filter((p) => {
+        const o = p.extraction as unknown as Extraction;
+        return Boolean(o && ((meetingId && o.meetingId === meetingId) || (e.issuerId && e.investorId && o.issuerId === e.issuerId && o.investorId === e.investorId)));
+      })
+      .map((p) => ({ email: x, p })),
+  );
+  const newer = data.emails.filter(
+    (x) => x.threadId === email.threadId && x.id !== email.id && (x.receivedAt > email.receivedAt || (x.receivedAt === email.receivedAt && x.id > email.id)),
+  );
+  const softOutside = (check?.soft || []).some((x) => x.startsWith('Outside'));
+  // Who asked: an issuer moving its own meeting phrases it as asking the investor, and vice versa.
+  const asker = email.originalSenderName || (check?.issuerAsked ? issuer : check?.investorAsked ? investor : email.sender);
   const headline = escalation
     ? `${e.issuerId ? issuer : 'A client'} escalated${investor ? ` (${investor})` : ''}`
     : op === 'cancel'
-      ? `${issuer} · cancel the ${investor || 'investor'} meeting`
+      ? `${issuer} · cancel the ${investor || 'investor'} ${cancelRequest ? 'request' : 'meeting'}`
       : op === 'reschedule'
         ? `${issuer} · move the ${investor || 'investor'} meeting`
-        : op === 'confirm'
-          ? `${issuer} confirmed the ${investor || 'investor'} meeting`
-          : e.category === 'New Meeting Request'
-            ? `${investor || 'An investor'} wants to meet ${issuer}`
-            : ['add', 'remove', 'replace'].includes(op)
-              ? `${issuer} sent availability`
-              : blockedWindows.length
-                ? `${issuer} said some times don’t work`
-                : email.subject;
+        : op === 'update'
+          ? `${issuer} × ${investor || 'investor'} · ${e.attendees || '?'} attendees now`
+          : op === 'confirm'
+            ? `${issuer} confirmed the ${investor || 'investor'} meeting`
+            : e.category === 'New Meeting Request'
+              ? check?.issuerAsked
+                ? `${issuer} asked to meet ${investor || 'an investor'}`
+                : `${investor || 'An investor'} asked to meet ${issuer}`
+              : ['add', 'remove', 'replace'].includes(op)
+                ? `${issuer} sent availability`
+                : blockedWindows.length
+                  ? `${issuer} said some times don’t work`
+                  : email.subject;
 
   const blockers: string[] = [];
   if (escalation) blockers.push('Escalations are acknowledged and assigned, not approved.');
+  if (check?.stale) blockers.push('The meeting changed since this email — refresh first.');
   if (!e.conferenceId) blockers.push('Pick the event.');
   if (!e.issuerId) blockers.push('Pick the issuer.');
-  if (needsMeeting && !meetingId) blockers.push('Pick the meeting this is about.');
-  if (needsRequest && !requestId) blockers.push('Pick the request this confirms.');
+  if (needsMeeting && !cancelRequest && !meetingId) blockers.push('Pick the meeting this is about.');
+  if ((needsRequest || cancelRequest) && !requestId) blockers.push('Pick the request.');
   if (e.category === 'New Meeting Request' && newWindows.length !== 1) blockers.push('Needs exactly one requested time.');
   if (op === 'reschedule' && !newWindows.length) blockers.push('Needs the new time.');
   if (['add', 'remove', 'replace'].includes(op) && !newWindows.length && !blockedWindows.length)
     blockers.push('No exact times — ask the sender or add them.');
+  if (op === 'reschedule' && check?.hard.length) blockers.push('The new time clashes (see above).');
+  if (op === 'reschedule' && softOutside && !extend) blockers.push('Outside the issuer’s availability.');
+  if (op === 'reschedule' && !(consent.issuer && consent.investor)) blockers.push('Record that both sides agreed.');
+  if (e.conditional && !conditionMet) blockers.push('Confirm the condition holds.');
   if (dupes.length && !extraMeeting) blockers.push('Confirm this is an additional meeting.');
   if (issues.length && note.trim().length < 10) blockers.push('Note how you resolved the open questions.');
+  if (check?.hold && holdOverride.trim().length < 5) blockers.push('Give a reason to override the hold.');
+  if (check?.protected && ['cancel', 'reschedule'].includes(op) && protectedOverride.trim().length < 5)
+    blockers.push('Give a reason to move a protected meeting.');
   if (dirty) blockers.push('Save your edits first.');
   const canApprove = !blockers.length;
 
-  async function decide(decision: 'approve' | 'reject' | 'clarify' | 'edit' | 'acknowledge') {
-    // The person confirms the affected meeting/request in this card; record that as the resolution.
+  async function decide(decision: 'approve' | 'reject' | 'edit' | 'acknowledge' | 'refresh' | 'handled' | 'quarantine') {
     const autoNote =
       meeting && needsMeeting
         ? `Verified affected meeting: ${n.investor(meeting.investorId)} · ${fmt(meeting.start, zone)}`
-        : req && needsRequest
+        : req && (needsRequest || cancelRequest)
           ? `Verified request: ${n.investor(req.investorId)} · ${fmt(req.start, zone)}`
           : '';
-    const parts = [note.trim(), hasSelectUncertainty ? autoNote : '', unverified && trustReason.trim() ? `Sender trusted because: ${trustReason.trim()}` : ''];
+    const parts = [
+      note.trim(),
+      hasSelectUncertainty ? autoNote : '',
+      e.conditional && conditionMet ? `Condition confirmed: ${e.condition}` : '',
+      unverified && trustReason.trim() ? `Sender trusted because: ${trustReason.trim()}` : '',
+    ];
     const finalNote = decision === 'approve' ? parts.filter(Boolean).join('\n') : note;
     setBusy(true);
     const ok = await run(
@@ -153,51 +209,97 @@ export function EmailDecision({
         note: finalNote,
         uncertaintyResolved: decision === 'approve',
         replaceConfirmed: decision === 'approve' && op === 'replace',
-        consent: decision === 'approve' && (needsMeeting || needsRequest),
+        consent: decision === 'approve' && (needsMeeting || needsRequest || cancelRequest),
         requestId: requestId || undefined,
-        meetingId: meetingId || undefined,
+        meetingId: (!cancelRequest && meetingId) || undefined,
         senderOverride: decision === 'approve' && unverified && trustReason.trim().length >= 10,
         duplicateConfirmed: extraMeeting,
         assignTo: decision === 'acknowledge' ? owner : undefined,
+        conditionMet,
+        consentParties: [consent.issuer && 'issuer', consent.investor && 'investor'].filter(Boolean),
+        extendAvailability: extend,
+        holdOverride: holdOverride || undefined,
+        protectedOverride: protectedOverride || undefined,
       },
       decision === 'approve'
         ? 'Approved. Schedule updated.'
-        : decision === 'clarify'
-          ? 'Question drafted. Nothing changed on the schedule.'
-          : decision === 'reject'
-            ? 'Rejected. Nothing changed on the schedule.'
-            : decision === 'acknowledge'
-              ? `Acknowledged. ${n.user(owner)} owns the follow-up.`
-              : 'Edits saved',
+        : decision === 'reject'
+          ? 'Rejected. Nothing changed on the schedule.'
+          : decision === 'acknowledge'
+            ? `Acknowledged. ${n.user(owner)} owns the follow-up.`
+            : decision === 'refresh'
+              ? 'Re-checked against the current meeting.'
+              : decision === 'handled'
+                ? 'Marked as handled manually.'
+                : decision === 'quarantine'
+                  ? 'Reported as phishing. Nothing from this email was applied.'
+                  : 'Edits saved',
     );
     setBusy(false);
-    if (ok && decision === 'clarify') {
-      // The conversation may leave this folder after the reload, so look the new draft up directly.
-      const d = await newestDraft((x) => x.emailId === email.id);
-      if (d) onOpenDraft(d.id);
-      else setOpenNewDraft(true);
-    } else if (ok && decision !== 'edit') onDone();
+    if (ok && !['edit', 'refresh'].includes(decision)) onDone();
   }
 
   const offered = (w: Extraction['windows'][number]) =>
-    `${op === 'remove' ? 'Removes ' : op === 'reschedule' ? 'Moves to ' : op === 'replace' ? 'Only ' : e.category === 'New Meeting Request' ? 'Requested ' : 'Adds '}${windowLabel(w, zone)}`;
+    `${op === 'remove' ? 'Removes ' : op === 'reschedule' ? 'Moves to ' : op === 'replace' ? 'Only ' : e.category === 'New Meeting Request' ? (e.flexible ? 'Any time ' : 'Requested ') : 'Adds '}${windowLabel(w, zone)}`;
 
   return (
     <section className="decision-card" aria-label="Decision">
       <span className="dc-meta">
         {escalation ? <span className="dc-urgent">Urgent</span> : null}
+        {e.fromEscalation && <span className="mini-flag red">From an escalation</span>}
+        {e.conditional && <span className="mini-flag amber">Conditional</span>}{' '}
         {e.summary || headline}
       </span>
       <h2>{headline}</h2>
+
+      {check?.hold && !done && (
+        <div className="hold-banner" role="alert">
+          <strong>All changes for {issuer} are on hold</strong>
+          <span>{check.hold}</span>
+          <input className="dc-input" placeholder="Override reason (required to change anything for this issuer)" value={holdOverride} onChange={(ev) => setHoldOverride(ev.target.value)} />
+        </div>
+      )}
+      {(otherAsks.length > 0 || newer.length > 0) && !done && (
+        <div className="related" role="note">
+          {newer.map((x) => (
+            <button key={x.id} className="related-item newer" onClick={() => onOpenEmail?.(x.id)}>
+              <strong>Newer reply from {x.originalSenderName || x.sender}</strong> · {fmt(x.receivedAt, zone, 'EEE h:mm a')}:{' '}
+              {x.proposals.map((p) => p.summary).join(' · ') || x.subject}
+            </button>
+          ))}
+          {otherAsks.map(({ email: x, p }) => (
+            <button key={p.id} className="related-item" onClick={() => onOpenEmail?.(x.id)}>
+              <strong>Also open about this meeting:</strong> {p.summary} · from {x.originalSenderName || x.sender}
+            </button>
+          ))}
+        </div>
+      )}
+      {check?.stale && !done && (
+        <div className="dc-issue hard">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>The meeting changed after this email arrived</strong>
+            <p>{check.stale}. Check the email still applies.</p>
+            <div className="dc-actions">
+              <Button size="sm" variant="outline" disabled={busy} onClick={() => decide('refresh')}>
+                Re-check against the current meeting
+              </Button>
+              <Button size="sm" variant="ghost" disabled={busy} onClick={() => decide('handled')}>
+                Mark handled manually
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {done && (
         <div className="dc-waiting">
           <p>
             {proposal.status === 'Acknowledged'
               ? `Acknowledged. ${n.user(action?.assignedTo || null)} owns the follow-up${action?.status === 'Resolved' ? ' (resolved).' : '.'}`
-              : `Already handled: ${proposal.status.toLowerCase()}.`}
+              : `Already handled: ${proposal.status.toLowerCase()}${proposal.reviewNote ? ` — ${proposal.reviewNote.split('\n')[0]}` : ''}.`}
           </p>
-          {proposal.status === 'Acknowledged' && action?.status === 'Open' && (
+          {proposal.status === 'Acknowledged' && action && action.status !== 'Resolved' && (
             <div className="dc-actions">
               <Button
                 size="sm"
@@ -214,14 +316,7 @@ export function EmailDecision({
 
       {waiting && !done ? (
         <div className="dc-waiting">
-          <p>You asked the sender a question. Nothing changes on the schedule until you approve.</p>
-          <div className="dc-actions">
-            {draft && (
-              <Button onClick={() => onOpenDraft(draft.id)}>
-                <Mail size={14} /> Review question draft
-              </Button>
-            )}
-          </div>
+          <p>Waiting on a reply from the sender. Nothing changes on the schedule until you approve.</p>
         </div>
       ) : null}
 
@@ -246,18 +341,19 @@ export function EmailDecision({
         <div className="dc-diff">
           <div className="dc-before">
             <span className="dc-label">Now</span>
-            {needsMeeting ? (
+            {needsMeeting && !cancelRequest ? (
               meeting ? (
                 <>
                   <s>{fmt(meeting.start, zone, 'EEE, MMM d · h:mm a')}</s>
                   <span>
                     {n.issuer(meeting.issuerId)} × {n.investor(meeting.investorId)} · {meeting.location || 'Location TBC'}
+                    {op === 'update' ? ` · ${meeting.expectedAttendees} attendees` : ''}
                   </span>
                 </>
               ) : (
                 <span>Pick the meeting below</span>
               )
-            ) : needsRequest ? (
+            ) : needsRequest || cancelRequest ? (
               req ? (
                 <>
                   <span>{fmt(req.start, zone, 'EEE, MMM d · h:mm a')}</span>
@@ -291,8 +387,13 @@ export function EmailDecision({
             <span className="dc-label">After you approve</span>
             {op === 'cancel' ? (
               <>
-                <strong>Meeting cancelled</strong>
+                <strong>{cancelRequest ? 'Request withdrawn' : 'Meeting cancelled'}</strong>
                 <span>The slot opens up again</span>
+              </>
+            ) : op === 'update' ? (
+              <>
+                <strong>{e.attendees} attendees</strong>
+                <span>Room re-checked for the new headcount</span>
               </>
             ) : op === 'confirm' ? (
               <>
@@ -306,8 +407,12 @@ export function EmailDecision({
             )}
             {e.category === 'New Meeting Request' && newWindows.length > 0 && (
               <span>
-                {e.durationMinutes ? `${e.durationMinutes} min` : '30 min (default slot)'}
-                {e.attendees ? ` · ${e.attendees} attendees` : ''} · request goes to {e.issuerId ? n.user(data.issuers.find((i) => i.id === e.issuerId)?.ownerId || null) : "the issuer's coverage banker"}
+                {e.flexible
+                  ? `${e.durationMinutes || 30} min, placed in the first open slot`
+                  : e.durationMinutes
+                    ? `${e.durationMinutes} min`
+                    : `${Math.round((+new Date(newWindows[0].end) - +new Date(newWindows[0].start)) / 60000)} min${newWindows[0].source === 'email' && !/\d\s*[-–]\s*\d/.test(newWindows[0].evidence) ? ' (default slot)' : ''}`}
+                {e.attendees ? ` · ${e.attendees} attendees` : ''} · requested by {asker}
               </span>
             )}
             {blockedWindows.map((w, i) => (
@@ -319,6 +424,30 @@ export function EmailDecision({
         </div>
       )}
 
+      {!escalation && !done && check && (check.hard.length > 0 || check.soft.length > 0) && (
+        <div className={`dc-issue ${check.hard.length ? 'hard' : ''}`}>
+          <AlertTriangle size={15} />
+          <div>
+            <strong>{check.hard.length ? 'This time does not work' : 'Check before approving'}</strong>
+            {[...check.hard, ...check.soft].map((x) => (
+              <p key={x}>{x}</p>
+            ))}
+            {softOutside && op === 'reschedule' && check.issuerAsked && (
+              <label className="check">
+                <input type="checkbox" checked={extend} onChange={(ev) => setExtend(ev.target.checked)} />
+                <span>Extend {issuer} availability to cover this (they asked)</span>
+              </label>
+            )}
+            {softOutside && op === 'reschedule' && !check.issuerAsked && (
+              <p className="muted-line">Ask {issuer} to confirm the time, or add it to their availability first.</p>
+            )}
+          </div>
+        </div>
+      )}
+      {!escalation && !done && check && !check.hard.length && !check.soft.length && op === 'reschedule' && newWindows.length > 0 && (
+        <p className="dc-why ok">The new time is free for both sides and inside {issuer}’s availability.</p>
+      )}
+
       {e.vague.length > 0 && !escalation && (
         <div className="dc-note">
           <span className="dc-label">Times without an exact window (not applied)</span>
@@ -328,7 +457,7 @@ export function EmailDecision({
         </div>
       )}
 
-      {needsMeeting && !escalation && (
+      {(needsMeeting && !cancelRequest) && !escalation && (
         <div className="dc-pick-block">
           <label className="dc-pick">
             <span>Meeting</span>
@@ -347,9 +476,16 @@ export function EmailDecision({
               {meetingPick.candidates.find((c) => c.item.id === meetingId)?.reasons.map((r) => <li key={r}>{r}</li>)}
             </ul>
           )}
+          {check?.protected && ['cancel', 'reschedule'].includes(op) && (
+            <div className="hold-banner">
+              <strong>Protected meeting</strong>
+              <span>{check.protected}</span>
+              <input className="dc-input" placeholder="Reason to move or cancel it anyway" value={protectedOverride} onChange={(ev) => setProtectedOverride(ev.target.value)} />
+            </div>
+          )}
         </div>
       )}
-      {needsRequest && !escalation && (
+      {(needsRequest || cancelRequest) && !escalation && (
         <div className="dc-pick-block">
           <label className="dc-pick">
             <span>Request</span>
@@ -366,6 +502,20 @@ export function EmailDecision({
         </div>
       )}
 
+      {e.conditional && !done && (
+        <div className="dc-issue">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>Conditional ask</strong>
+            <p>“{e.condition}”</p>
+            <label className="check">
+              <input type="checkbox" checked={conditionMet} onChange={(ev) => setConditionMet(ev.target.checked)} />
+              <span>I confirmed the condition holds</span>
+            </label>
+          </div>
+        </div>
+      )}
+
       {dupes.length > 0 && !done && (
         <div className="dc-issue">
           <AlertTriangle size={15} />
@@ -379,7 +529,7 @@ export function EmailDecision({
             ))}
             <label className="check">
               <input type="checkbox" checked={extraMeeting} onChange={(ev) => setExtraMeeting(ev.target.checked)} />
-              This is an additional meeting, not a duplicate
+              <span>This is an additional meeting, not a duplicate</span>
             </label>
           </div>
         </div>
@@ -435,32 +585,68 @@ export function EmailDecision({
                 ))}
             </select>
           </label>
-          <input
-            className="dc-input"
-            aria-label="Note for the owner"
-            placeholder="Optional note for the owner (internal)"
-            value={note}
-            onChange={(ev) => setNote(ev.target.value)}
-          />
+          <input className="dc-input" aria-label="Note for the owner" placeholder="Optional note for the owner (internal)" value={note} onChange={(ev) => setNote(ev.target.value)} />
           <div className="dc-actions">
             <Button disabled={busy || !owner} onClick={() => decide('acknowledge')}>
               <Check size={14} /> Acknowledge &amp; assign
             </Button>
-            <Button variant="outline" disabled={busy} onClick={() => decide('clarify')}>
-              <Mail size={14} /> Draft a reply
+            <Button variant="outline" disabled={busy} onClick={onReply}>
+              <Mail size={14} /> Reply to {asker}
             </Button>
           </div>
+          {e.issuerId && (
+            <div className="hold-set">
+              {issuerRow?.holdChanges ? (
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => run('issuerHold', { issuerId: e.issuerId, hold: false }, `Hold released for ${issuer}.`)}>
+                  Release the hold on {issuer}
+                </Button>
+              ) : (
+                <>
+                  <input className="dc-input" placeholder={`Why hold all ${issuer} changes? (e.g. CFO asked for a call first)`} value={holdReason} onChange={(ev) => setHoldReason(ev.target.value)} />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy || holdReason.trim().length < 3}
+                    onClick={() => run('issuerHold', { issuerId: e.issuerId, hold: true, reason: holdReason }, `All ${issuer} changes are on hold.`)}
+                  >
+                    Hold all changes for {issuer}
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
-      {!done && !escalation &&
+      {!done && !escalation && suspicious && !confirming && (
+        <div className="dc-actions">
+          <Button className="danger" disabled={busy} onClick={() => decide('quarantine')}>
+            Report phishing / quarantine
+          </Button>
+          <Button variant="outline" disabled={busy} onClick={() => decide('reject')}>
+            Reject
+          </Button>
+          {unverified ? null : (
+            <button className="text-button" disabled={!canApprove} onClick={() => setConfirming(true)}>
+              Approve anyway…
+            </button>
+          )}
+          {unverified && canApprove && (
+            <button className="text-button" onClick={() => setConfirming(true)}>
+              Approve with a reason…
+            </button>
+          )}
+        </div>
+      )}
+
+      {!done && !escalation && (!suspicious || confirming) &&
         (confirming ? (
           <ConfirmStrip
             text={
-              unverified
-                ? 'The sender is not verified. Approve only if you confirmed this with the registered contact.'
+              suspicious
+                ? 'This email looks suspicious. Approve only if you confirmed it with the registered contact.'
                 : needsMeeting || needsRequest
-                  ? `I checked this with ${issuer} and they approved the change.`
+                  ? `I checked this with ${issuer}${op === 'reschedule' ? ` and ${investor}` : ''} and they approved the change.`
                   : 'I checked the times against the email.'
             }
             busy={busy || (unverified && trustReason.trim().length < 10)}
@@ -479,28 +665,26 @@ export function EmailDecision({
           </ConfirmStrip>
         ) : (
           <>
+            {op === 'reschedule' && (
+              <div className="consent-row">
+                <span>Agreed by</span>
+                <label className="check">
+                  <input type="checkbox" checked={consent.issuer} onChange={(ev) => setConsent({ ...consent, issuer: ev.target.checked })} />
+                  <span>{issuer}{check?.issuerAsked ? ' (asked for it)' : ''}</span>
+                </label>
+                <label className="check">
+                  <input type="checkbox" checked={consent.investor} onChange={(ev) => setConsent({ ...consent, investor: ev.target.checked })} />
+                  <span>{investor || 'the investor'}{check?.investorAsked ? ' (asked for it)' : ''}</span>
+                </label>
+              </div>
+            )}
             <div className="dc-actions">
-              {issues.length || unverified ? (
-                <>
-                  {!unverified && (
-                    <Button disabled={busy} onClick={() => decide('clarify')}>
-                      <Mail size={14} /> {askLabel}
-                    </Button>
-                  )}
-                  <Button variant="outline" disabled={busy || !canApprove} onClick={() => setConfirming(true)}>
-                    <Check size={14} /> {unverified ? 'Approve with a reason…' : 'Approve'}
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button disabled={busy || !canApprove} onClick={() => setConfirming(true)}>
-                    <Check size={14} /> Approve
-                  </Button>
-                  <Button variant="outline" disabled={busy} onClick={() => decide('clarify')}>
-                    <Mail size={14} /> {askLabel}
-                  </Button>
-                </>
-              )}
+              <Button disabled={busy || !canApprove} onClick={() => setConfirming(true)}>
+                <Check size={14} /> Approve
+              </Button>
+              <Button variant="outline" disabled={busy} onClick={onReply}>
+                <Mail size={14} /> Reply to {asker}
+              </Button>
               <Button variant="ghost" disabled={busy} onClick={() => decide('reject')}>
                 Reject
               </Button>

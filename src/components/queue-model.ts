@@ -53,10 +53,14 @@ export function actionKind(a: Action, data?: AppState): { id: KindId; label: str
  * ("Needs triage"), which appear once, in their own lane.
  */
 export function openWork(data: AppState, conferenceId: string) {
-  const open = data.actions.filter((a) => a.status === 'Open');
+  // Acknowledged escalations stay open for their owner only (not in everyone's urgent count).
+  const open = data.actions.filter(
+    (a) => a.status === 'Open' || (a.status === 'Acknowledged' && a.assignedTo === data.user.id),
+  );
   const conference = open.filter((a) => a.conferenceId === conferenceId);
   const triage = open.filter((a) => !a.conferenceId);
-  return { conference, triage, total: conference.length + triage.length };
+  const acknowledged = conference.filter((a) => a.status === 'Acknowledged');
+  return { conference, triage, acknowledged, total: conference.length + triage.length };
 }
 
 /** "Ask 2 of 3" when an email holds several asks. */
