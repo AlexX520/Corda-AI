@@ -276,3 +276,101 @@ Migration `20261104120000_v4_phase3` (additive) adds:
   and then the cool-down; no key in output).
 - `db-reset.sh`, then sign in as Morgan Lee (Team overview), Alex Morgan (My day) and James Wilson (My clients;
   try "PIMCO wants Ford Credit, Ally Financial and Bayview Wednesday").
+
+## Round 3 — demo readiness (FIX-ROUND-3 items 1–16)
+
+Migration `20261104150000_v4_round3` (additive) adds:
+- `Meeting.protectedBy`
+- `ExportLog.sentAt`
+- an `AskLog` table; old "Asked Corda" audit rows move into it.
+
+1. **One clock.** `src/lib/clock.ts` gives server time, or `DEMO_NOW` (an ISO time) for a rehearsed demo.
+   - Past meetings can't be moved, cancelled or confirmed ("This meeting already took place").
+   - Past slots and past availability are never offered.
+   - Schedules and My day grey out the past and show a red **Now** line.
+   - Queue items whose times have passed become **Expired**: still visible, not counted, and they can be reopened.
+   - Allocation only staffs future meetings. Bulk approve skips expired items.
+2. **Live seed.**
+   - ABS East runs yesterday → tomorrow. Meetings are staggered around the current hour, never seven at 10:00.
+   - Every meeting is staffed and has a room through an approved allocation run. Each banker has 4–6 meetings
+     today or tomorrow.
+   - Open items are all about future times, and the escalation protects an upcoming meeting.
+   - Availability differs per issuer. Only real investor firms are seeded.
+   - No demo footnote on Team overview.
+   - `DEMO_RESEED=true` wipes and reseeds the demo tables only (users and Outlook links are kept), which is
+     safe for Neon.
+3. **Protect / hold.**
+   - Meetings get a protect toggle, with reason and who set it.
+   - An investor threat ("HOLD", "do not move it again", "we'll pass/skip") protects the meeting it is about and
+     quotes the investor.
+   - Moving or cancelling a protected meeting needs an override reason.
+   - Issuer holds stay visible (with **Release**) on My day and in the queue.
+   - Quarantined mail is never shown as a newer reply.
+4. **Hero flow.**
+   - An email that asks for or accepts a time for a known pair confirms the meeting in one review, with a
+     consent tick. If an open request exists, the email answers it ("Confirm request at …") and the request is
+     closed.
+   - The confirmed meeting gets a free banker and room.
+   - **Approve all N asks** with one consent. Toasts state the real outcome.
+   - After a change, **Notify both sides?** opens the combined reply. That reply now states the confirmed time
+     and room.
+   - Reopening an email lands on its next open ask. Paste an email opens its review.
+5. **Unhandled sentences.** Questions and requests that no ask covers are listed, with **Add as ask** (the
+   `addAsk` command) or **Add as question to reply**.
+6. **Wrong-meeting guards.** A weekday or "today/tomorrow" in the email must match the candidate meeting.
+   Past meetings are never candidates.
+7. **Availability.**
+   - "Free 9–11 and 2–4 Wed" narrows that day to exactly those windows; "also", "in addition" or "add-on"
+     extends it.
+   - A per-day before/after diff shows before approval, including booked meetings that fall outside.
+8. **Time zones.**
+   - Conversions are spelled out: "8:00–10:00 AM CT = 9:00–11:00 AM ET (event time)".
+   - A "move" that converts to the same time says "no time change", and the rest of the ask (e.g. a dial-in)
+     is surfaced.
+9. **Team overview.**
+   - An event picker filters the page.
+   - Every tile and row opens the filtered queue, email or audit trail.
+   - Rejections are split into declined by the desk vs noise/phishing.
+   - An ROI tile shows asks handled × 6 minutes (documented assumption, `MINUTES_PER_ASK`).
+   - The manager is excluded from coordinator workload.
+10. **Queue.**
+    - Escalations are pinned on top whatever the sort.
+    - Items are grouped by meeting ("2 asks about Santander × MetLife").
+    - Older open asks on a meeting are marked "Superseded by …" when a later one is approved.
+11. **Wish lists** are planned jointly, so the same investor is never in two places at once. Duplicate warnings
+    only cover the selected event. "Today" and "tomorrow" are understood.
+12. **Exports.**
+    - **Mark as sent** is explicit; a download is not a send.
+    - Change marks compare against the last sent version.
+    - The remaining schedule is the default (`?past=1` adds the past).
+    - New "Location / dial-in" and "Your contact" columns. No internal wording, and one room per meeting.
+13. **Rooms.** A typed location that conflicts with the assigned cube is refused (dial-ins are allowed).
+    Allocation leaves a meeting with a typed office or dial-in location without a cube.
+14. **Ask Corda.**
+    - Understands today/tomorrow/weekday, my/mine, colleagues ("Is Maya covering…before noon"), who/why
+      approved, "what changed in the last N hours", "emails about X", counts, double-bookings and room capacity.
+    - Otherwise it says "I can't answer that yet" and suggests the right view.
+    - Questions go to AskLog, not the audit trail.
+15. **Keyboard / undo.**
+    - Hovering no longer moves the j/k cursor.
+    - Reject asks for a reason inline, both from the keyboard and in the drawer.
+    - "Mark handled manually" needs a confirm.
+    - **Reopen** works for rejected, expired and handled items.
+16. **Polish.**
+    - Duplicate box layout and blank "Already handled" note fixed.
+    - The schedule's banker column matches the drawer.
+    - Headlines use the requester → counterpart direction consistently.
+    - "Add a time" defaults to the future.
+    - Categories have labels; the headcount field is in the correction form.
+    - Meeting history only shows that meeting.
+    - The audit issuer filter includes rejections, phishing reports and escalation acks.
+    - Escalations are titled by the complaining company, and escalation counts include triage.
+    - The "AI model unavailable" note is written to the server log only.
+
+### How to verify
+- Run `npm test`: 86 tests. New ones are in:
+  - `tests/round3.test.ts`, with fixtures in `tests/fixtures/round3-emails.json` (21 round-3 simulation emails);
+  - Ask Corda scoped answers in `tests/ask.test.ts`;
+  - the metrics split and ROI in `tests/metrics.test.ts`;
+  - "tomorrow" in Find a time in `tests/request-parser.test.ts`.
+- `docs/DEMO-SCRIPT.md` is the 10-minute boss demo. The emails it uses are in `tests/fixtures/demo-emails.json`.
