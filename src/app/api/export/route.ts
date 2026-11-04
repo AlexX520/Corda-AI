@@ -4,6 +4,7 @@ import PDFDocument from 'pdfkit';
 import { formatInTimeZone } from 'date-fns-tz';
 import { currentUser, errorResponse } from '@/lib/auth';
 import { db } from '@/lib/db';
+import { now } from '@/lib/clock';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
 const safe = (s: string) => (/^[=+@-]/.test(s) ? `'${s}` : s);
@@ -55,7 +56,9 @@ export async function GET(req: Request) {
       db.issuer.findMany(),
       db.investor.findMany(),
     ]);
-    const meetings = meetingRows.filter((m) => scope === 'banker'
+    // Client planners show the remaining schedule by default; ?past=1 includes meetings already held.
+    const withPast = q.get('past') === '1' || scope === 'meeting';
+    const meetings = meetingRows.filter((m) => (withPast || +m.end > +now())).filter((m) => scope === 'banker'
       ? coverage.some((a) => a.meetingId === m.id && a.bankerId === id)
       : scope === 'cube'
         ? roomAssignments.some((a) => a.meetingId === m.id && a.cubeId === id)
@@ -95,7 +98,8 @@ export async function GET(req: Request) {
     const track = q.get('format') !== 'ics';
     const previous = track
       ? await db.exportLog.findFirst({
-          where: { conferenceId, scope, audienceId: id || null },
+          // Change marks are against the last version actually SENT (a download is not a send).
+          where: { conferenceId, scope, audienceId: id || null, sentAt: { not: null } },
           orderBy: { createdAt: 'desc' },
         })
       : null;
@@ -115,11 +119,27 @@ export async function GET(req: Request) {
       : [];
     const sinceNote = previous
       ? `Changes since the version sent ${formatInTimeZone(previous.createdAt, c.timezone, 'MMM d, h:mm a')}: ${authorized.filter((m) => since(m) === 'New').length} new, ${authorized.filter((m) => since(m) === 'Changed').length} changed, ${removed.length} removed.`
-      : 'First version sent to this audience.';
-    if (track)
-      await db.exportLog.create({
-        data: { conferenceId, scope, audienceId: id || null, userId: user.id, meetingIds: authorized.map((m) => m.id) },
-      });
+      : 'First version for this recipient.';
+    const log = track
+      ? await db.exportLog.create({
+          data: { conferenceId, scope, audienceId: id || null, userId: user.id, meetingIds: authorized.map((m) => m.id) },
+        })
+      : null;
+    const exportHeaders: Record<string, string> = log ? { 'X-Export-Id': log.id } : {};
+    // Who to contact: the issuer's coverage banker (issuer planners) or the client's banker team.
+    const contactFor = (m: { issuerId: string; bankerIds: string[] }) => {
+      const owner = issuers.find((x) => x.id === m.issuerId)?.ownerId;
+      const p = people.find((x) => x.id === (m.bankerIds[0] || owner)) || people.find((x) => x.id === owner);
+      return p ? `${p.name} · ${p.email}` : '';
+    };
+    // One room per meeting: the cube (name · building) and, only if different, the typed location.
+    const placeOf = (m: { id: string; location: string }) => {
+      const room = roomAssignments.find((a) => a.meetingId === m.id);
+      const cube = cubes.find((x) => x.id === room?.cubeId);
+      if (!cube) return m.location || 'To be confirmed';
+      const label = `${cube.name} · ${cube.location}`;
+      return m.location && m.location !== label && m.location !== cube.location && !m.location.startsWith(cube.name) ? `${label} (${m.location})` : label;
+    };
     const counterpart = (m: { issuerId: string; investorId: string }) =>
       scope === 'issuer'
         ? investors.find((x) => x.id === m.investorId)?.name || ''
@@ -209,10 +229,7 @@ export async function GET(req: Request) {
         const time = `${formatInTimeZone(m.start, c.timezone, 'h:mm a')} – ${formatInTimeZone(m.end, c.timezone, 'h:mm a')}`;
         const investor = investors.find((x) => x.id === m.investorId)?.name || '';
         const issuer = issuers.find((x) => x.id === m.issuerId)?.name || '';
-        const place =
-          [cube?.name, m.location && !m.location.startsWith(cube?.name || '\u0000') ? m.location : '']
-            .filter(Boolean)
-            .join(' · ') || 'To be confirmed';
+        const place = placeOf(m);
         const ready = cov.length >= 2 && (!m.requiresCube || cube);
         const cells = clientFacing
           ? [day === lastDay ? '' : day, since(m) ? `${time}  · ${since(m).toUpperCase()}` : time, scope === 'issuer' ? investor : issuer, place]
@@ -244,7 +261,7 @@ export async function GET(req: Request) {
       }
       doc.end();
       const pdf = await new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
-      return new Response(new Uint8Array(pdf), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${baseName}.pdf"`, 'Cache-Control': 'no-store' } });
+      return new Response(new Uint8Array(pdf), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${baseName}.pdf"`, 'Cache-Control': 'no-store', ...exportHeaders } });
     }
     const wb = new ExcelJS.Workbook();
     wb.creator = 'Corda AI';
@@ -254,7 +271,8 @@ export async function GET(req: Request) {
       { header: 'Date', key: 'date', width: 13 },
       { header: 'Time', key: 'time', width: 15 },
       { header: scope === 'issuer' ? 'Investor' : 'Issuer', key: 'counterpart', width: 30 },
-      { header: 'Location', key: 'place', width: 32 },
+      { header: 'Location / dial-in', key: 'place', width: 40 },
+      { header: 'Your contact', key: 'contact', width: 36 },
       { header: 'Since last sent', key: 'since', width: 16 },
     ] : [
       { header: 'Date', key: 'date', width: 13 },
@@ -280,13 +298,14 @@ export async function GET(req: Request) {
       const cov = coverage.filter((a) => a.meetingId === m.id), room = roomAssignments.find((a) => a.meetingId === m.id), cube = cubes.find((x) => x.id === room?.cubeId);
       const person = (bankerId: string) => people.find((p) => p.id === bankerId)?.name || bankerId;
       const ordered = [...cov.filter((a) => a.coverageRole === 'Primary'), ...cov.filter((a) => a.coverageRole !== 'Primary')];
-      const place = [cube?.name, m.location && !m.location.startsWith(cube?.name || '\u0000') ? m.location : ''].filter(Boolean).join(' · ') || 'To be confirmed';
+      const place = placeOf(m);
       if (clientFacing) {
         sheet.addRow({
           date: formatInTimeZone(m.start, c.timezone, 'EEE, MMM d'),
           time: `${formatInTimeZone(m.start, c.timezone, 'h:mm a')} – ${formatInTimeZone(m.end, c.timezone, 'h:mm a')}`,
           counterpart: safe(scope === 'issuer' ? v.name : i.name),
           place: safe(place),
+          contact: safe(contactFor(m)),
           since: since(m),
         });
         continue;
@@ -310,7 +329,7 @@ export async function GET(req: Request) {
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF123D35' } };
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
-    sheet.autoFilter = { from: 'A1', to: clientFacing ? 'E1' : 'M1' };
+    sheet.autoFilter = { from: 'A1', to: clientFacing ? 'F1' : 'M1' };
     sheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return;
       if (row.getCell('since').value) row.getCell('since').font = { bold: true, color: { argb: 'FF9A5B00' } };
@@ -324,20 +343,18 @@ export async function GET(req: Request) {
     }
     const info = wb.addWorksheet('Read me');
     info.addRow(['Title', `${c.name} — ${title}`]);
-    info.addRow(['Audience', recipient || 'Internal authenticated user']);
+    if (recipient) info.addRow(['Prepared for', recipient]);
     info.addRow(['Scope', scope]);
     info.addRow(['Timezone', c.timezone]);
     info.addRow(['Since last sent', sinceNote]);
-    info.addRow([
-      'Note',
-      'Only confirmed meetings are included. Excel is an export artifact; the database is the source of truth.',
-    ]);
+    info.addRow(['Note', withPast ? 'Confirmed meetings, including those already held.' : 'Confirmed meetings still to come.']);
     const buffer = await wb.xlsx.writeBuffer();
     return new Response(new Uint8Array(buffer as ArrayBuffer), {
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename="${baseName}.xlsx"`,
         'Cache-Control': 'no-store',
+        ...exportHeaders,
       },
     });
   } catch (e) {

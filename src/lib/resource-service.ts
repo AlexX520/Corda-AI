@@ -79,10 +79,13 @@ async function loadInputs(tx: Tx | typeof db, conferenceId: string) {
   const requirements = await tx.meetingCoverageRequirement.findMany({
     where: { meetingId: { in: meetingsRaw.map((m) => m.id) } },
   });
+  // A meeting with a typed location (client office, dial-in) keeps it: allocation gives it no cube.
+  const cubeLabels = (await tx.meetingCube.findMany({ where: { conferenceId } })).flatMap((c) => [cubeLabel(c), c.location]);
   const meetings: (AllocationMeeting & { changedAt: Date | null })[] = meetingsRaw.map((m) => {
     const requirement = requirements.find((r) => r.meetingId === m.id);
     return {
       ...m,
+      requiresCube: m.requiresCube && !isManualLocation(m.location, cubeLabels),
       requiredBankerCount: requirement?.requiredBankerCount ?? 2,
       requiredPrimaryCount: requirement?.requiredPrimaryCount ?? 1,
     };

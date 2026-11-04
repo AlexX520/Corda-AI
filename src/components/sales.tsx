@@ -298,6 +298,7 @@ export function SalesHome({
                   <a className="audit-export" href={`/api/export?scope=investor&id=${itineraryFor}&conferenceId=${conferenceId}&format=pdf`}>PDF</a>
                   <a className="audit-export" href={`/api/export?scope=investor&id=${itineraryFor}&conferenceId=${conferenceId}&format=xlsx`}>Excel</a>
                   <button className="audit-export" onClick={copy}>{copied ? 'Copied' : 'Copy client email'}</button>
+                  <button className="audit-export" onClick={() => run('exportMarkSent', { conferenceId, scope: 'investor', audienceId: itineraryFor }, 'Itinerary marked as sent.')}>Mark as sent</button>
                 </div>
                 <pre className="client-email" aria-label="Client email text">{emailText}</pre>
               </div>

@@ -774,6 +774,7 @@ export function Workspace() {
               search={search}
               onOpenMeeting={setMeetingId}
               onNewMeeting={banker ? () => setNewMeeting(true) : undefined}
+              run={run}
             />
           )}
           {page === 'allocation' && banker && (

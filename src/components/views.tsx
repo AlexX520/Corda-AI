@@ -741,12 +741,14 @@ export function PlannerView({
   search,
   onOpenMeeting,
   onNewMeeting,
+  run,
 }: {
   data: AppState;
   conferenceId: string;
   search: string;
   onOpenMeeting: (id: string) => void;
   onNewMeeting?: () => void;
+  run: Run;
 }) {
   const desk = isDesk(data.user.role);
   // Seats proposed by an allocation run that is not approved yet: shown as "Pending".
@@ -802,6 +804,11 @@ export function PlannerView({
           )}
           <Button variant="outline" asChild><a href={`${exportUrl}&format=pdf`}><Download size={16} />Export PDF</a></Button>
           <Button asChild><a href={exportUrl}><Download size={16} />Export Excel</a></Button>
+          {scope !== 'master' && audience && (
+            <Button variant="ghost" onClick={() => run('exportMarkSent', { conferenceId, scope, audienceId: audience }, 'Marked as sent. The next export marks what changed since this one.')}>
+              Mark as sent
+            </Button>
+          )}
         </div>
       </div>
       <div className="panel">

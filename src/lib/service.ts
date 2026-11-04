@@ -417,6 +417,19 @@ async function makeConfirmationDraft(tx: Tx, user: User, meetingId: string) {
   });
 }
 /** Past meetings and times are history: they cannot be moved, cancelled or confirmed. */
+/**
+ * One room per meeting: with a cube, the location is the cube's; a typed location is allowed only
+ * when there is no cube (e.g. "BlackRock Boston office", a dial-in). Typing a different room next to
+ * a cube is refused instead of exporting two rooms.
+ */
+function roomLocation(typed: string, cube: { name: string; location: string } | null, fallback: string) {
+  const t = typed.trim();
+  if (!cube) return t || fallback;
+  const label = `${cube.name} · ${cube.location}`;
+  if (t && t !== label && t !== cube.location && !t.toLowerCase().startsWith(cube.name.toLowerCase()) && !/dial|zoom|teams|phone|webex/i.test(t))
+    throw new Error(`The location “${t}” conflicts with the room ${cube.name}. Clear the location or remove the room.`);
+  return /dial|zoom|teams|phone|webex/i.test(t) ? `${label} · ${t}` : label;
+}
 function assertNotPast(m: { start: Date; end: Date }, what = 'meeting') {
   const t = +now();
   if (+m.end <= t) throw new Error(`This ${what} already took place.`);
@@ -881,7 +894,7 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
       if (check.hard.length) throw new Error(check.hard.join(' '));
       if (check.soft.length && !p.override) throw new Error(`${check.soft.join(' ')} Tick "Schedule anyway" to keep it.`);
       const cube = p.cubeId ? await tx.meetingCube.findUnique({ where: { id: p.cubeId } }) : null;
-      const location = p.location.trim() || (cube ? cube.location : p.cubeId === null ? '' : m.location);
+      const location = cube ? roomLocation(p.location, cube, m.location) : p.location.trim() || (p.cubeId === null ? '' : m.location);
       const moved = +start !== +m.start || +end !== +m.end;
       const before = {
         ...m,
@@ -984,7 +997,7 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
           start,
           end,
           status: 'Confirmed',
-          location: p.location.trim() || (cube ? cube.location : ''),
+          location: roomLocation(p.location, cube, ''),
           bankerIds: p.bankerIds,
           approvedRecipients: [],
           approvedBy: user.id,
@@ -2176,6 +2189,15 @@ export async function command(user: User, type: string, input: unknown): Promise
       return { ok: true, proposalId: proposal.id };
     });
   }
+  if (type === 'exportMarkSent') {
+    // Downloading is not sending: the latest download for this audience becomes the "sent" baseline.
+    const p = z.object({ conferenceId: z.string(), scope: z.string(), audienceId: z.string().nullable().default(null) }).parse(input);
+    const last = await db.exportLog.findFirst({ where: { conferenceId: p.conferenceId, scope: p.scope, audienceId: p.audienceId }, orderBy: { createdAt: 'desc' } });
+    if (!last) throw new Error('Download the planner first, then mark it as sent.');
+    await db.exportLog.update({ where: { id: last.id }, data: { sentAt: now() } });
+    await db.auditLog.create({ data: { actorId: user.id, action: 'Planner marked as sent', entityType: 'ExportLog', entityId: last.id, note: `${p.scope}${p.audienceId ? ` · ${p.audienceId}` : ''}`, after: { meetings: last.meetingIds.length } } });
+    return { ok: true, meetings: last.meetingIds.length };
+  }
   if (type === 'ping') return { ok: true }; // lets the client refresh after a batch of direct calls
   if (type === 'markSeen') {
     // "What changed since my last visit" starts again from now.
@@ -2232,8 +2254,12 @@ export async function command(user: User, type: string, input: unknown): Promise
     const names = namesFrom(issuers, investors);
     // One option per issuer on the wish list. No time given: search the whole day (or event).
     const options = [];
+    // Planned jointly: a time picked for one issuer is busy for the investor when placing the next.
+    const planned: { start: Date; end: Date }[] = [];
     for (const issuerId of parsed.investorId ? parsed.issuerIds.slice(0, 8) : []) {
-      const { windows, busy } = await resources(db, c.id, issuerId, parsed.investorId!);
+      const res = await resources(db, c.id, issuerId, parsed.investorId!);
+      const windows = res.windows;
+      const busy = [...res.busy, ...planned];
       const days = parsed.date ? [parsed.date] : eventDays(c);
       const winStart = parsed.windowStart ? conferenceTime(days[0], parsed.windowStart, c.timezone) : conferenceTime(days[0], '00:00', c.timezone);
       const winEnd = parsed.windowStart
@@ -2245,6 +2271,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         (x) => +new Date(x.start) >= +winStart && +new Date(x.end) <= +winEnd,
       );
       const start = open ? new Date(open.start) : parsed.windowStart ? winStart : null;
+      if (start) planned.push({ start, end: addMinutes(start, parsed.duration) });
       const proposal = start
         ? (() => {
             const slot = { start, end: addMinutes(start, parsed.duration) };
@@ -2253,8 +2280,9 @@ export async function command(user: User, type: string, input: unknown): Promise
         : null;
       // Duplicate warning: they already meet, or a request is already open.
       const [meeting, request] = await Promise.all([
-        db.meeting.findFirst({ where: { issuerId, investorId: parsed.investorId!, status: 'Confirmed' }, orderBy: { start: 'asc' } }),
-        db.meetingRequest.findFirst({ where: { issuerId, investorId: parsed.investorId!, status: { notIn: ['Confirmed', 'Cancelled'] } } }),
+        // Duplicate warnings are about this event only.
+        db.meeting.findFirst({ where: { conferenceId: c.id, issuerId, investorId: parsed.investorId!, status: 'Confirmed' }, orderBy: { start: 'asc' } }),
+        db.meetingRequest.findFirst({ where: { conferenceId: c.id, issuerId, investorId: parsed.investorId!, status: { notIn: ['Confirmed', 'Cancelled', 'Expired'] } } }),
       ]);
       const zone = c.timezone;
       const duplicate = meeting
