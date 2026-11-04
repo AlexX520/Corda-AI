@@ -174,7 +174,9 @@ const CONDITIONAL =
   /\b(?:if [^,.]{0,40}(?:doesn'?t|does not|can'?t|cannot|won'?t|can) (?:work|do it|make it|fit)|or we'?d rather|we'?d rather|else keep|unless\b)/i;
 function classify(s: string): Op {
   const cue = CUE.test(s) || TO_TIME.test(s);
-  if (RESCHEDULE.test(s) && cue) return 'reschedule';
+  // "please do not move it again", "moved twice" (narration) are not move asks.
+  const noMove = /\b(?:do not|don'?t|never|not) (?:move|reschedule|shift|push)\b|\bif it (?:moves|is moved)\b/i.test(s);
+  if (RESCHEDULE.test(s) && cue && !noMove) return 'reschedule';
   if (CANCEL.test(s) && cue) return 'cancel';
   if (REQUEST.test(s)) return 'request';
   if (PREFER.test(s)) return 'reschedule';

@@ -114,6 +114,7 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
             ? names.investor(investorIds[0])
             : null,
         today: deps.today,
+        text: `${p.subject}\n${body}`,
       });
       defaultConferenceId = resolved.conferenceId;
       contextNote = resolved.note;
@@ -215,10 +216,21 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
   let protectMeetingId: string | null = null;
   if (final.threat) {
     const esc = asks.find((a) => a.category === 'Escalation / complaint');
+    // The complaining investor is the sender when the text does not name one.
+    const investorId = esc?.investorId || effective.investorId;
+    const issuerIds = [esc?.issuerId, ...asks.map((a) => a.issuerId)].filter(Boolean);
     const pool = meetings.filter(
-      (m) => m.issuerId === esc?.issuerId && (!esc?.investorId || m.investorId === esc.investorId),
+      (m) =>
+        (!deps.now || +new Date(m.end) > +deps.now) &&
+        isOpenMeeting(m.status) &&
+        (!issuerIds.length || issuerIds.includes(m.issuerId)) &&
+        (!investorId || m.investorId === investorId),
     );
-    if (esc?.investorId && pool.length === 1) protectMeetingId = pool[0].id;
+    // Prefer the meeting at a time the email mentions ("HOLD the Wed 3:00pm slot").
+    const times = asks.flatMap((a) => [a.referenceTime, ...a.windows.map((w) => w.start)]).filter(Boolean).map((t) => +new Date(t!));
+    const byTime = pool.filter((m) => times.includes(+new Date(m.start)));
+    if (investorId && byTime.length === 1) protectMeetingId = byTime[0].id;
+    else if (investorId && pool.length === 1) protectMeetingId = pool[0].id;
   }
   const addressed = users.find(
     (u) => (u.role === 'BANKER' || u.role === 'MANAGER') && p.to.some((t) => t.toLowerCase() === u.email.toLowerCase()),

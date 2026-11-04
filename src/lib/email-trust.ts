@@ -221,7 +221,9 @@ export function finalizeAsks(
  * it names) is on, else the only active or upcoming event overall, else ask.
  */
 export function resolveConference(opts: {
-  conferences: { id: string; name: string; endDate: string }[];
+  conferences: { id: string; name: string; endDate: string; startDate?: string; location?: string }[];
+  /** The email's subject and text, for "Boston NDR" or "today's meeting". */
+  text?: string;
   /** Conferences where the email's company already has meetings, requests or availability. */
   involved: string[];
   entityName: string | null;
@@ -238,6 +240,22 @@ export function resolveConference(opts: {
   const pool = involved.length
     ? opts.conferences.filter((c) => involved.includes(c.id))
     : opts.conferences;
+  const text = (opts.text || '').toLowerCase();
+  if (text) {
+    // "Boston NDR", "Vegas": a distinctive word of one event's name or city.
+    const GENERIC = new Set(['the', 'and', 'conference', 'summit', 'event', '2026', '2027', 'east', 'west', 'finance', 'structured']);
+    const words = (c: (typeof pool)[number]) =>
+      `${c.name} ${c.location || ''}`.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !GENERIC.has(w));
+    const named = pool.filter((c) => words(c).some((w) => new RegExp(`\\b${w}\\b`).test(text)));
+    if (named.length === 1) return { conferenceId: named[0].id, note: `Assumed ${named[0].name} (named in the email).` };
+    // "today's meeting", "tomorrow": the event running that day.
+    const plus = (n: number) => { const d = new Date(`${opts.today}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+    const when = /\b(today|today's|tonight|this (?:morning|afternoon))\b/.test(text) ? opts.today : /\b(tomorrow|tmrw|tmw)\b/.test(text) ? plus(1) : null;
+    if (when) {
+      const running = pool.filter((c) => (c.startDate || c.endDate) <= when && c.endDate >= when);
+      if (running.length === 1) return { conferenceId: running[0].id, note: `Assumed ${running[0].name} (running ${when === opts.today ? 'today' : 'tomorrow'}).` };
+    }
+  }
   const active = pool.filter((c) => c.endDate >= opts.today);
   if (active.length === 1)
     return {

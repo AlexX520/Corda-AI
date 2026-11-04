@@ -58,7 +58,7 @@ export function askSummary(e: Extraction, n: Names, zone = 'America/New_York') {
     case 'Meeting Update':
       return `Update ${who}${e.attendees ? `: ${e.attendees} attendees` : ''}${e.conditional ? ' (conditional)' : ''}`;
     case 'Escalation / complaint':
-      return `Escalation${issuer ? ` from ${issuer}` : ''}${investor ? ` about ${investor}` : ''}`;
+      return `Escalation about ${[issuer, investor].filter(Boolean).join(' × ') || 'the schedule'}`;
     case 'Issuer Availability Update': {
       const bits: string[] = [];
       if (blocked.length)
@@ -120,6 +120,9 @@ export function findCandidates<T extends MeetingLike>(
   // Weekdays the email names for this ask ("drop the PIMCO lunch on Thursday").
   const said = (ask.evidence || []).join(' ').toLowerCase();
   const days = WEEKDAYS.filter((d) => new RegExp(`\\b${d}(day)?\\b`).test(said.replace(/(mon|tues|wednes|thurs|fri|satur|sun)day/g, (w) => w.slice(0, 3))));
+  // "today's meeting", "tomorrow" name a day too.
+  if (opts.now && /\b(today|today's|tonight|this morning|this afternoon)\b/.test(said)) days.push(local(opts.now, opts.zone, 'EEE').toLowerCase().slice(0, 3));
+  if (opts.now && /\b(tomorrow|tmrw|tmw)\b/.test(said)) days.push(local(new Date(+opts.now + 86400000), opts.zone, 'EEE').toLowerCase().slice(0, 3));
   const nowMs = +(opts.now || new Date(0));
   const pool = items.filter(
     (m) =>

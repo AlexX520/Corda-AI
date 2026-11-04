@@ -578,7 +578,7 @@ async function analyseEmail(p: IngestInput) {
     users,
     meetings,
     internal: internalDomains(),
-    today: now().toISOString().slice(0, 10),
+    today: formatInTimeZone(now(), 'America/New_York', 'yyyy-MM-dd'),
     now: now(),
     involvement,
     extract: extractEmail,
@@ -611,7 +611,7 @@ async function writeAsks(tx: Tx, user: User, emailId: string, a: Analysis) {
         type: e.category,
         // An escalation is titled with the company that complained (the sender), not the issuer named.
         title: escalation
-          ? `${escalationFrom(a) || issuer?.name || 'Client'} escalation · ${e.summary}`
+          ? `${escalationFrom(a) || issuer?.name || 'Client'} · ${e.summary}`
           : `${issuer?.name || 'Needs triage'} · ${e.summary}`,
         conferenceId: e.conferenceId,
         issuerId: e.issuerId,
