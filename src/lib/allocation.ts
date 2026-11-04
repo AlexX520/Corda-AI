@@ -257,11 +257,11 @@ export function optimizeConference(input: {
       !result.explanations.some((e) => e.includes('Locked banker') || e.includes('Must-attend'));
     if (result.bankerIds.length < meeting.requiredBankerCount)
       result.explanations.push(
-        `Coverage incomplete: ${result.bankerIds.length}/${meeting.requiredBankerCount} eligible bankers assigned.`,
+        `Needs ${meeting.requiredBankerCount} bankers, has ${result.bankerIds.length} (no other authorized banker is free).`,
       );
     if (primaryCount < meeting.requiredPrimaryCount)
       result.explanations.push(
-        `Primary coverage incomplete: ${primaryCount}/${meeting.requiredPrimaryCount}.`,
+        `Needs a primary banker for this issuer (has ${primaryCount} of ${meeting.requiredPrimaryCount}).`,
       );
   }
 

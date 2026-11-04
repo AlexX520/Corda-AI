@@ -45,6 +45,7 @@ import { meetingIcs } from './ics';
 import { accessTokenFor, outlookStatus } from './outlook-service';
 import { replyInThread, sendMail } from './graph';
 import { parseRequestText } from './request-parser';
+import { answerQuestion, llmPhrase } from './ask';
 import { getResourceState, handleResourceCommand } from './resource-service';
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -1225,7 +1226,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         conferenceId: z.string(),
         issuerId: z.string(),
         kind: z.enum(['Available', 'Blocked', 'Hold']).default('Available'),
-        operation: z.enum(['add', 'replace', 'remove']).default('add'),
+        operation: z.enum(['add', 'replace', 'remove', 'narrow']).default('add'),
         replaceConfirmed: z.boolean().default(false),
       })
       .parse(input);
@@ -1925,6 +1926,94 @@ export async function command(user: User, type: string, input: unknown): Promise
       return updated;
     }, { timeout: 30000, maxWait: 10000 });
   }
+  if (type === 'ask') {
+    const p = z.object({ question: z.string().trim().min(2).max(500) }).parse(input);
+    const clients = user.role === 'BANKER' ? [] : await clientIds(user);
+    const [conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability] = await Promise.all([
+      db.conference.findMany(),
+      db.issuer.findMany({ select: { id: true, name: true, ownerId: true } }),
+      db.investor.findMany({ select: { id: true, name: true, coverageSalesId: true } }),
+      db.user.findMany({ select: { id: true, name: true } }),
+      db.meeting.findMany({ include: { request: { select: { salespersonId: true } } } }),
+      db.meetingCoverageAssignment.findMany({ select: { meetingId: true, bankerId: true } }),
+      db.meetingCubeAssignment.findMany({ select: { meetingId: true, cubeId: true } }),
+      db.meetingCube.findMany({ select: { id: true, name: true } }),
+      db.availability.findMany(),
+    ]);
+    const visibleMeetingIds =
+      user.role === 'BANKER'
+        ? undefined
+        : new Set(meetings.filter((m) => clients.includes(m.investorId) || m.request?.salespersonId === user.id).map((m) => m.id));
+    const base = await answerQuestion(
+      p.question,
+      { now: new Date(), user, conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, visibleMeetingIds },
+      {
+        history: async (ids) => {
+          const rows = await db.auditLog.findMany({
+            where: { OR: [{ meetingId: { in: ids } }, { entityId: { in: ids } }] },
+            orderBy: { createdAt: 'desc' },
+            take: 50,
+          });
+          return rows.map((r) => ({
+            id: r.id,
+            createdAt: r.createdAt.toISOString(),
+            action: r.action,
+            actor: users.find((u) => u.id === r.actorId)?.name || 'System',
+            // Sales see what happened, not the internal reasons.
+            note: user.role === 'BANKER' ? r.note : null,
+            meetingId: r.meetingId,
+          }));
+        },
+      },
+    );
+    const answer = await llmPhrase(p.question, base);
+    await db.auditLog.create({ data: { actorId: user.id, action: 'Asked Corda', entityType: 'Question', entityId: base.pattern, note: p.question.slice(0, 200) } });
+    return answer;
+  }
+  if (type === 'markSeen') {
+    // "What changed since my last visit" starts again from now.
+    await db.user.update({ where: { id: user.id }, data: { lastSeenAt: new Date() } });
+    return { ok: true };
+  }
+  if (type === 'bulkApprove') {
+    // Approve several clean asks in one go. Each goes through the normal approval (same checks,
+    // same audit); anything that needs a human judgement is skipped with the reason.
+    banker(user);
+    const p = z.object({ actionIds: z.array(z.string()).min(1).max(50) }).parse(input);
+    const results: { actionId: string; ok: boolean; reason?: string }[] = [];
+    for (const actionId of p.actionIds) {
+      const a = await db.action.findUnique({ where: { id: actionId } });
+      const proposal = a?.proposalId ? await db.proposal.findUnique({ where: { id: a.proposalId }, include: { email: true } }) : null;
+      const e = proposal ? extractionSchema.safeParse(proposal.extraction) : null;
+      const why = !a || a.status !== 'Open'
+        ? 'Already handled.'
+        : !proposal || !e?.success
+          ? 'Not an email ask; open it to decide.'
+          : proposal.status !== 'Pending'
+            ? 'Already reviewed.'
+            : proposal.email.escalation
+              ? 'Escalation: needs a personal review.'
+              : proposal.email.suspicious || !['verified', 'internal'].includes(proposal.email.senderStatus)
+                ? 'Sender not verified.'
+                : e.data.uncertainties.length
+                  ? `Open question: ${e.data.uncertainties[0]}`
+                  : e.data.conditional
+                    ? 'Conditional ask: confirm the condition first.'
+                    : '';
+      if (why) {
+        results.push({ actionId, ok: false, reason: why });
+        continue;
+      }
+      try {
+        await command(user, 'review', { id: proposal!.id, decision: 'approve', note: 'Bulk-approved from the queue' });
+        results.push({ actionId, ok: true });
+      } catch (err) {
+        const raw = err instanceof Error && !/^Prisma/.test(err.name || err.constructor?.name || '');
+        results.push({ actionId, ok: false, reason: raw ? (err as Error).message : 'Could not approve.' });
+      }
+    }
+    return { approved: results.filter((r) => r.ok).length, results };
+  }
   if (type === 'parseRequest') {
     const p = z.object({ text: z.string().min(3).max(500), conferenceId: z.string() }).parse(input);
     const c = await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } });
@@ -2037,17 +2126,38 @@ async function applyAvailability(
             },
           });
       }
-  } else
+  } else {
+    let start = new Date(p.start),
+      end = new Date(p.end);
+    if (p.kind === 'Available') {
+      const existing = await tx.availability.findMany({ where: { ...where, kind: 'Available' } });
+      // "Narrow": the new window replaces that day's availability (meetings stay; refresh flags gaps).
+      const tz = p.operation === 'narrow' ? (await tx.conference.findUniqueOrThrow({ where: { id: p.conferenceId } })).timezone : 'UTC';
+      const day = (d: Date) => formatInTimeZone(d, tz, 'yyyy-MM-dd');
+      const sameDay = (w: { start: Date }) => day(w.start) === day(start);
+      const absorbed =
+        p.operation === 'narrow'
+          ? existing.filter((w) => overlaps(w, { start, end }) || sameDay(w))
+          : existing.filter((w) => +w.start <= +end && +w.end >= +start); // overlapping or touching: extend
+      for (const w of absorbed) {
+        if (p.operation !== 'narrow') {
+          start = new Date(Math.min(+start, +w.start));
+          end = new Date(Math.max(+end, +w.end));
+        }
+        await tx.availability.delete({ where: { id: w.id } });
+      }
+    }
     await tx.availability.create({
       data: {
         ...where,
-        start: new Date(p.start),
-        end: new Date(p.end),
+        start,
+        end,
         kind: p.kind,
         approvedBy: user.id,
         sourceEmailId: p.sourceEmailId,
       },
     });
+  }
   // Confirmed meetings are preserved; refresh() flags gaps after the entire update.
 }
 /** Investors a salesperson covers. */

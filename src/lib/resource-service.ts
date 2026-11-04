@@ -76,7 +76,7 @@ async function loadInputs(tx: Tx | typeof db, conferenceId: string) {
   const requirements = await tx.meetingCoverageRequirement.findMany({
     where: { meetingId: { in: meetingsRaw.map((m) => m.id) } },
   });
-  const meetings: AllocationMeeting[] = meetingsRaw.map((m) => {
+  const meetings: (AllocationMeeting & { changedAt: Date | null })[] = meetingsRaw.map((m) => {
     const requirement = requirements.find((r) => r.meetingId === m.id);
     return {
       ...m,
@@ -381,7 +381,7 @@ export async function handleResourceCommand(user: User, type: string, input: unk
       const requirementErrors: string[] = [];
       const uniqueBankers = [...new Set(p.bankerIds)];
       if (uniqueBankers.length < meeting.requiredBankerCount)
-        requirementErrors.push(`Coverage ${uniqueBankers.length}/${meeting.requiredBankerCount}.`);
+        requirementErrors.push(`Needs ${meeting.requiredBankerCount} bankers, has ${uniqueBankers.length}.`);
       for (const bankerId of uniqueBankers) {
         const b = inputs.bankers.find((banker) => banker.id === bankerId);
         if (!b?.authorizedIssuerIds.includes(meeting.issuerId))
@@ -394,17 +394,38 @@ export async function handleResourceCommand(user: User, type: string, input: unk
       if (meeting.requiresCube) {
         const cube = inputs.cubes.find((c) => c.id === p.cubeId);
         if (!cube || cube.status !== 'Active' || cube.capacity < meeting.expectedAttendees)
-          requirementErrors.push('Selected cube is missing or too small.');
+          requirementErrors.push(!cube ? 'No room selected.' : cube.status !== 'Active' ? 'Selected room is not active.' : '');
         if (cube && (!cube.availability.some((w) => w.status === 'Available' && +new Date(w.start) <= +new Date(meeting.start) && +new Date(w.end) >= +new Date(meeting.end)) || cube.availability.some((w) => w.status !== 'Available' && overlaps(w, meeting))))
           requirementErrors.push('Selected cube is unavailable at this time.');
       }
+      // Hard constraints across the run: a banker or room cannot be in two overlapping meetings.
+      const others = await tx.allocationProposal.findMany({ where: { allocationRunId: run.id, id: { not: p.id } } });
+      const meetingOf = (id: string) => inputs.meetings.find((m) => m.id === id);
+      const buffer = inputs.conference.roomBufferMinutes * 60000;
+      for (const bankerId of uniqueBankers) {
+        const clash =
+          others.find((o) => o.proposedBankerIds.includes(bankerId) && meetingOf(o.meetingId) && overlaps(meetingOf(o.meetingId)!, meeting))?.meetingId ||
+          inputs.coverage.find((a) => a.isLocked && a.bankerId === bankerId && a.meetingId !== meeting.id && meetingOf(a.meetingId) && overlaps(meetingOf(a.meetingId)!, meeting))?.meetingId;
+        if (clash) requirementErrors.push(`${bankerId} is already in ${clash}.`);
+      }
+      if (p.cubeId) {
+        const padded = { start: new Date(+new Date(meeting.start) - buffer), end: new Date(+new Date(meeting.end) + buffer) };
+        const clash =
+          others.find((o) => o.proposedCubeId === p.cubeId && meetingOf(o.meetingId) && overlaps(meetingOf(o.meetingId)!, padded))?.meetingId ||
+          inputs.rooms.find((a) => a.isLocked && a.cubeId === p.cubeId && a.meetingId !== meeting.id && meetingOf(a.meetingId) && overlaps(meetingOf(a.meetingId)!, padded))?.meetingId;
+        if (clash) requirementErrors.push(`${p.cubeId} is already booked for ${clash}.`);
+        const cube = inputs.cubes.find((c) => c.id === p.cubeId);
+        if (cube && cube.capacity < meeting.expectedAttendees)
+          requirementErrors.push(`${cube.id} holds ${cube.capacity}; the meeting expects ${meeting.expectedAttendees}.`);
+      }
+      const problems = requirementErrors.filter(Boolean);
       const updated = await tx.allocationProposal.update({
         where: { id: p.id },
         data: {
           proposedBankerIds: uniqueBankers,
           proposedCubeId: p.cubeId,
-          validationStatus: requirementErrors.length ? 'Incomplete' : 'Valid',
-          explanation: (await humanizer(tx, run.conferenceId))(requirementErrors.join(' ')) || 'Manual assignment satisfies meeting-level constraints; run-level validation occurs at approval.',
+          validationStatus: problems.length ? 'Incomplete' : 'Valid',
+          explanation: (await humanizer(tx, run.conferenceId))(problems.join(' ')) || 'Manual assignment satisfies meeting-level constraints; run-level validation occurs at approval.',
           manualOverride: true,
         },
       });
@@ -425,7 +446,8 @@ export async function handleResourceCommand(user: User, type: string, input: unk
       const proposedCoverage: CoverageAssignment[] = [];
       const proposedRooms: CubeAssignment[] = [];
       for (const proposal of proposals.filter((proposal) => proposal.validationStatus === 'Valid')) {
-        const meetingInput = inputs.meetings.find((m) => m.id === proposal.meetingId)!;
+        const meetingInput = inputs.meetings.find((m) => m.id === proposal.meetingId);
+        if (!meetingInput || (meetingInput.changedAt && meetingInput.changedAt > run.runTimestamp)) continue;
         let primaryAssigned = 0;
         for (const bankerId of proposal.proposedBankerIds) {
           const bankerInput = inputs.bankers.find((b) => b.id === bankerId);
@@ -448,8 +470,11 @@ export async function handleResourceCommand(user: User, type: string, input: unk
             isLocked: false,
           });
       }
+      const stale = new Set(
+        inputs.meetings.filter((m) => m.changedAt && m.changedAt > run.runTimestamp).map((m) => m.id),
+      );
       const validMeetingIds = proposals
-        .filter((proposal) => proposal.validationStatus === 'Valid')
+        .filter((proposal) => proposal.validationStatus === 'Valid' && !stale.has(proposal.meetingId))
         .map((proposal) => proposal.meetingId);
       const lockedCoverage = inputs.coverage.filter((a) => a.isLocked);
       const lockedRooms = inputs.rooms.filter((a) => a.isLocked);
@@ -545,7 +570,11 @@ export async function handleResourceCommand(user: User, type: string, input: unk
     const cubeName = (id?: string | null) => (id ? cubes.find((c) => c.id === id)?.name || id : 'none');
     const cubeLabels = cubes.flatMap((c) => [cubeLabel(c), c.location]);
     const changes = [];
-    for (const proposal of proposals.filter((x) => x.validationStatus === 'Valid')) {
+    const isStale = (meetingId: string) => {
+      const m = meetings.find((x) => x.id === meetingId);
+      return Boolean(m?.changedAt && m.changedAt > run.runTimestamp) || m?.status !== 'Confirmed';
+    };
+    for (const proposal of proposals.filter((x) => x.validationStatus === 'Valid' && !isStale(x.meetingId))) {
       const meeting = meetings.find((m) => m.id === proposal.meetingId);
       if (!meeting) continue;
       const current = inputs.coverage.filter((a) => a.meetingId === meeting.id);
@@ -574,8 +603,11 @@ export async function handleResourceCommand(user: User, type: string, input: unk
       changes,
       valid: proposals.filter((x) => x.validationStatus === 'Valid').length,
       skipped: proposals
-        .filter((x) => x.validationStatus !== 'Valid')
-        .map((x) => ({ meeting: label(x.meetingId), reason: label(x.explanation) })),
+        .filter((x) => x.validationStatus !== 'Valid' || isStale(x.meetingId))
+        .map((x) => ({
+          meeting: label(x.meetingId),
+          reason: isStale(x.meetingId) ? 'The meeting changed after this proposal. Run allocation again.' : label(x.explanation),
+        })),
     };
   }
 
@@ -633,11 +665,21 @@ export async function getResourceState(user: User) {
     db.meetingCubeAssignment.findMany(),
     db.allocationRun.findMany({ orderBy: { runTimestamp: 'desc' }, take: 20 }),
   ]);
-  const allocationProposals = allocationRuns.length
+  const proposalRows = allocationRuns.length
     ? await db.allocationProposal.findMany({
         where: { allocationRunId: { in: allocationRuns.map((r) => r.id) } },
       })
     : [];
+  // A proposal is stale when its meeting changed after the run that produced it.
+  const changed = await db.meeting.findMany({
+    where: { id: { in: proposalRows.map((p) => p.meetingId) }, changedAt: { not: null } },
+    select: { id: true, changedAt: true, status: true },
+  });
+  const allocationProposals = proposalRows.map((p) => {
+    const run = allocationRuns.find((r) => r.id === p.allocationRunId);
+    const m = changed.find((x) => x.id === p.meetingId);
+    return { ...p, stale: Boolean(run && m?.changedAt && m.changedAt > run.runTimestamp) };
+  });
   return {
     bankerPreferences,
     bankerAvailability,

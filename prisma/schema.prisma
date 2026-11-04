@@ -241,6 +241,8 @@ model ExportLog {
   scope String
   audienceId String?
   userId String
+  /// Meetings in the export, to show "new / changed / removed since last sent" next time.
+  meetingIds String[] @default([])
   createdAt DateTime @default(now())
   @@index([conferenceId, scope, audienceId])
 }

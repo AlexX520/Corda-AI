@@ -68,3 +68,24 @@ test('reject nonexistent DST local times and out-of-conference dates', () => {
     }),
   );
 });
+
+test('resolved timeline: overlapping fragments collapse, meetings and blocks win', async () => {
+  const { resolveTimeline } = await import('../src/lib/scheduling');
+  const t = (h: number, m = 0) => new Date(Date.UTC(2026, 10, 3, h, m));
+  const out = resolveTimeline([
+    { start: t(9), end: t(11), kind: 'available' },
+    { start: t(10), end: t(12), kind: 'available' }, // overlapping fragment
+    { start: t(12), end: t(13), kind: 'available' }, // touching: same block
+    { start: t(10), end: t(10, 30), kind: 'meeting', ref: 'm1' },
+    { start: t(12, 30), end: t(14), kind: 'blocked' },
+  ]);
+  assert.deepEqual(
+    out.map((s) => [s.kind, s.start.getUTCHours() * 60 + s.start.getUTCMinutes(), s.end.getUTCHours() * 60 + s.end.getUTCMinutes()]),
+    [
+      ['available', 540, 600],
+      ['meeting', 600, 630],
+      ['available', 630, 750],
+      ['blocked', 750, 840],
+    ],
+  );
+});

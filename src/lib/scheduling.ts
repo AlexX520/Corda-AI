@@ -87,3 +87,27 @@ export function validateInterval(
   )
     throw new Error('Time must be within the conference dates.');
 }
+
+export type TimelineKind = 'meeting' | 'blocked' | 'hold' | 'available';
+export type TimelineSegment = { start: Date; end: Date; kind: TimelineKind; ref?: string };
+const RANK: Record<TimelineKind, number> = { meeting: 4, blocked: 3, hold: 2, available: 1 };
+/**
+ * One resolved timeline for an issuer's day: availability, blocks, holds and meetings merged, with
+ * overlapping fragments collapsed. Where several overlap, meeting > blocked > hold > available.
+ * Time with nothing recorded is left out (not available).
+ */
+export function resolveTimeline(items: { start: Date | string; end: Date | string; kind: TimelineKind; ref?: string }[]): TimelineSegment[] {
+  const cuts = [...new Set(items.flatMap((i) => [+new Date(i.start), +new Date(i.end)]))].sort((a, b) => a - b);
+  const out: TimelineSegment[] = [];
+  for (let k = 0; k < cuts.length - 1; k++) {
+    const [a, b] = [cuts[k], cuts[k + 1]];
+    const top = items
+      .filter((i) => +new Date(i.start) <= a && +new Date(i.end) >= b)
+      .sort((x, y) => RANK[y.kind] - RANK[x.kind])[0];
+    if (!top) continue;
+    const last = out[out.length - 1];
+    if (last && +last.end === a && last.kind === top.kind && last.ref === top.ref) last.end = new Date(b);
+    else out.push({ start: new Date(a), end: new Date(b), kind: top.kind, ref: top.ref });
+  }
+  return out;
+}

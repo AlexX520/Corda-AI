@@ -82,6 +82,39 @@ export async function GET(req: Request) {
     const authorized = recipient
       ? meetings.filter((m) => m.approvedRecipients.includes(recipient))
       : meetings;
+    // "Changed since last sent": compare with the previous export of this planner to this audience.
+    const track = q.get('format') !== 'ics';
+    const previous = track
+      ? await db.exportLog.findFirst({
+          where: { conferenceId, scope, audienceId: id || null },
+          orderBy: { createdAt: 'desc' },
+        })
+      : null;
+    const since = (m: (typeof authorized)[number]) =>
+      !previous
+        ? ''
+        : !previous.meetingIds.includes(m.id)
+          ? 'New'
+          : m.changedAt && m.changedAt > previous.createdAt
+            ? 'Changed'
+            : '';
+    const removed = previous
+      ? await db.meeting.findMany({
+          where: { id: { in: previous.meetingIds.filter((x) => !authorized.some((m) => m.id === x)) } },
+          orderBy: { start: 'asc' },
+        })
+      : [];
+    const sinceNote = previous
+      ? `Changes since the version sent ${formatInTimeZone(previous.createdAt, c.timezone, 'MMM d, h:mm a')}: ${authorized.filter((m) => since(m) === 'New').length} new, ${authorized.filter((m) => since(m) === 'Changed').length} changed, ${removed.length} removed.`
+      : 'First version sent to this audience.';
+    if (track)
+      await db.exportLog.create({
+        data: { conferenceId, scope, audienceId: id || null, userId: user.id, meetingIds: authorized.map((m) => m.id) },
+      });
+    const counterpart = (m: { issuerId: string; investorId: string }) =>
+      scope === 'issuer'
+        ? investors.find((x) => x.id === m.investorId)?.name || ''
+        : issuers.find((x) => x.id === m.issuerId)?.name || '';
     if (q.get('format') === 'ics') {
       if (scope !== 'meeting' || authorized.length !== 1)
         throw new Error('Select one authorized confirmed meeting.');
@@ -123,6 +156,7 @@ export async function GET(req: Request) {
         .fontSize(8)
         .fillColor('#68756d')
         .text(`${c.name} · ${c.location} · times in ${c.timezone} · ${authorized.length} confirmed meeting${authorized.length === 1 ? '' : 's'}`);
+      doc.moveDown(0.2).fontSize(8).fillColor('#a16b27').text(sinceNote);
       doc.moveDown(0.8);
       const cols = clientFacing
         ? [
@@ -172,7 +206,7 @@ export async function GET(req: Request) {
             .join(' · ') || 'To be confirmed';
         const ready = cov.length >= 2 && (!m.requiresCube || cube);
         const cells = clientFacing
-          ? [day === lastDay ? '' : day, time, scope === 'issuer' ? investor : issuer, place]
+          ? [day === lastDay ? '' : day, since(m) ? `${time}  · ${since(m).toUpperCase()}` : time, scope === 'issuer' ? investor : issuer, place]
           : [
               day === lastDay ? '' : day,
               time,
@@ -194,6 +228,11 @@ export async function GET(req: Request) {
         doc.y += 6;
       }
       if (!authorized.length) doc.fontSize(9).fillColor('#68756d').text('No confirmed meetings yet.', 34, doc.y);
+      if (removed.length) {
+        doc.moveDown(0.6).fontSize(9).fillColor('#a33a2b').text('Removed since last sent', 34, doc.y);
+        for (const m of removed)
+          doc.fontSize(8).fillColor('#33453b').text(`${formatInTimeZone(m.start, c.timezone, 'EEE, MMM d h:mm a')} · ${counterpart(m)}${m.status === 'Cancelled' ? ' (cancelled)' : ''}`, 34, doc.y);
+      }
       doc.end();
       const pdf = await new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
       return new Response(new Uint8Array(pdf), { headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="${baseName}.pdf"`, 'Cache-Control': 'no-store' } });
@@ -202,7 +241,13 @@ export async function GET(req: Request) {
     wb.creator = 'Corda AI';
     const sheet = wb.addWorksheet(clientFacing ? 'Planner' : 'Conference Planner');
     // Column order requested by the desk: who meets whom, when, and which two bankers cover it.
-    sheet.columns = [
+    sheet.columns = clientFacing ? [
+      { header: 'Date', key: 'date', width: 13 },
+      { header: 'Time', key: 'time', width: 15 },
+      { header: scope === 'issuer' ? 'Investor' : 'Issuer', key: 'counterpart', width: 30 },
+      { header: 'Location', key: 'place', width: 32 },
+      { header: 'Since last sent', key: 'since', width: 16 },
+    ] : [
       { header: 'Date', key: 'date', width: 13 },
       { header: 'Time', key: 'time', width: 15 },
       { header: 'Investor Name', key: 'investor', width: 26 },
@@ -219,13 +264,26 @@ export async function GET(req: Request) {
             { header: 'Meeting ID', key: 'id', width: 28 },
             { header: 'Approved recipients', key: 'recipients', width: 40 },
           ]),
+      { header: 'Since last sent', key: 'since', width: 16 },
     ];
     for (const m of authorized) {
       const i = issuers.find((x) => x.id === m.issuerId)!, v = investors.find((x) => x.id === m.investorId)!;
       const cov = coverage.filter((a) => a.meetingId === m.id), room = roomAssignments.find((a) => a.meetingId === m.id), cube = cubes.find((x) => x.id === room?.cubeId);
       const person = (bankerId: string) => people.find((p) => p.id === bankerId)?.name || bankerId;
       const ordered = [...cov.filter((a) => a.coverageRole === 'Primary'), ...cov.filter((a) => a.coverageRole !== 'Primary')];
+      const place = [cube?.name, m.location && !m.location.startsWith(cube?.name || '\u0000') ? m.location : ''].filter(Boolean).join(' · ') || 'To be confirmed';
+      if (clientFacing) {
+        sheet.addRow({
+          date: formatInTimeZone(m.start, c.timezone, 'EEE, MMM d'),
+          time: `${formatInTimeZone(m.start, c.timezone, 'h:mm a')} – ${formatInTimeZone(m.end, c.timezone, 'h:mm a')}`,
+          counterpart: safe(scope === 'issuer' ? v.name : i.name),
+          place: safe(place),
+          since: since(m),
+        });
+        continue;
+      }
       sheet.addRow({
+        since: since(m),
         date: formatInTimeZone(m.start, c.timezone, 'yyyy-MM-dd'),
         time: `${formatInTimeZone(m.start, c.timezone, 'HH:mm')}–${formatInTimeZone(m.end, c.timezone, 'HH:mm')}`,
         investor: safe(v.name),
@@ -243,13 +301,24 @@ export async function GET(req: Request) {
     sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
     sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF123D35' } };
     sheet.views = [{ state: 'frozen', ySplit: 1 }];
-    sheet.autoFilter = { from: 'A1', to: clientFacing ? 'J1' : 'L1' };
-    sheet.eachRow((row, rowNumber) => { if (rowNumber > 1 && row.getCell('status').value === 'Needs resources') row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1D6' } }; });
+    sheet.autoFilter = { from: 'A1', to: clientFacing ? 'E1' : 'M1' };
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      if (row.getCell('since').value) row.getCell('since').font = { bold: true, color: { argb: 'FF9A5B00' } };
+      if (!clientFacing && row.getCell('status').value === 'Needs resources') row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF1D6' } };
+    });
+    if (removed.length) {
+      sheet.addRow([]);
+      sheet.addRow(['Removed since last sent']).font = { bold: true, color: { argb: 'FFA33A2B' } };
+      for (const m of removed)
+        sheet.addRow([formatInTimeZone(m.start, c.timezone, 'EEE, MMM d'), formatInTimeZone(m.start, c.timezone, 'h:mm a'), safe(counterpart(m)), m.status === 'Cancelled' ? 'Cancelled' : 'Removed']);
+    }
     const info = wb.addWorksheet('Read me');
     info.addRow(['Title', `${c.name} — ${title}`]);
     info.addRow(['Audience', recipient || 'Internal authenticated user']);
     info.addRow(['Scope', scope]);
     info.addRow(['Timezone', c.timezone]);
+    info.addRow(['Since last sent', sinceNote]);
     info.addRow([
       'Note',
       'Only confirmed meetings are included. Excel is an export artifact; the database is the source of truth.',

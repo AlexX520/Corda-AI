@@ -11,6 +11,10 @@ export const auditQuerySchema = z.object({
   issuer: z.string().max(100).optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** History of one record: a meeting (incl. its request and source email), a request, or an email. */
+  meeting: z.string().max(100).optional(),
+  request: z.string().max(100).optional(),
+  email: z.string().max(100).optional(),
   page: z.coerce.number().int().min(1).max(100000).default(1),
   pageSize: z.coerce.number().int().min(10).max(500).default(50),
 });
@@ -47,6 +51,22 @@ async function where(p: AuditQuery): Promise<Prisma.AuditLogWhereInput> {
     const meetings = await db.meeting.findMany({ where: { issuerId: p.issuer }, select: { id: true } });
     and.push({ OR: [{ issuerId: p.issuer }, { meetingId: { in: meetings.map((m) => m.id) } }, { entityId: p.issuer }] });
   }
+  if (p.meeting) {
+    const m = await db.meeting.findUnique({ where: { id: p.meeting }, select: { requestId: true, sourceEmailId: true } });
+    and.push({
+      OR: [
+        { meetingId: p.meeting },
+        { entityId: p.meeting },
+        ...(m?.requestId ? [{ entityId: m.requestId }] : []),
+        ...(m?.sourceEmailId ? [{ emailId: m.sourceEmailId, entityType: 'Proposal' }] : []),
+      ],
+    });
+  }
+  if (p.request) {
+    const meetings = await db.meeting.findMany({ where: { requestId: p.request }, select: { id: true } });
+    and.push({ OR: [{ entityId: p.request }, { meetingId: { in: meetings.map((m) => m.id) } }] });
+  }
+  if (p.email) and.push({ OR: [{ emailId: p.email }, { entityId: p.email }] });
   if (p.from) and.push({ createdAt: { gte: new Date(`${p.from}T00:00:00Z`) } });
   if (p.to) and.push({ createdAt: { lt: new Date(+new Date(`${p.to}T00:00:00Z`) + 86400000) } });
   const q = p.q?.trim();
