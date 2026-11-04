@@ -152,3 +152,75 @@ per-draft recipient allowlist, searchable audit columns (`issuerId`, `meetingId`
   - Outlook moves to a Settings page.
   - Headlines are direction-aware.
   - "Requested by" shows the real sender (and "via" the forwarder).
+
+## Phase 2: Banker experience
+
+Migration `20261104090000_v4_phase2` (additive) adds `ExportLog.meetingIds`.
+
+- **My day** is the banker home page (it replaces the overview carousel and stat tiles). It has three parts:
+  - My meetings today and tomorrow, with time, investor, issuer, room and co-bankers. Seats proposed by an
+    unapproved allocation run are marked **Pending**.
+  - "Needs my decision": items assigned to me or my issuers, with escalations pinned and urgent items next.
+  - "What changed": changes by others to my issuers and meetings since my last visit, with "Mark as seen"
+    (`markSeen` command, using `User.lastSeenAt`).
+- **Queue**:
+  - Filters: Mine / My issuers / Everyone, Urgent, Needs triage, and Ignored (opens Inbox → Ignored).
+  - A Dense toggle; filter and density are remembered per browser.
+  - Bulk select and **bulk approve** (`bulkApprove`), only for clean items: verified sender, no escalation,
+    no open question, not conditional. Every item goes through the normal approval checks and audit. Items
+    that need judgement (for example a possible duplicate) are skipped, with the reason.
+  - Keyboard: `j`/`k` move, `Enter`/`e` open, `a` approve (clean items only), `r` reject (asks for a
+    reason), `x` select.
+  - **Deep links**: the URL shows the page and the open email, meeting or request (`?page=queue&email=…`,
+    `?meeting=…`, `?request=…`). Browser back and forward work.
+- **History** tab on every meeting and request: a readable timeline from `/api/audit?meeting=` /
+  `?request=` showing who did what, the reasons and the source email. Sales may read the history of their own
+  requests and their clients' meetings only, without before/after data.
+- **Allocation**:
+  - Manual edits are checked against the rest of the run (a banker or room can't be in two overlapping
+    meetings; room capacity) with readable reasons.
+  - Incomplete rows say why ("Needs 2 bankers, has 1").
+  - A proposal is **Stale** when its meeting changed after the run; stale proposals are skipped on approval.
+- **Availability**:
+  - Each issuer has one resolved timeline per day: open, meeting, blocked and hold, with overlapping fragments
+    merged (`resolveTimeline`). The raw windows are under "Edit recorded windows".
+  - Adding a window extends any overlapping or touching window.
+  - A new **Narrow this day** operation replaces that day's availability.
+- **Exports**:
+  - Issuer and investor Excel planners are client-ready (date, time, counterpart, location).
+  - Every planner export is logged. The next one marks meetings **New**/**Changed** and lists those
+    **removed since last sent**, in both Excel and PDF.
+- **Layout**:
+  - The sidebar marketing card is gone and Outlook now lives in Settings.
+  - Schedule opens in Table view by default.
+  - Sales overview statuses use plain words.
+  - The queue toolbar wraps at phone width.
+- **Ask Corda v1** has a page and a drawer (the **Ask** button in the top bar). It is read-only, cites the
+  meetings and history entries it used, and is role-scoped: sales see only their clients and no internal
+  reasons. The deterministic answerer covers four patterns:
+  - meeting history ("when was X × Y moved")
+  - my day
+  - free slots for X and Y on a day
+  - meetings without a banker or room
+
+  Requests to act ("move…", "cancel…") are refused. With `LLM_API_KEY` set, the retrieved records are
+  rephrased by the LLM, which may cite only those records; if that fails, the deterministic answer is used.
+  Questions are audited.
+- **Demo data**: ABS East runs Monday to Wednesday of the current week (next week once it is Thursday), and the
+  SF Summit is 14 days later. Set `DEMO_FIXED_DATES=true` to restore the old fixed October dates.
+
+### How to verify
+- `npx tsc --noEmit` and `npm test`. New tests: `ask.test.ts`, timeline in `scheduling.test.ts`, durations in
+  `request-parser.test.ts`, `allocation-location.test.ts`, and the round-2 fixtures in `round2.test.ts`.
+- `db-reset.sh`, sign in as Alex Morgan:
+  - My day is the home page.
+  - In the Action queue, try Mine / Urgent / Dense, `j j Enter`, then browser Back.
+  - Tick two clean items and click Approve.
+  - Open a meeting → History.
+  - Schedule → Issuer availability shows the timeline.
+  - Use the Ask button.
+
+### Known limits
+- Pending seats appear on My day, not yet on the planner grid.
+- Ask Corda without an LLM only understands the four patterns above.
+- Bulk approve does not record the issuer's and investor's consent, so moves still need the full review.

@@ -6,6 +6,7 @@ import type { AppState } from '@/lib/types';
 import { Button } from './ui/button';
 import { Sheet } from './ui/sheet';
 import { Badge, Field, fmt, names, Run } from './shared';
+import { HistoryTimeline } from './history';
 
 type Meeting = AppState['meetings'][number];
 type Check = { hard: string[]; soft: string[] };
@@ -16,11 +17,13 @@ export function MeetingDrawer({
   data,
   run,
   close,
+  onOpenEmail,
 }: {
   meeting: Meeting;
   data: AppState;
   run: Run;
   close: () => void;
+  onOpenEmail?: (id: string) => void;
 }) {
   const n = names(data);
   const c = data.conferences.find((x) => x.id === meeting.conferenceId)!;
@@ -56,9 +59,6 @@ export function MeetingDrawer({
         .sort((a, b) => Number(b.coverageRole === 'Primary') - Number(a.coverageRole === 'Primary'))
         .map((a) => `${n.user(a.bankerId)} (${a.coverageRole})`)
     : meeting.bankerIds.map(n.user);
-  const history = data.auditLogs.filter(
-    (a) => a.entityType === 'Meeting' && a.entityId === meeting.id,
-  );
   return (
     <Sheet
       open
@@ -165,21 +165,10 @@ export function MeetingDrawer({
               ))}
             </div>
           )}
-          {history.length > 0 && (
-            <div className="meeting-history">
-              <span className="dc-label">Changes</span>
-              {history.slice(0, 6).map((h) => {
-                const after = (h.after || {}) as { reason?: string };
-                return (
-                  <p key={h.id}>
-                    <strong>{h.action}</strong> · {n.user(h.actorId)} ·{' '}
-                    {fmt(h.createdAt, c.timezone, 'MMM d, h:mm a')}
-                    {after.reason ? <em> — “{after.reason}”</em> : null}
-                  </p>
-                );
-              })}
-            </div>
-          )}
+          <details className="meeting-history" open={false}>
+            <summary className="dc-label">History</summary>
+            <HistoryTimeline meetingId={meeting.id} timezone={c.timezone} onOpenEmail={onOpenEmail} />
+          </details>
         </section>
       )}
       {mode === 'edit' && (

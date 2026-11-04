@@ -444,7 +444,8 @@ export function AvailabilityForm({
         <div className="two-cols">
           <Field label="Operation">
             <select value={operation} onChange={(e) => setOperation(e.target.value)}>
-              <option value="add">Add availability / block / hold</option>
+              <option value="add">Add (extends overlapping windows)</option>
+              <option value="narrow">Narrow this day to this window</option>
               <option value="remove">Remove availability in interval</option>
               <option value="replace">Replace all approved availability</option>
             </select>

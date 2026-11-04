@@ -22,7 +22,9 @@ import {
   LogOut,
   Loader2,
   Mail,
+  MessageCircleQuestion,
   Settings,
+  Sun,
   MapPin,
   MoreHorizontal,
   Plus,
@@ -43,10 +45,12 @@ import { EmailForm, RequestForm } from './forms';
 import { DraftEditor, EmailReview, type Compose } from './review';
 import { Sheet } from './ui/sheet';
 import { RequestDecision } from './decision';
-import { AvailabilityView, PlannerView, RequestDetail, RequestsView } from './views';
+import { AvailabilityView, PlannerView, RequestDetail, RequestsView, requestStatus } from './views';
 import { ResourceAllocationView } from './resources';
 import { AuditTrail } from './audit';
 import { SalesEmailsView } from './sales';
+import { MyDay } from './myday';
+import { AskCorda, AskPanel } from './ask';
 import { MeetingDrawer, MeetingForm } from './meeting';
 import { actionKind, askOf, askPosition, kindLabel, kindOrder, openWork, type KindId } from './queue-model';
 import { windowLabel } from '@/lib/review-rules';
@@ -57,6 +61,7 @@ const menu = [
   { id: 'emails', label: 'My emails', icon: Mail },
   { id: 'schedule', label: 'Schedule', icon: CalendarDays },
   { id: 'allocation', label: 'Allocation', icon: SlidersHorizontal },
+  { id: 'ask', label: 'Ask Corda', icon: MessageCircleQuestion },
 ];
 
 type Action = AppState['actions'][number];
@@ -122,6 +127,7 @@ function CordaMark() {
 export function Workspace() {
   const [data, setData] = useState<AppState | null>(null),
     [page, setPage] = useState('overview'),
+    [askOpen, setAskOpen] = useState(false),
     [conferenceId, setConferenceId] = useState('abs-east'),
     [search, setSearch] = useState(''),
     [toast, setToast] = useState<{ message: string; error?: boolean } | null>(null),
@@ -142,6 +148,7 @@ export function Workspace() {
     [help, setHelp] = useState(false),
     [busy, setBusy] = useState(false),
     [sheetRequestId, setSheetRequestId] = useState<string | null>(null),
+    [inboxTab, setInboxTab] = useState<'review' | 'ignored'>('review'),
     [mobile, setMobile] = useState(false);
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
@@ -197,11 +204,47 @@ export function Workspace() {
     navigate('settings');
     history.replaceState(null, '', location.pathname);
   }, []);
-  // Deep link: ?email=<id> opens that email's review.
-  useEffect(() => {
-    const id = new URLSearchParams(location.search).get('email');
-    if (id) setReview({ emailId: id });
+  // Deep links: the URL reflects the page and the open item (?page=queue&email=<id>,
+  // ?meeting=<id>, ?request=<id>); the browser's back and forward buttons walk through them.
+  const urlReady = useRef(false),
+    popping = useRef(false);
+  const applyUrl = useCallback(() => {
+    const q = new URLSearchParams(location.search);
+    if (q.get('outlook')) return;
+    const p = q.get('page') || 'overview';
+    setPage(p);
+    if (p === 'queue') setQueueSection((['emails', 'drafts'].includes(q.get('section') || '') ? q.get('section') : 'tasks') as 'tasks' | 'emails' | 'drafts');
+    if (p === 'schedule') setScheduleSection(q.get('section') === 'availability' ? 'availability' : 'schedule');
+    setReview(q.get('email') ? { emailId: q.get('email')! } : null);
+    setMeetingId(q.get('meeting'));
+    setSheetRequestId(q.get('request'));
   }, []);
+  useEffect(() => {
+    applyUrl();
+    urlReady.current = true;
+    const onPop = () => {
+      popping.current = true;
+      applyUrl();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [applyUrl]);
+  useEffect(() => {
+    if (!urlReady.current) return;
+    const q = new URLSearchParams();
+    if (page !== 'overview') q.set('page', page);
+    if (page === 'queue' && queueSection !== 'tasks') q.set('section', queueSection);
+    if (page === 'schedule' && scheduleSection !== 'schedule') q.set('section', scheduleSection);
+    if (review) q.set('email', review.emailId);
+    if (meetingId) q.set('meeting', meetingId);
+    if (sheetRequestId) q.set('request', sheetRequestId);
+    const url = location.pathname + (q.toString() ? `?${q}` : '');
+    const was = popping.current;
+    popping.current = false;
+    if (url === location.pathname + location.search) return;
+    if (was) history.replaceState(null, '', url);
+    else history.pushState(null, '', url);
+  }, [page, queueSection, scheduleSection, review, meetingId, sheetRequestId]);
   // Keep a linked inbox fresh while the workspace is open.
   const outlookLinked = Boolean(data?.outlook?.connected);
   useEffect(() => {
@@ -406,9 +449,11 @@ export function Workspace() {
                 className={page === m.id ? 'nav-item active' : 'nav-item'}
                 onClick={() => navigate(m.id)}
               >
-                <m.icon size={18} strokeWidth={1.7} />
+                {banker && m.id === 'overview' ? <Sun size={18} strokeWidth={1.7} /> : <m.icon size={18} strokeWidth={1.7} />}
                 <span>
-                  {!banker && m.id === 'requests'
+                  {banker && m.id === 'overview'
+                    ? 'My day'
+                    : !banker && m.id === 'requests'
                     ? 'Request tracker'
                     : !banker && m.id === 'schedule'
                       ? 'Schedule'
@@ -482,7 +527,9 @@ export function Workspace() {
                 ? 'Request tracker'
                 : !banker && page === 'schedule'
                   ? 'Schedule'
-                  : menu.find((m) => m.id === page)?.label || { audit: 'Audit trail', settings: 'Settings', emails: 'My emails' }[page]}
+                  : banker && page === 'overview'
+                    ? 'My day'
+                    : menu.find((m) => m.id === page)?.label || { audit: 'Audit trail', settings: 'Settings', emails: 'My emails' }[page]}
             </strong>
           </div>
           <div className="topbar-right">
@@ -499,6 +546,11 @@ export function Workspace() {
               <span className="demo-pill" title="Demo mode: profiles sign in without a password and all data is synthetic.">
                 Demo mode
               </span>
+            )}
+            {page !== 'ask' && (
+              <button className="ask-trigger" onClick={() => setAskOpen(true)} aria-label="Ask Corda">
+                <MessageCircleQuestion size={16} /> <span>Ask</span>
+              </button>
             )}
             <div className="bell-wrap">
               <button
@@ -592,7 +644,20 @@ export function Workspace() {
               <button className={scheduleSection === 'availability' ? 'active' : ''} onClick={() => setScheduleSection('availability')}>Issuer availability</button>
             </div>
           )}
-          {page === 'overview' && (
+          {page === 'overview' && banker && (
+            <MyDay
+              data={data}
+              conferenceId={conferenceId}
+              openActions={openActions}
+              run={run}
+              onAction={actionClick}
+              onOpenMeeting={setMeetingId}
+              onOpenQueue={() => navigate('queue')}
+              onOpenAudit={() => navigate('audit')}
+            />
+          )}
+          {page === 'ask' && <AskCorda data={data} onOpenMeeting={setMeetingId} />}
+          {page === 'overview' && !banker && (
             <>
               <div className="page-heading overview-heading">
                 <div>
@@ -719,16 +784,16 @@ export function Workspace() {
                       .filter((r) => r.conferenceId === conferenceId)
                       .slice(0, 5)
                       .map((r) => (
-                        <button key={r.id} onClick={() => navigate('requests')}>
+                        <button key={r.id} onClick={() => setSheetRequestId(r.id)}>
                           <Avatar
-                            name={n.issuer(r.issuerId)}
+                            name={n.investor(r.investorId)}
                             color={data.issuers.find((i) => i.id === r.issuerId)?.color}
                           />
                           <div>
-                            <strong>{n.issuer(r.issuerId)}</strong>
-                            <small>{n.investor(r.investorId)}</small>
+                            <strong>{n.investor(r.investorId)}</strong>
+                            <small>with {n.issuer(r.issuerId)}</small>
                           </div>
-                          <Badge>{r.status}</Badge>
+                          <Badge tone={requestStatus(r, 'SALES').tone || undefined}>{requestStatus(r, 'SALES').text}</Badge>
                         </button>
                       ))}
                     {!data.requests.some((r) => r.conferenceId === conferenceId) && (
@@ -821,6 +886,8 @@ export function Workspace() {
           )}
           {page === 'queue' && queueSection === 'emails' && (
             <InboxView
+              key={inboxTab}
+              initialTab={inboxTab}
               data={data}
               conferenceId={conferenceId}
               search={search}
@@ -838,10 +905,19 @@ export function Workspace() {
               search={search}
               onClick={actionClick}
               run={run}
-              onOpenEmails={() => setQueueSection('emails')}
+              onOpenEmails={() => {
+                setInboxTab('review');
+                setQueueSection('emails');
+              }}
               onOpenDrafts={() => setQueueSection('drafts')}
+              onOpenIgnored={() => {
+                setInboxTab('ignored');
+                setQueueSection('emails');
+              }}
               focus={queueFocus}
               setFocus={setQueueFocus}
+              reload={reload}
+              notify={(message, error) => setToast({ message, error })}
             />
           )}
           {page === 'emails' && !banker && <SalesEmailsView data={data} search={search} />}
@@ -1096,8 +1172,13 @@ export function Workspace() {
           run={run}
         />
       )}
+      {askOpen && (
+        <Sheet open onOpenChange={(v) => !v && setAskOpen(false)} title="Ask Corda" description="Read-only answers from the schedule and its history, with sources.">
+          <AskPanel data={data} compact onOpenMeeting={(id) => { setAskOpen(false); setMeetingId(id); }} />
+        </Sheet>
+      )}
       {drawerMeeting && (
-        <MeetingDrawer key={drawerMeeting.id} meeting={drawerMeeting} data={data} run={run} close={() => setMeetingId(null)} />
+        <MeetingDrawer key={drawerMeeting.id} meeting={drawerMeeting} data={data} run={run} close={() => setMeetingId(null)} onOpenEmail={banker ? (id) => { setMeetingId(null); setReview({ emailId: id }); } : undefined} />
       )}
       {newMeeting && (
         <Sheet open onOpenChange={(v) => !v && setNewMeeting(false)} title="New meeting" description={`${c.name} · checked against availability, meetings, bankers and rooms`}>
@@ -1304,6 +1385,7 @@ function InboxView({
   outlookConnected,
   onSync,
   onConnect,
+  initialTab = 'review',
 }: {
   data: AppState;
   conferenceId: string;
@@ -1313,8 +1395,9 @@ function InboxView({
   outlookConnected: boolean;
   onSync: () => void;
   onConnect: () => void;
+  initialTab?: 'review' | 'ignored';
 }) {
-  const [tab, setTab] = useState<(typeof emailTabs)[number]['id'] | 'triage'>('review'),
+  const [tab, setTab] = useState<(typeof emailTabs)[number]['id'] | 'triage'>(initialTab),
     [category, setCategory] = useState<string | null>(null),
     [issuer, setIssuer] = useState('All issuers');
   const n = names(data);
@@ -1491,8 +1574,11 @@ function QueueView({
   run,
   onOpenEmails,
   onOpenDrafts,
+  onOpenIgnored,
   focus,
   setFocus,
+  reload,
+  notify,
 }: {
   data: AppState;
   conferenceId: string;
@@ -1501,10 +1587,39 @@ function QueueView({
   run: Run;
   onOpenEmails: () => void;
   onOpenDrafts: () => void;
+  onOpenIgnored: () => void;
   focus: 'all' | 'triage' | KindId;
   setFocus: (f: 'all' | 'triage' | KindId) => void;
+  reload: () => Promise<void>;
+  notify: (message: string, error?: boolean) => void;
 }) {
   const [status, setStatus] = useState('Open');
+  const pref = (k: string, d: string) => {
+    try {
+      return localStorage.getItem(`corda.queue.${k}`) || d;
+    } catch {
+      return d;
+    }
+  };
+  const save = (k: string, v: string) => {
+    try {
+      localStorage.setItem(`corda.queue.${k}`, v);
+    } catch {
+      /* per-viewer convenience only */
+    }
+  };
+  const [scope, setScopeState] = useState<'mine' | 'issuers' | 'everyone'>('everyone');
+  const [urgentOnly, setUrgentOnly] = useState(false);
+  const [dense, setDenseState] = useState(false);
+  useEffect(() => {
+    setScopeState(pref('scope', 'everyone') as 'mine' | 'issuers' | 'everyone');
+    setDenseState(pref('dense', '0') === '1');
+  }, []);
+  const setScope = (v: 'mine' | 'issuers' | 'everyone') => (setScopeState(v), save('scope', v));
+  const setDense = (v: boolean) => (setDenseState(v), save('dense', v ? '1' : '0'));
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [cursor, setCursor] = useState(0);
+  const [bulkResult, setBulkResult] = useState<{ approved: number; skipped: { title: string; reason: string }[] } | null>(null);
   const [sort, setSort] = useState<SortMode>('soonest');
   const [expanded, setExpanded] = useState<string | null>(null);
   const n = names(data);
@@ -1516,13 +1631,21 @@ function QueueView({
   const work = openWork(data, conferenceId);
   const text = (a: Action) =>
     `${a.title} ${a.recommendation} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`.toLowerCase().includes(search.toLowerCase());
+  const me = data.user.id;
+  const inScope = (a: Action) =>
+    scope === 'everyone' ||
+    a.assignedTo === me ||
+    (scope === 'issuers' && data.issuers.find((i) => i.id === a.issuerId)?.ownerId === me);
   const pool = data.actions.filter(
     (a) =>
       (status === 'All' ||
         a.status === status ||
         (status === 'Open' && a.status === 'Acknowledged' && a.assignedTo === data.user.id)) &&
-      text(a),
+      text(a) &&
+      inScope(a) &&
+      (!urgentOnly || a.priority === 'Urgent' || actionKind(a, data).id === 'escalation'),
   );
+  const ignoredCount = data.emails.filter((e) => e.status === 'Ignored' && (!e.conferenceId || e.conferenceId === conferenceId)).length;
   const triage = sortActions(pool.filter((a) => !a.conferenceId), data, sort);
   const actions = sortActions(
     pool.filter((a) => a.conferenceId === conferenceId && (focus === 'all' || actionKind(a, data).id === focus)),
@@ -1530,6 +1653,65 @@ function QueueView({
     sort,
   ).sort((x, y) => Number(y.status === 'Acknowledged') - Number(x.status === 'Acknowledged'));
   const kindCount = (k: KindId) => work.conference.filter((a) => actionKind(a, data).id === k).length;
+  const showTriageLane = (focus === 'all' || focus === 'triage') && triage.length > 0;
+  const visible = [...(showTriageLane ? triage : []), ...(focus !== 'triage' ? actions : [])];
+  /** Clean = safe to approve in bulk: verified sender, no escalation, no open question, not conditional. */
+  const clean = (a: Action) => {
+    const { email, proposal, extraction } = askOf(a, data);
+    return Boolean(
+      a.status === 'Open' && email && proposal?.status === 'Pending' && extraction &&
+        ['verified', 'internal'].includes(email.senderStatus) && !email.suspicious && !email.escalation &&
+        !extraction.uncertainties?.length && !extraction.conditional && actionKind(a, data).id !== 'escalation',
+    );
+  };
+  async function bulkApprove(ids: string[]) {
+    if (!ids.length) return;
+    try {
+      const r = await fetch('/api/commands', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'bulkApprove', data: { actionIds: ids } }) });
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error);
+      const res = out.result as { approved: number; results: { actionId: string; ok: boolean; reason?: string }[] };
+      setBulkResult({
+        approved: res.approved,
+        skipped: res.results.filter((x) => !x.ok).map((x) => ({ title: data.actions.find((a) => a.id === x.actionId)?.title || 'Item', reason: x.reason || '' })),
+      });
+      setSelected(new Set());
+      await reload();
+      notify(`${res.approved} approved${res.results.length - res.approved ? `, ${res.results.length - res.approved} left for review` : ''}.`);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Bulk approval failed.', true);
+    }
+  }
+  async function rejectOne(a: Action) {
+    const reason = window.prompt(`Reject “${a.title}”? Give a short reason (shared with the requester).`);
+    if (reason === null) return;
+    if (a.proposalId) await run('review', { id: a.proposalId, decision: 'reject', note: reason || 'Rejected from the queue' }, 'Ask rejected.');
+    else await run('action', { id: a.id, status: 'Rejected' }, 'Action rejected');
+  }
+  // Keyboard: j/k move, Enter or e open, a approve (clean items only), r reject, x select.
+  const keyState = useRef({ visible, cursor });
+  keyState.current = { visible, cursor };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable || document.querySelector('[role="dialog"]')) return;
+      const { visible: list, cursor: at } = keyState.current;
+      const a = list[Math.min(at, list.length - 1)];
+      if (e.key === 'j') setCursor(Math.min(at + 1, list.length - 1));
+      else if (e.key === 'k') setCursor(Math.max(at - 1, 0));
+      else if ((e.key === 'Enter' || e.key === 'e') && a) onClick(a);
+      else if (e.key === 'a' && a) clean(a) ? void bulkApprove([a.id]) : notify('This item needs a full review: open it with Enter.', true);
+      else if (e.key === 'r' && a) void rejectOne(a);
+      else if (e.key === 'x' && a && clean(a)) setSelected((s) => { const n = new Set(s); n.has(a.id) ? n.delete(a.id) : n.add(a.id); return n; });
+      else return;
+      e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
+  useEffect(() => {
+    document.querySelector('.decision-row.kbd-focus')?.scrollIntoView({ block: 'nearest' });
+  }, [cursor]);
   const primaryLabel = (a: AppState['actions'][number]) => {
     if (/escalation/i.test(a.type)) return 'Handle escalation';
     if (a.type === 'Resource allocation') return 'Review allocation';
@@ -1546,9 +1728,19 @@ function QueueView({
     const summary = askLine(a, data, conference.timezone) || a.recommendation;
     const pos = askPosition(a, data);
     const email = askOf(a, data).email;
+    const index = visible.indexOf(a);
     return (
-      <div className={`decision-row kind-${kind.id}`} key={a.id}>
+      <div className={`decision-row kind-${kind.id} ${index === cursor ? 'kbd-focus' : ''}`} key={a.id} onMouseEnter={() => setCursor(index)}>
         <span className="decision-priority-mark" />
+        <label className="bulk-check" title={clean(a) ? 'Select for bulk approve' : 'Needs a full review (not eligible for bulk approve)'}>
+          <input
+            type="checkbox"
+            aria-label={`Select ${a.title}`}
+            disabled={!clean(a)}
+            checked={selected.has(a.id)}
+            onChange={(e) => setSelected((s) => { const n = new Set(s); e.target.checked ? n.add(a.id) : n.delete(a.id); return n; })}
+          />
+        </label>
         <div className="decision-main">
           <div className="decision-kicker">
             <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
@@ -1609,7 +1801,8 @@ function QueueView({
       </div>
     );
   };
-  const showTriage = (focus === 'all' || focus === 'triage') && triage.length > 0;
+  const showTriage = showTriageLane;
+  const cleanVisible = visible.filter(clean);
   return (
     <>
       <div className="page-heading action-queue-heading">
@@ -1660,12 +1853,47 @@ function QueueView({
             })}
           </div>
           <div className="decision-toolbar-right">
+            <div className="scope-toggle" role="group" aria-label="Whose items">
+              {(['mine', 'issuers', 'everyone'] as const).map((v) => (
+                <button key={v} className={scope === v ? 'active' : ''} onClick={() => setScope(v)}>
+                  {v === 'mine' ? 'Mine' : v === 'issuers' ? 'My issuers' : 'Everyone'}
+                </button>
+              ))}
+            </div>
+            <button className={`chip ${urgentOnly ? 'active' : ''}`} aria-pressed={urgentOnly} onClick={() => setUrgentOnly(!urgentOnly)}>Urgent</button>
+            {ignoredCount > 0 && <button className="chip" onClick={onOpenIgnored}>Ignored <span>{ignoredCount}</span></button>}
+            <button className={`chip ${dense ? 'active' : ''}`} aria-pressed={dense} onClick={() => setDense(!dense)}>Dense</button>
             <SortToggle value={sort} onChange={setSort} />
             <select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>
               {['Open', 'Resolved', 'Rejected', 'All'].map((s) => <option key={s}>{s}</option>)}
             </select>
           </div>
         </div>
+        {(selected.size > 0 || cleanVisible.length > 0) && (
+          <div className="bulk-bar">
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={cleanVisible.length > 0 && cleanVisible.every((a) => selected.has(a.id))}
+                onChange={(e) => setSelected(e.target.checked ? new Set(cleanVisible.map((a) => a.id)) : new Set())}
+              />
+              <span>{selected.size ? `${selected.size} selected` : `Select all ${cleanVisible.length} clean items`}</span>
+            </label>
+            {selected.size > 0 && (
+              <Button size="sm" onClick={() => bulkApprove([...selected])}>
+                Approve {selected.size}
+              </Button>
+            )}
+            <small className="muted">Clean = verified sender, no open questions, not an escalation. Each one is still checked and audited. Keys: j/k move · Enter open · a approve · r reject · x select</small>
+          </div>
+        )}
+        {bulkResult && bulkResult.skipped.length > 0 && (
+          <div className="bulk-result">
+            <strong>{bulkResult.skipped.length} left for a full review</strong>
+            <ul>{bulkResult.skipped.map((x, i) => <li key={i}>{x.title}: {x.reason}</li>)}</ul>
+            <button className="text-button" onClick={() => setBulkResult(null)}>Dismiss</button>
+          </div>
+        )}
         {showTriage && (
           <div className="triage-lane">
             <div className="triage-head">
@@ -1675,7 +1903,7 @@ function QueueView({
             <div className="decision-list">{triage.map(row)}</div>
           </div>
         )}
-        {focus !== 'triage' && <div className="decision-list">{actions.map(row)}</div>}
+        {focus !== 'triage' && <div className={`decision-list ${dense ? 'dense' : ''}`}>{actions.map(row)}</div>}
         {!actions.length && !showTriage && (
           <Empty
             title="Nothing waiting on you"

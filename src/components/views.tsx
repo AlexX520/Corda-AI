@@ -21,6 +21,8 @@ import {
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { AvailabilityForm } from './forms';
+import { HistoryTimeline } from './history';
+import { resolveTimeline, type TimelineKind, type TimelineSegment } from '@/lib/scheduling';
 import { Avatar, Badge, Empty, Field, fmt, names, Run } from './shared';
 const requestTabs = [
   {
@@ -490,6 +492,10 @@ export function RequestDetail({
             Cancel this request
           </Button>
         )}
+        <details className="meeting-history">
+          <summary className="dc-label">History</summary>
+          <HistoryTimeline requestId={r.id} timezone={c.timezone} />
+        </details>
         <small className="muted">Last updated {fmt(r.updatedAt, c.timezone)}</small>
       </div>
     </Dialog>
@@ -581,6 +587,24 @@ export function AvailabilityView({
                   <span>{format(day, 'MMM d')}</span>
                 </div>
                 <div className="day-content">
+                  <DayTimeline
+                    segments={resolveTimeline([
+                      ...av
+                        .filter((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date)
+                        .map((a) => ({ start: a.start, end: a.end, kind: (a.kind === 'Available' ? 'available' : a.kind === 'Hold' ? 'hold' : 'blocked') as TimelineKind })),
+                      ...meetings
+                        .filter((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === date)
+                        .map((m) => ({ start: m.start, end: m.end, kind: 'meeting' as TimelineKind, ref: m.id })),
+                    ])}
+                    zone={c.timezone}
+                    label={(ref) => {
+                      const m = meetings.find((x) => x.id === ref);
+                      return m ? `${n.investor(m.investorId)}${m.location ? ` · ${m.location}` : ''}` : '';
+                    }}
+                  />
+                  {data.user.role === 'BANKER' && av.some((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date) && (
+                    <details className="raw-windows">
+                      <summary>Edit recorded windows</summary>
                   {av
                     .filter((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date)
                     .map((a) => (
@@ -618,19 +642,8 @@ export function AvailabilityView({
                           )}
                       </div>
                     ))}
-                  {meetings
-                    .filter((m) => fmt(m.start, c.timezone, 'yyyy-MM-dd') === date)
-                    .map((m) => (
-                      <div className="meeting-window" key={m.id}>
-                        <strong>
-                          {fmt(m.start, c.timezone, 'h:mm a')} – {fmt(m.end, c.timezone, 'h:mm a')}
-                        </strong>
-                        <p>{n.investor(m.investorId)}</p>
-                        <span>
-                          {m.status} · {m.location || 'Location TBC'}
-                        </span>
-                      </div>
-                    ))}
+                    </details>
+                  )}
                   {!av.some((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date) && (
                     <div className="day-empty">No approved availability</div>
                   )}
@@ -685,7 +698,7 @@ export function PlannerView({
   onOpenMeeting: (id: string) => void;
   onNewMeeting?: () => void;
 }) {
-  const [view, setView] = useState('calendar'),
+  const [view, setView] = useState('table'),
     [date, setDate] = useState(data.conferences.find((c) => c.id === conferenceId)!.startDate),
     [scope, setScope] = useState('master'),
     [audience, setAudience] = useState(''),
@@ -1030,4 +1043,40 @@ function BankerWeekCalendar({
 function formatHour(hour: number) {
   if (hour === 12) return '12 PM';
   return hour > 12 ? `${hour - 12} PM` : `${hour} AM`;
+}
+
+/** One resolved line per issuer-day: what is actually open, booked, blocked or held. */
+function DayTimeline({ segments, zone, label }: { segments: TimelineSegment[]; zone: string; label: (ref: string) => string }) {
+  if (!segments.length) return null;
+  const minutes = (d: Date) => Number(fmt(d.toISOString(), zone, 'H')) * 60 + Number(fmt(d.toISOString(), zone, 'm'));
+  const from = Math.min(8 * 60, ...segments.map((x) => minutes(x.start)));
+  const to = Math.max(19 * 60, ...segments.map((x) => minutes(x.end)));
+  const words: Record<TimelineKind, string> = { available: 'Open', meeting: 'Meeting', blocked: 'Not available', hold: 'Hold' };
+  return (
+    <div className="day-timeline">
+      <div className="dt-bar" aria-hidden>
+        {segments.map((x, i) => (
+          <span
+            key={i}
+            className={`dt-${x.kind}`}
+            style={{ left: `${((minutes(x.start) - from) / (to - from)) * 100}%`, width: `${((minutes(x.end) - minutes(x.start)) / (to - from)) * 100}%` }}
+          />
+        ))}
+      </div>
+      <ul>
+        {segments.map((x, i) => (
+          <li key={i} className={`dt-${x.kind}`}>
+            <i />
+            <strong>
+              {fmt(x.start.toISOString(), zone, 'h:mm')}–{fmt(x.end.toISOString(), zone, 'h:mm a')}
+            </strong>
+            <span>
+              {words[x.kind]}
+              {x.ref ? ` · ${label(x.ref)}` : ''}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
