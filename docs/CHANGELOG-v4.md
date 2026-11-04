@@ -224,3 +224,55 @@ Migration `20261104090000_v4_phase2` (additive) adds `ExportLog.meetingIds`.
 - Pending seats appear on My day, not yet on the planner grid.
 - Ask Corda without an LLM only understands the four patterns above.
 - Bulk approve does not record the issuer's and investor's consent, so moves still need the full review.
+
+## Phase 3: Sales and Manager views
+
+Migration `20261104120000_v4_phase3` (additive) adds:
+- `Conference.type` (Conference / NDR / Roadshow)
+- `Meeting.createdAt`
+- `Proposal.editedOnReview` and `Proposal.reviewedAt`
+
+- **Roles**:
+  - `MANAGER` can do everything a banker can (`isDesk()` in `src/lib/roles.ts`) and also sees team views.
+  - New demo user Morgan Lee · Head of Corporate Access (`morgan.lee@conferenceos.demo`). The profile picker
+    groups Management, Bankers and Sales.
+  - Navigation is role-specific. Home is Team overview for managers, My day for bankers and My clients for sales.
+  - Sales never see rooms, allocation, banker coverage or drafts plumbing. The planner shows them the location
+    instead of the banker and room columns.
+- **Manager home** (`computeMetrics` in `src/lib/metrics.ts`, computed from the database on every load):
+  - Confirmed meetings and fill rate (confirmed ÷ requested), overall and per event.
+  - Median time to confirm (request created → its meeting created).
+  - Email asks approved as read, approved after edits, or rejected.
+  - Open items per coordinator, with the age of the oldest.
+  - Issuer emails waiting on us for more than 4 h, and open escalations.
+  - Team workload, meetings per issuer and per investor.
+  - Event list with type and state. The NDR "Discover NDR — Boston" (1 day, 3 meetings plus 1 open request) is seeded.
+- **Demo history**: issuer emails over the past days, requests confirmed earlier and one open escalation. All are
+  marked (email `source = demo-history`, request notes say "[Demo history]"), and the dashboard says how many
+  records are demo data.
+- **Sales home, "My clients"**:
+  - Every request and meeting for the accounts the user covers, with status, reason and priority.
+  - A change feed and a link to My emails.
+  - Client itinerary: PDF and Excel downloads, plus a copyable client email.
+  - **Find a time** takes a wish list ("PIMCO wants Ford Credit, Ally and Bayview Wednesday"). It finds one open
+    time per issuer, searching the whole day (or the whole event) when no time is given, and warns about
+    duplicates ("PIMCO already meets Ford Credit Tue 1:00 PM").
+  - It sends one request per issuer to that issuer's banker, with a priority. The tracker has a Priority column.
+- **Leftovers from Phase 2**:
+  - Pending seats from an unapproved allocation now appear on the schedule table and grid ("◌ Pending").
+  - Bulk approve skips moves with the reason "needs the issuer and the investor to agree".
+- **LLM degradation**:
+  - All model calls go through `src/lib/llm.ts`. Extraction times out after 12 s, drafts and Ask Corda after 8 s
+    (`LLM_TIMEOUT_MS` sets both).
+  - After a network or auth failure the model is skipped for 60 s, so a batch falls straight back to the rule
+    parser.
+  - The fallback is shown as a note on the email, not as an open question.
+  - Provider error text, which can echo part of the key, is never shown or logged.
+  - With the provider unreachable, ingest runs in about 0.7 s and Ask Corda in under 0.1 s.
+
+### How to verify
+- New tests: `tests/metrics.test.ts` (fill rate, median time to confirm, handled/edited/rejected, ages,
+  unanswered > 4 h, workload) and `tests/llm-degrade.test.ts` (a hanging host gives a fast fallback with one attempt
+  and then the cool-down; no key in output).
+- `db-reset.sh`, then sign in as Morgan Lee (Team overview), Alex Morgan (My day) and James Wilson (My clients;
+  try "PIMCO wants Ford Credit, Ally Financial and Bayview Wednesday").
