@@ -8,6 +8,8 @@ import { eachDayOfInterval, format, parseISO } from 'date-fns';
 type Named = { id: string; name: string };
 export type ParsedRequest = {
   issuerId: string | null;
+  /** Wish list: every issuer named ("PIMCO wants Ford Credit, Ally and Discover Tue"). */
+  issuerIds: string[];
   investorId: string | null;
   date: string | null; // conference-local yyyy-MM-dd
   windowStart: string | null; // HH:mm
@@ -167,7 +169,9 @@ export function parseRequestText(
     !date && 'day',
     !windowStart && 'time',
   ].filter(Boolean) as string[];
-  return { issuerId, investorId, date, windowStart, windowEnd, duration, missing };
+  const investorAt = all.find((h) => h.kind === 'investor' && h.id === investorId)?.at;
+  const issuerIds = [...new Set(all.filter((h) => h.kind === 'issuer' && h.at !== investorAt).map((h) => h.id))];
+  return { issuerId, issuerIds: issuerIds.length ? issuerIds : issuerId ? [issuerId] : [], investorId, date, windowStart, windowEnd, duration, missing };
 }
 
 const WORD_HOURS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3 };

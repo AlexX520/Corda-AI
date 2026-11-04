@@ -1,3 +1,4 @@
+import { isDesk } from './roles';
 import { Prisma, User } from '@prisma/client';
 import { z } from 'zod';
 import { addMinutes } from 'date-fns';
@@ -46,6 +47,7 @@ import { accessTokenFor, outlookStatus } from './outlook-service';
 import { replyInThread, sendMail } from './graph';
 import { parseRequestText } from './request-parser';
 import { answerQuestion, llmPhrase } from './ask';
+import { computeMetrics, extractionEdited } from './metrics';
 import { getResourceState, handleResourceCommand } from './resource-service';
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -1179,7 +1181,7 @@ export async function command(user: User, type: string, input: unknown): Promise
     return db.$transaction(async (tx) => {
       await lock(tx);
       const r = await tx.meetingRequest.findUniqueOrThrow({ where: { id: p.id } });
-      if (user.role !== 'BANKER' && r.salespersonId !== user.id) throw new Error('Forbidden');
+      if (!isDesk(user.role) && r.salespersonId !== user.id) throw new Error('Forbidden');
       if (['Confirmed', 'Cancelled'].includes(r.status))
         throw new Error('Request cannot be changed.');
       const slot = { start: new Date(p.start), end: addMinutes(new Date(p.start), r.duration) };
@@ -1337,7 +1339,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         // Done outside the email flow (e.g. a manual move); recorded, not rejected.
         await tx.proposal.update({
           where: { id: p.id },
-          data: { status: 'Resolved', reviewerId: user.id, reviewNote: `Handled manually${p.note ? `: ${p.note}` : ''}` },
+          data: { status: 'Resolved', reviewedAt: new Date(), reviewerId: user.id, reviewNote: `Handled manually${p.note ? `: ${p.note}` : ''}` },
         });
         await tx.action.updateMany({ where: actionScope, data: { status: 'Resolved', recommendation: 'Handled manually' } });
         const statuses = (await tx.proposal.findMany({ where: { emailId: email.id } })).map((x) => x.status);
@@ -1379,7 +1381,7 @@ export async function command(user: User, type: string, input: unknown): Promise
       }
       if (p.decision === 'acknowledge') {
         const owner = users.find((u) => u.id === p.assignTo);
-        if (!owner || owner.role !== 'BANKER') throw new Error('Pick the banker who owns the follow-up.');
+        if (!owner || !isDesk(owner.role)) throw new Error('Pick the banker who owns the follow-up.');
         await tx.proposal.update({
           where: { id: p.id },
           data: { status: 'Acknowledged', reviewerId: user.id, reviewNote: p.note, extraction: json(e) },
@@ -1712,7 +1714,15 @@ export async function command(user: User, type: string, input: unknown): Promise
             : 'Clarification requested';
       await tx.proposal.update({
         where: { id: p.id },
-        data: { status, extraction: json(e), summary: e.summary, reviewerId: user.id, reviewNote: p.note },
+        data: {
+          status,
+          extraction: json(e),
+          summary: e.summary,
+          reviewerId: user.id,
+          reviewNote: p.note,
+          reviewedAt: new Date(),
+          editedOnReview: extractionEdited(proposal.extraction, e),
+        },
       });
       const statuses = (await tx.proposal.findMany({ where: { emailId: email.id } })).map((x) => x.status);
       await tx.email.update({ where: { id: email.id }, data: { status: rollupEmailStatus(statuses) } });
@@ -1766,7 +1776,7 @@ export async function command(user: User, type: string, input: unknown): Promise
     return db.$transaction(async (tx) => {
       await lock(tx);
       const r = await tx.meetingRequest.findUniqueOrThrow({ where: { id: p.id } });
-      if (user.role !== 'BANKER' && r.salespersonId !== user.id) throw new Error('Forbidden');
+      if (!isDesk(user.role) && r.salespersonId !== user.id) throw new Error('Forbidden');
       if (r.status === 'Confirmed')
         throw new Error('Confirmed meetings require a banker-reviewed cancellation email.');
       await tx.meetingRequest.update({ where: { id: r.id }, data: { status: 'Cancelled' } });
@@ -1790,7 +1800,7 @@ export async function command(user: User, type: string, input: unknown): Promise
       })
       .parse(input);
     const r = await db.meetingRequest.findUniqueOrThrow({ where: { id: p.id } });
-    if (user.role !== 'BANKER' && r.salespersonId !== user.id) throw new Error('Forbidden');
+    if (!isDesk(user.role) && r.salespersonId !== user.id) throw new Error('Forbidden');
     if (p.purpose === 'Meeting confirmation' && r.status !== 'Confirmed')
       throw new Error('Only confirmed requests can generate confirmation drafts.');
     const c = await db.conference.findUniqueOrThrow({ where: { id: r.conferenceId } }),
@@ -1840,7 +1850,7 @@ export async function command(user: User, type: string, input: unknown): Promise
       await lock(tx);
       const d = await tx.draft.findUniqueOrThrow({ where: { id: p.id } });
       let sendConfirmations: Record<string, unknown> = {};
-      if (user.role !== 'BANKER' && d.createdBy !== user.id) throw new Error('Forbidden');
+      if (!isDesk(user.role) && d.createdBy !== user.id) throw new Error('Forbidden');
       if (d.status !== 'Draft') throw new Error('This draft is no longer editable.');
       if (p.send) {
         banker(user);
@@ -1928,7 +1938,7 @@ export async function command(user: User, type: string, input: unknown): Promise
   }
   if (type === 'ask') {
     const p = z.object({ question: z.string().trim().min(2).max(500) }).parse(input);
-    const clients = user.role === 'BANKER' ? [] : await clientIds(user);
+    const clients = isDesk(user.role) ? [] : await clientIds(user);
     const [conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability] = await Promise.all([
       db.conference.findMany(),
       db.issuer.findMany({ select: { id: true, name: true, ownerId: true } }),
@@ -1941,7 +1951,7 @@ export async function command(user: User, type: string, input: unknown): Promise
       db.availability.findMany(),
     ]);
     const visibleMeetingIds =
-      user.role === 'BANKER'
+      isDesk(user.role)
         ? undefined
         : new Set(meetings.filter((m) => clients.includes(m.investorId) || m.request?.salespersonId === user.id).map((m) => m.id));
     const base = await answerQuestion(
@@ -1960,7 +1970,7 @@ export async function command(user: User, type: string, input: unknown): Promise
             action: r.action,
             actor: users.find((u) => u.id === r.actorId)?.name || 'System',
             // Sales see what happened, not the internal reasons.
-            note: user.role === 'BANKER' ? r.note : null,
+            note: isDesk(user.role) ? r.note : null,
             meetingId: r.meetingId,
           }));
         },
@@ -1999,7 +2009,9 @@ export async function command(user: User, type: string, input: unknown): Promise
                   ? `Open question: ${e.data.uncertainties[0]}`
                   : e.data.conditional
                     ? 'Conditional ask: confirm the condition first.'
-                    : '';
+                    : e.data.operation === 'reschedule'
+                      ? 'Move: needs the issuer and the investor to agree. Open it to record both consents.'
+                      : '';
       if (why) {
         results.push({ actionId, ok: false, reason: why });
         continue;
@@ -2019,23 +2031,42 @@ export async function command(user: User, type: string, input: unknown): Promise
     const c = await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } });
     const [issuers, investors] = await Promise.all([db.issuer.findMany(), db.investor.findMany()]);
     const parsed = parseRequestText(p.text, { conference: c, issuers, investors });
-    let proposal: { start: string; end: string; status: string; alternatives: { start: Date | string; end: Date | string }[] } | null = null;
-    if (parsed.issuerId && parsed.investorId && parsed.date && parsed.windowStart) {
-      const { windows, busy } = await resources(db, c.id, parsed.issuerId, parsed.investorId);
-      const winStart = conferenceTime(parsed.date, parsed.windowStart, c.timezone);
-      const winEnd = parsed.windowEnd
-        ? conferenceTime(parsed.date, parsed.windowEnd, c.timezone)
-        : addMinutes(winStart, parsed.duration);
-      // Best slot = first open slot inside the window the sales person asked for.
-      const inWindow = availableSlots(windows, busy, parsed.duration, c.slotMinutes).find(
-        (s) => +new Date(s.start) >= +winStart && +new Date(s.end) <= +winEnd,
+    const names = namesFrom(issuers, investors);
+    // One option per issuer on the wish list. No time given: search the whole day (or event).
+    const options = [];
+    for (const issuerId of parsed.investorId ? parsed.issuerIds.slice(0, 8) : []) {
+      const { windows, busy } = await resources(db, c.id, issuerId, parsed.investorId!);
+      const days = parsed.date ? [parsed.date] : eventDays(c);
+      const winStart = parsed.windowStart ? conferenceTime(days[0], parsed.windowStart, c.timezone) : conferenceTime(days[0], '00:00', c.timezone);
+      const winEnd = parsed.windowStart
+        ? parsed.windowEnd
+          ? conferenceTime(days[0], parsed.windowEnd, c.timezone)
+          : addMinutes(winStart, parsed.duration)
+        : conferenceTime(days[days.length - 1], '23:59', c.timezone);
+      const open = availableSlots(windows, busy, parsed.duration, c.slotMinutes).find(
+        (x) => +new Date(x.start) >= +winStart && +new Date(x.end) <= +winEnd,
       );
-      const start = inWindow ? new Date(inWindow.start) : winStart;
-      const slot = { start, end: addMinutes(start, parsed.duration) };
-      const result = evaluate(slot, windows, busy, parsed.duration, c.slotMinutes);
-      proposal = { start: slot.start.toISOString(), end: slot.end.toISOString(), ...result };
+      const start = open ? new Date(open.start) : parsed.windowStart ? winStart : null;
+      const proposal = start
+        ? (() => {
+            const slot = { start, end: addMinutes(start, parsed.duration) };
+            return { start: slot.start.toISOString(), end: slot.end.toISOString(), ...evaluate(slot, windows, busy, parsed.duration, c.slotMinutes) };
+          })()
+        : null;
+      // Duplicate warning: they already meet, or a request is already open.
+      const [meeting, request] = await Promise.all([
+        db.meeting.findFirst({ where: { issuerId, investorId: parsed.investorId!, status: 'Confirmed' }, orderBy: { start: 'asc' } }),
+        db.meetingRequest.findFirst({ where: { issuerId, investorId: parsed.investorId!, status: { notIn: ['Confirmed', 'Cancelled'] } } }),
+      ]);
+      const zone = c.timezone;
+      const duplicate = meeting
+        ? `${names.investor(parsed.investorId!)} already meets ${names.issuer(issuerId)} ${formatInTimeZone(meeting.start, zone, 'EEE h:mm a')}.`
+        : request
+          ? `A request for ${names.investor(parsed.investorId!)} × ${names.issuer(issuerId)} is already open (${formatInTimeZone(request.start, zone, 'EEE h:mm a')}).`
+          : null;
+      options.push({ issuerId, proposal, duplicate, searched: parsed.windowStart ? 'window' : parsed.date ? 'day' : 'event' });
     }
-    return { parsed, proposal };
+    return { parsed, proposal: options[0]?.proposal || null, options };
   }
   if (type.startsWith('meeting')) {
     const result = await meetingCommand(user, type, input);
@@ -2160,6 +2191,44 @@ async function applyAvailability(
   }
   // Confirmed meetings are preserved; refresh() flags gaps after the entire update.
 }
+function eventDays(c: { startDate: string; endDate: string }) {
+  const out: string[] = [];
+  for (let d = new Date(`${c.startDate}T12:00:00Z`); d.toISOString().slice(0, 10) <= c.endDate; d = new Date(+d + 86400000)) out.push(d.toISOString().slice(0, 10));
+  return out;
+}
+/** Manager dashboard across every event, from the live records. */
+async function managerMetrics() {
+  const [conferences, issuers, investors, users, requests, meetings, coverage, proposals, actions, emails] = await Promise.all([
+    db.conference.findMany(),
+    db.issuer.findMany({ select: { id: true, name: true, contactEmail: true } }),
+    db.investor.findMany({ select: { id: true, name: true } }),
+    db.user.findMany({ select: { id: true, name: true, role: true } }),
+    db.meetingRequest.findMany({ select: { id: true, conferenceId: true, issuerId: true, investorId: true, status: true, createdAt: true } }),
+    db.meeting.findMany({ select: { id: true, conferenceId: true, issuerId: true, investorId: true, status: true, requestId: true, bankerIds: true, start: true, createdAt: true } }),
+    db.meetingCoverageAssignment.findMany({ select: { meetingId: true, bankerId: true } }),
+    db.proposal.findMany({ select: { status: true, editedOnReview: true, extraction: true, email: { select: { conferenceId: true } } } }),
+    db.action.findMany({ select: { id: true, type: true, status: true, assignedTo: true, createdAt: true, conferenceId: true, title: true } }),
+    db.email.findMany({ select: { id: true, subject: true, sender: true, issuerId: true, conferenceId: true, status: true, receivedAt: true, escalation: true, source: true } }),
+  ]);
+  return computeMetrics({
+    now: new Date(),
+    conferences,
+    issuers,
+    investors,
+    users,
+    requests,
+    meetings,
+    coverage,
+    proposals: proposals.map((p) => ({
+      status: p.status,
+      editedOnReview: p.editedOnReview,
+      conferenceId: p.email.conferenceId,
+      category: String((p.extraction as { category?: string } | null)?.category || ''),
+    })),
+    actions,
+    emails,
+  });
+}
 /** Investors a salesperson covers. */
 async function clientIds(user: User) {
   if (user.role !== 'SALES') return [];
@@ -2219,7 +2288,7 @@ export async function getState(user: User) {
     // Sales: "My emails" — emails they sent, forwarded, or were on.
     db.email.findMany({
       where:
-        user.role === 'BANKER'
+        isDesk(user.role)
           ? {}
           : {
               OR: [
@@ -2232,12 +2301,12 @@ export async function getState(user: User) {
       include: { proposals: { orderBy: { askIndex: 'asc' } } },
       orderBy: { receivedAt: 'desc' },
     }),
-    user.role === 'BANKER' ? db.action.findMany({ orderBy: { createdAt: 'desc' } }) : [],
+    isDesk(user.role) ? db.action.findMany({ orderBy: { createdAt: 'desc' } }) : [],
     db.draft.findMany({
-      where: user.role === 'BANKER' ? {} : { createdBy: user.id },
+      where: isDesk(user.role) ? {} : { createdBy: user.id },
       orderBy: { createdAt: 'desc' },
     }),
-    user.role === 'BANKER'
+    isDesk(user.role)
       ? db.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 100 })
       : [],
   ]);
@@ -2280,7 +2349,7 @@ export async function getState(user: User) {
       });
     }
   const resourceState = await resourceStatePromise;
-  const outlook = user.role === 'BANKER' ? await outlookStatus(user.id) : null;
+  const outlook = isDesk(user.role) ? await outlookStatus(user.id) : null;
   const notifications = await db.notification.findMany({
     where: { userId: user.id },
     orderBy: { createdAt: 'desc' },
@@ -2288,7 +2357,7 @@ export async function getState(user: User) {
   });
   // Sales see each ask's status and the reviewer's reason, not the raw extraction or flags.
   const visibleEmails =
-    user.role === 'BANKER'
+    isDesk(user.role)
       ? emails
       : emails.map((e) => ({
           ...e,
@@ -2301,7 +2370,7 @@ export async function getState(user: User) {
     outlook,
     conferences,
     issuers: issuers.map((i) =>
-      user.role === 'BANKER'
+      isDesk(user.role)
         ? i
         : { id: i.id, name: i.name, sector: i.sector, color: i.color, ownerId: i.ownerId },
     ),
@@ -2311,12 +2380,12 @@ export async function getState(user: User) {
     users: users.map((u) => ({ id: u.id, name: u.name, role: u.role, email: u.email })),
     /** Recipient allowlist (registered issuer/investor domains + internal) for draft warnings. */
     allowedDomains:
-      user.role === 'BANKER'
+      isDesk(user.role)
         ? [...new Set([...issuers, ...investors].map((p) => domainOf(p.contactEmail)).concat(internalDomains()))]
         : [],
-    internalDomains: user.role === 'BANKER' ? internalDomains() : [],
+    internalDomains: isDesk(user.role) ? internalDomains() : [],
     availability:
-      user.role === 'BANKER'
+      isDesk(user.role)
         ? availability
         : availability.map((a) => ({
             id: a.id,
@@ -2335,7 +2404,8 @@ export async function getState(user: User) {
     auditLogs,
     slots,
     ...resourceState,
-    parser: process.env.LLM_API_KEY ? 'Configured LLM' : 'Deterministic mock',
+    metrics: user.role === 'MANAGER' ? await managerMetrics() : null,
+    parser: process.env.LLM_API_KEY ? 'Configured LLM (rule parser when unreachable)' : 'Deterministic mock',
     demo: process.env.DEMO_MODE === 'true',
   };
 }

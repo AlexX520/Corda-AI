@@ -1,4 +1,5 @@
 'use client';
+import { isDesk } from '@/lib/roles';
 import { useEffect, useRef, useState } from 'react';
 import { formatInTimeZone } from 'date-fns-tz';
 import { eachDayOfInterval, parseISO, format } from 'date-fns';
@@ -145,6 +146,7 @@ export function RequestsView({
                   <th>Investor → issuer</th>
                   <th>Requested time</th>
                   <th>Status</th>
+                  <th>Priority</th>
                   <th>{sales ? 'Coverage banker' : 'Requested by'}</th>
                   <th />
                 </tr>
@@ -183,6 +185,7 @@ export function RequestsView({
                           </span>
                         </span>
                       </td>
+                      <td>{r.priority !== 'Normal' ? <Badge tone={r.priority === 'Urgent' ? 'red' : 'amber'}>{r.priority}</Badge> : <small>Normal</small>}</td>
                       <td>{sales ? n.user(r.bankerId) : requestedBy(r, data)}</td>
                       <td>
                         <div className="req-actions">
@@ -221,9 +224,11 @@ export function RequestsView({
     </>
   );
 }
+type Proposal = { start: string; end: string; status: string; alternatives: { start: string; end: string }[] };
 type Parsed = {
   parsed: {
     issuerId: string | null;
+    issuerIds: string[];
     investorId: string | null;
     date: string | null;
     windowStart: string | null;
@@ -231,13 +236,20 @@ type Parsed = {
     duration: number;
     missing: string[];
   };
-  proposal: { start: string; end: string; status: string; alternatives: { start: string; end: string }[] } | null;
+  proposal: Proposal | null;
+  options: { issuerId: string; proposal: Proposal | null; duplicate: string | null; searched: 'window' | 'day' | 'event' }[];
 };
-/** One-sentence request entry for sales: "Issuer / Investor 3-4pm Monday". */
-function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceId: string; run: Run }) {
+/**
+ * One-line request entry for sales: "Ford Credit / PIMCO 2-3pm Tue", or a wish list
+ * "PIMCO wants Ford Credit, Ally and Discover Tuesday". One request per issuer goes to its banker;
+ * with no time given, Corda searches the whole day (or the whole event).
+ */
+export function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceId: string; run: Run }) {
   const [text, setText] = useState(''),
     [result, setResult] = useState<Parsed | null>(null),
     [busy, setBusy] = useState(false),
+    [priority, setPriority] = useState<'Normal' | 'High'>('Normal'),
+    [sent, setSent] = useState<string[]>([]),
     [error, setError] = useState('');
   const n = names(data),
     c = data.conferences.find((x) => x.id === conferenceId)!;
@@ -245,6 +257,7 @@ function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceI
     if (text.trim().length < 3) return;
     setBusy(true);
     setError('');
+    setSent([]);
     try {
       const r = await fetch('/api/commands', {
         method: 'POST',
@@ -260,24 +273,31 @@ function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceI
       setBusy(false);
     }
   }
-  async function submit() {
-    if (!result?.proposal || !result.parsed.issuerId || !result.parsed.investorId) return;
+  const sendable = (result?.options || []).filter((o) => o.proposal && !sent.includes(o.issuerId));
+  async function send(issuerIds: string[]) {
+    if (!result?.parsed.investorId) return;
     setBusy(true);
-    const ok = await run(
-      'request',
-      {
-        conferenceId,
-        issuerId: result.parsed.issuerId,
-        investorId: result.parsed.investorId,
-        start: result.proposal.start,
-        end: result.proposal.end,
-        duration: result.parsed.duration,
-        notes: text,
-      },
-      'Request sent to the coverage banker.',
-    );
+    const done: string[] = [];
+    for (const o of result.options.filter((x) => issuerIds.includes(x.issuerId) && x.proposal)) {
+      const ok = await run(
+        'request',
+        {
+          conferenceId,
+          issuerId: o.issuerId,
+          investorId: result.parsed.investorId,
+          start: o.proposal!.start,
+          end: o.proposal!.end,
+          duration: result.parsed.duration,
+          priority,
+          notes: text,
+        },
+        issuerIds.length > 1 ? `Requests sent to ${issuerIds.length} coverage bankers.` : 'Request sent to the coverage banker.',
+      );
+      if (ok) done.push(o.issuerId);
+    }
+    setSent((s) => [...s, ...done]);
     setBusy(false);
-    if (ok) {
+    if (done.length && done.length === (result.options.filter((o) => o.proposal).length)) {
       setText('');
       setResult(null);
     }
@@ -289,21 +309,25 @@ function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceI
         className="quick-request"
         onSubmit={(e) => {
           e.preventDefault();
-          void (result?.proposal ? submit() : check());
+          void (sendable.length === 1 && result?.options.length === 1 ? send([sendable[0].issuerId]) : check());
         }}
       >
         <Search size={15} color="#8a968c" />
         <input
           aria-label="Describe the meeting in one line"
-          placeholder="e.g. Ally Financial / Vanguard 2-3pm Tuesday"
+          placeholder="e.g. PIMCO wants Ford Credit, Ally and Discover Tuesday · or Ally / Vanguard 2-3pm Tue"
           value={text}
           onChange={(e) => {
             setText(e.target.value);
             setResult(null);
           }}
         />
+        <select aria-label="Priority" className="compact-select" value={priority} onChange={(e) => setPriority(e.target.value as 'Normal' | 'High')}>
+          <option>Normal</option>
+          <option>High</option>
+        </select>
         <Button size="sm" disabled={busy || text.trim().length < 3} type="submit">
-          {result?.proposal ? (
+          {sendable.length === 1 && result?.options.length === 1 ? (
             <>
               <Send size={13} /> Send request
             </>
@@ -318,18 +342,44 @@ function QuickRequest({ data, conferenceId, run }: { data: AppState; conferenceI
           {p && (
             <>
               <span>
-                Issuer <b>{p.issuerId ? n.issuer(p.issuerId) : '—'}</b>
+                Investor <b>{p.investorId ? n.investor(p.investorId) : '—'}</b> · {p.duration} min
               </span>
-              <span>
-                Investor <b>{p.investorId ? n.investor(p.investorId) : '—'}</b>
-              </span>
-              {result?.proposal && (
-                <span>
-                  Best time <b>{fmt(result.proposal.start, c.timezone, 'EEE h:mm')}–{fmt(result.proposal.end, c.timezone, 'h:mm a')}</b> ({p.duration} min) ·{' '}
-                  {result.proposal.status === 'Potential Match' ? 'open on both calendars' : result.proposal.status.toLowerCase()}
-                </span>
+              {p.missing.filter((m) => m !== 'time' && m !== 'day').length > 0 && (
+                <span className="warn">Add: {p.missing.filter((m) => m !== 'time' && m !== 'day').join(', ')}</span>
               )}
-              {p.missing.length > 0 && <span className="warn">Add: {p.missing.join(', ')}</span>}
+              {result!.options.length > 0 && (
+                <ul className="wish-list">
+                  {result!.options.map((o) => (
+                    <li key={o.issuerId}>
+                      <strong>{n.issuer(o.issuerId)}</strong>
+                      {o.proposal ? (
+                        <span>
+                          {fmt(o.proposal.start, c.timezone, 'EEE h:mm')}–{fmt(o.proposal.end, c.timezone, 'h:mm a')}
+                          {o.searched !== 'window' && <small> (first open time {o.searched === 'day' ? 'that day' : 'at the event'})</small>}
+                          {o.proposal.status !== 'Potential Match' && <small className="warn"> · {o.proposal.status.toLowerCase()}</small>}
+                        </span>
+                      ) : (
+                        <span className="warn">No open {p.duration}-minute time</span>
+                      )}
+                      {o.duplicate && <small className="warn dup">⚠ {o.duplicate}</small>}
+                      {sent.includes(o.issuerId) ? (
+                        <Badge tone="green">Sent</Badge>
+                      ) : (
+                        o.proposal && result!.options.length > 1 && (
+                          <Button size="sm" variant="outline" disabled={busy} onClick={() => send([o.issuerId])}>
+                            Send
+                          </Button>
+                        )
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {sendable.length > 1 && (
+                <Button size="sm" disabled={busy} onClick={() => send(sendable.map((o) => o.issuerId))}>
+                  <Send size={13} /> Send {sendable.length} requests (one per issuer)
+                </Button>
+              )}
             </>
           )}
         </div>
@@ -427,7 +477,7 @@ export function RequestDetail({
             </div>
           </div>
         )}
-        {data.user.role === 'BANKER' && !['Confirmed', 'Cancelled'].includes(r.status) && (
+        {isDesk(data.user.role) && !['Confirmed', 'Cancelled'].includes(r.status) && (
           <>
             <Field label="Meeting location">
               <input
@@ -546,7 +596,7 @@ export function AvailabilityView({
           <select value={selected} onChange={(event) => setSelected(event.target.value)} aria-label="Select issuer">
             {issuers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
           </select>
-          {data.user.role === 'BANKER' && (
+          {isDesk(data.user.role) && (
             <Button onClick={() => setEditing(true)}><Plus size={16} />Manage</Button>
           )}
         </div>
@@ -602,7 +652,7 @@ export function AvailabilityView({
                       return m ? `${n.investor(m.investorId)}${m.location ? ` · ${m.location}` : ''}` : '';
                     }}
                   />
-                  {data.user.role === 'BANKER' && av.some((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date) && (
+                  {isDesk(data.user.role) && av.some((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date) && (
                     <details className="raw-windows">
                       <summary>Edit recorded windows</summary>
                   {av
@@ -619,7 +669,7 @@ export function AvailabilityView({
                           </strong>
                           <small>{a.kind === 'Available' ? 'Approved availability' : a.kind === 'Blocked' ? 'Not available (from email)' : a.kind}</small>
                         </div>
-                        {data.user.role === 'BANKER' && (
+                        {isDesk(data.user.role) && (
                           <button
                             title={a.kind === 'Hold' ? 'Release hold' : 'Remove window'}
                             aria-label={`Remove ${a.kind} ${fmt(a.start, c.timezone)}`}
@@ -698,6 +748,19 @@ export function PlannerView({
   onOpenMeeting: (id: string) => void;
   onNewMeeting?: () => void;
 }) {
+  const desk = isDesk(data.user.role);
+  // Seats proposed by an allocation run that is not approved yet: shown as "Pending".
+  const proposedRun = data.allocationRuns.find((r) => r.conferenceId === conferenceId && r.runStatus === 'Proposed');
+  const pendingSeats = (meetingId: string) => {
+    const p = proposedRun && data.allocationProposals.find((x) => x.allocationRunId === proposedRun.id && x.meetingId === meetingId && !x.stale);
+    if (!p) return { bankers: [] as string[], cube: '' };
+    const seated = data.coverageAssignments.filter((a) => a.meetingId === meetingId).map((a) => a.bankerId);
+    const hasRoom = data.cubeAssignments.some((a) => a.meetingId === meetingId);
+    return {
+      bankers: p.proposedBankerIds.filter((b) => !seated.includes(b)),
+      cube: !hasRoom && p.proposedCubeId ? data.meetingCubes.find((c) => c.id === p.proposedCubeId)?.name || '' : '',
+    };
+  };
   const [view, setView] = useState('table'),
     [date, setDate] = useState(data.conferences.find((c) => c.id === conferenceId)!.startDate),
     [scope, setScope] = useState('master'),
@@ -748,7 +811,7 @@ export function PlannerView({
               {(
                 [
                   ['master', 'Everyone'],
-                  ...(data.user.role === 'BANKER'
+                  ...(isDesk(data.user.role)
                     ? ([
                         ['banker', 'Banker'],
                         ['cube', 'Meeting room'],
@@ -771,7 +834,7 @@ export function PlannerView({
                         : id === 'investor'
                           ? data.investors[0].id
                           : id === 'banker'
-                            ? (data.user.role === 'BANKER' ? data.user.id : data.users.find((u) => u.role === 'BANKER')?.id) || ''
+                            ? (isDesk(data.user.role) ? data.user.id : data.users.find((u) => u.role === 'BANKER')?.id) || ''
                             : id === 'cube'
                               ? data.meetingCubes.find((cube) => cube.conferenceId === conferenceId)?.id || ''
                               : '',
@@ -834,9 +897,15 @@ export function PlannerView({
                   <tr>
                     <th>Meeting</th>
                     <th>Date & time</th>
-                    <th>Primary banker</th>
-                    <th>Additional coverage</th>
-                    <th>Meeting cube</th>
+                    {desk ? (
+                      <>
+                        <th>Primary banker</th>
+                        <th>Additional coverage</th>
+                        <th>Meeting cube</th>
+                      </>
+                    ) : (
+                      <th>Location</th>
+                    )}
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -847,6 +916,7 @@ export function PlannerView({
                     const cube = data.meetingCubes.find((x) => x.id === room?.cubeId);
                     const requirement = data.coverageRequirements.find((r) => r.meetingId === m.id);
                     const warning = coverage.length < (requirement?.requiredBankerCount || 2) || (m.requiresCube && !room);
+                    const pend = pendingSeats(m.id);
                     return (
                     <tr key={m.id} className="clickable" onClick={() => setSelected(m.id)}>
                       <td>
@@ -857,11 +927,15 @@ export function PlannerView({
                         {fmt(m.start, c.timezone)}
                         <small>to {fmt(m.end, c.timezone, 'h:mm a')}</small>
                       </td>
-                      <td>{coverage.filter((a) => a.coverageRole === 'Primary').map((a) => n.user(a.bankerId)).join(', ') || 'Unassigned'}</td>
+                      {desk ? (<>
+                      <td>{coverage.filter((a) => a.coverageRole === 'Primary').map((a) => n.user(a.bankerId)).join(', ') || (pend.bankers.length ? '' : 'Unassigned')}{pend.bankers.length > 0 && <small className="pending-seat">Pending: {pend.bankers.map(n.user).join(', ')}</small>}</td>
                       <td>{coverage.filter((a) => a.coverageRole !== 'Primary').map((a) => n.user(a.bankerId)).join(', ') || '—'}</td>
-                      <td>{cube?.name || m.location || 'Unassigned'}</td>
+                      <td>{cube?.name || m.location || (pend.cube ? '' : 'Unassigned')}{pend.cube && <small className="pending-seat">Pending: {pend.cube}</small>}</td>
+                      </>) : (
+                        <td>{m.location || cube?.location || 'To be confirmed'}</td>
+                      )}
                       <td>
-                        <Badge tone={warning ? 'amber' : 'green'}>{warning ? 'Needs resources' : m.status}</Badge>
+                        <Badge tone={warning && desk ? 'amber' : 'green'}>{warning && desk ? 'Needs resources' : m.status}</Badge>
                       </td>
                     </tr>
                   );})}
@@ -940,6 +1014,11 @@ export function PlannerView({
                                 {fmt(m.end, c.timezone, 'h:mm a')}
                               </small>
                               <span>{m.location || 'Location TBC'}</span>
+                              {(pendingSeats(m.id).bankers.length > 0 || pendingSeats(m.id).cube) && (
+                                <em className="pending-seat">
+                                  Pending: {[...pendingSeats(m.id).bankers.map(n.user), pendingSeats(m.id).cube].filter(Boolean).join(', ')}
+                                </em>
+                              )}
                             </button>
                           ))}
                       </div>

@@ -18,10 +18,10 @@ function demoDates(now = new Date()) {
     d.setUTCDate(d.getUTCDate() + n);
     return ymd(d);
   };
-  return { abs: [day(0), day(1), day(2)], sf: [day(14), day(15), day(16)] };
+  return { abs: [day(0), day(1), day(2)], sf: [day(14), day(15), day(16)], ndr: day(8) };
 }
 const DATES = process.env.DEMO_FIXED_DATES === 'true'
-  ? { abs: ['2026-10-19', '2026-10-20', '2026-10-21'], sf: ['2026-11-02', '2026-11-03', '2026-11-04'] }
+  ? { abs: ['2026-10-19', '2026-10-20', '2026-10-21'], sf: ['2026-11-02', '2026-11-03', '2026-11-04'], ndr: '2026-10-27' }
   : demoDates();
 /** Seed rows were written with day numbers 19/20/21; map them onto the demo week. */
 const absDay = (d: string) => DATES.abs[Number(d) - 19];
@@ -52,6 +52,7 @@ async function main() {
       role: 'SALES',
     },
     { id: 'sales-emma', name: 'Emma Davis', email: 'emma.davis@conferenceos.demo', role: 'SALES' },
+    { id: 'manager-morgan', name: 'Morgan Lee', email: 'morgan.lee@conferenceos.demo', role: 'MANAGER' },
   ];
   for (const u of users) await db.user.upsert({ where: { id: u.id }, create: u, update: {} });
   const conferences = [
@@ -77,6 +78,16 @@ async function main() {
       startDate: DATES.sf[0],
       endDate: DATES.sf[2],
       slotMinutes: 30,
+    },
+    {
+      id: 'discover-ndr',
+      name: 'Discover NDR — Boston',
+      location: 'Boston, MA',
+      timezone: 'America/New_York',
+      startDate: DATES.ndr,
+      endDate: DATES.ndr,
+      slotMinutes: 60,
+      type: 'NDR',
     },
   ];
   for (const c of conferences)
@@ -482,9 +493,144 @@ async function main() {
     },
     update: {},
   });
+  await seedNdr();
+  await seedDemoHistory(issuers, investors, conferences);
   console.log(
-    'Seed complete. 2 conferences, 12 issuers, 15 investors, 8 bankers, 25 meetings and 5 cubes. Existing records preserved.',
+    'Seed complete. 3 events (2 conferences, 1 NDR), 1 manager, 12 issuers, 15 investors, 8 bankers, 25 meetings and 5 cubes. Existing records preserved.',
   );
+}
+/** Discover NDR — Boston: one day of investor meetings with the issuer's management. */
+async function seedNdr() {
+  const at = (hhmm: string) => conferenceTime(DATES.ndr, hhmm, 'America/New_York');
+  await db.availability.upsert({
+    where: { id: 'ndr-availability' },
+    create: { id: 'ndr-availability', conferenceId: 'discover-ndr', issuerId: 'discover', start: at('08:30'), end: at('17:00'), approvedBy: 'banker-sarah' },
+    update: {},
+  });
+  const rows: [string, string, string][] = [['pimco', '09:00', 'Hotel Commonwealth · Suite 4'], ['blackrock', '10:30', 'BlackRock Boston office'], ['wellington', '13:00', 'Wellington · 280 Congress St']];
+  for (const [i, [investorId, start, location]] of rows.entries()) {
+    const requestId = `ndr-request-${i}`;
+    const created = new Date(Date.now() - (60 - i * 12) * 3600000);
+    await db.meetingRequest.upsert({
+      where: { id: requestId },
+      create: { id: requestId, conferenceId: 'discover-ndr', issuerId: 'discover', investorId, salespersonId: investorId === 'pimco' || investorId === 'blackrock' || investorId === 'wellington' ? 'sales-james' : 'sales-emma', bankerId: 'banker-sarah', start: at(start), end: new Date(+at(start) + 60 * 60000), duration: 60, alternativeDates: [], notes: '[Demo history] NDR one-on-one', priority: 'Normal', status: 'Confirmed', createdAt: created },
+      update: {},
+    });
+    await db.meeting.upsert({
+      where: { id: `ndr-meeting-${i}` },
+      create: { id: `ndr-meeting-${i}`, requestId, conferenceId: 'discover-ndr', issuerId: 'discover', investorId, start: at(start), end: new Date(+at(start) + 60 * 60000), location, bankerIds: ['banker-sarah'], approvedBy: 'banker-sarah', approvedRecipients: [], expectedAttendees: 3, requiresCube: false, createdAt: new Date(+created + (3 + i * 5) * 3600000) },
+      update: {},
+    });
+  }
+  await db.meetingRequest.upsert({
+    where: { id: 'ndr-request-open' },
+    create: { id: 'ndr-request-open', conferenceId: 'discover-ndr', issuerId: 'discover', investorId: 'kkr', salespersonId: 'sales-emma', bankerId: 'banker-sarah', start: at('15:00'), end: at('16:00'), duration: 60, alternativeDates: [], notes: '[Demo history] KKR would like the afternoon slot', priority: 'High', status: 'Potential Match', createdAt: new Date(Date.now() - 20 * 3600000) },
+    update: {},
+  });
+}
+
+/**
+ * Demo history (clearly marked: emails have source "demo-history", requests say "[Demo history]"),
+ * so the manager dashboard has real records to compute from: requests confirmed over the past
+ * days, emails approved as read / edited / rejected, and a few that are still waiting.
+ */
+async function seedDemoHistory(
+  issuers: { id: string; name: string; contactEmail: string; ownerId: string | null }[],
+  investors: { id: string; name: string; contactEmail: string }[],
+  conferences: { id: string; name: string; startDate: string; endDate: string; timezone: string }[],
+) {
+  if (await db.email.findFirst({ where: { source: 'demo-history' } })) return;
+  const ago = (hours: number) => new Date(Date.now() - hours * 3600000);
+  // 1. Past requests that became today's seeded meetings (time-to-confirm 2–30 hours).
+  const linked = [0, 1, 2, 3, 4, 5, 6, 7, 9, 12, 14, 16];
+  const delays = [2, 5, 26, 3, 8, 30, 4, 12, 6, 18, 2.5, 9];
+  for (const [k, idx] of linked.entries()) {
+    const m = await db.meeting.findUnique({ where: { id: `seed-meeting-${idx}` } });
+    if (!m || m.requestId) continue;
+    const created = ago(72 + k * 7);
+    const requestId = `demo-history-request-${idx}`;
+    const covered = ['pimco', 'blackrock', 'wellington', 'fidelity', 'apollo'].includes(m.investorId);
+    await db.meetingRequest.create({
+      data: { id: requestId, conferenceId: m.conferenceId, issuerId: m.issuerId, investorId: m.investorId, salespersonId: covered ? 'sales-james' : 'sales-emma', bankerId: issuers.find((i) => i.id === m.issuerId)?.ownerId || null, start: m.start, end: m.end, duration: 30, alternativeDates: [], notes: '[Demo history] Confirmed earlier this week', priority: 'Normal', status: 'Confirmed', createdAt: created },
+    });
+    await db.meeting.update({ where: { id: m.id }, data: { requestId, createdAt: new Date(+created + delays[k] * 3600000) } });
+  }
+  // 2. Issuer emails reviewed over the past days.
+  const absStart = conferences[0].startDate;
+  const history: { issuerId: string; body: string; status: 'Approved' | 'Rejected' | 'Pending'; edited?: boolean; hoursAgo: number; reviewer: string; note?: string }[] = [
+    { issuerId: 'ford', body: 'Ford Credit is available Monday between 1 PM and 4 PM for ABS East 2026.', status: 'Approved', hoursAgo: 120, reviewer: 'banker-sarah' },
+    { issuerId: 'ally', body: 'Ally Financial is available Tuesday between 9 AM and 12 PM for ABS East 2026.', status: 'Approved', hoursAgo: 110, reviewer: 'banker-maya' },
+    { issuerId: 'santander', body: 'Santander is available Wednesday between 10 AM and 2 PM for ABS East 2026.', status: 'Approved', hoursAgo: 100, reviewer: 'banker-alex' },
+    { issuerId: 'athene', body: 'Athene is available Monday between 9 AM and 11 AM for ABS East 2026.', status: 'Approved', hoursAgo: 96, reviewer: 'banker-sarah' },
+    { issuerId: 'gmf', body: 'GM Financial is available Tuesday between 1 PM and 5 PM for ABS East 2026.', status: 'Approved', hoursAgo: 90, reviewer: 'banker-daniel' },
+    { issuerId: 'capital-one', body: 'Capital One is available Monday between 2 PM and 5 PM for ABS East 2026.', status: 'Approved', hoursAgo: 80, reviewer: 'banker-priya' },
+    { issuerId: 'rocket', body: 'Rocket Mortgage is available Wednesday between 9 AM and 12 PM for ABS East 2026.', status: 'Approved', hoursAgo: 70, reviewer: 'banker-michael' },
+    { issuerId: 'newrez', body: 'NewRez is available Tuesday between 10 AM and 3 PM for ABS East 2026.', status: 'Approved', hoursAgo: 60, reviewer: 'banker-lauren' },
+    { issuerId: 'onemain', body: 'OneMain Financial is available Monday afternoon for ABS East 2026, roughly after lunch.', status: 'Approved', edited: true, hoursAgo: 75, reviewer: 'banker-alex', note: 'Set 1–5 PM after calling the issuer' },
+    { issuerId: 'penny', body: 'PennyMac can do Tuesday late morning at ABS East 2026.', status: 'Approved', edited: true, hoursAgo: 54, reviewer: 'banker-david', note: 'Confirmed 10:30–12:00 by phone' },
+    { issuerId: 'bayview', body: 'Bayview is available Wednesday between 9 AM and 1 PM for ABS East 2026.', status: 'Approved', edited: true, hoursAgo: 48, reviewer: 'banker-alex', note: 'Corrected to 9–11 AM per the IR team' },
+    { issuerId: 'discover', body: 'Discover would like to add a dinner on Tuesday at ABS East 2026.', status: 'Rejected', hoursAgo: 40, reviewer: 'banker-sarah', note: 'Dinners are booked outside the meeting schedule' },
+    { issuerId: 'ally', body: 'Ally Financial would like to cancel all ABS East 2026 meetings.', status: 'Rejected', hoursAgo: 30, reviewer: 'banker-maya', note: 'Sent in error; Ally confirmed by phone' },
+    { issuerId: 'ford', body: 'Ford Credit is available Wednesday between 2 PM and 4 PM for ABS East 2026. Please add these times.', status: 'Pending', hoursAgo: 26, reviewer: 'banker-sarah' },
+    { issuerId: 'gmf', body: 'GM Financial can also meet investors Monday between 4 PM and 5 PM at ABS East 2026.', status: 'Pending', hoursAgo: 7, reviewer: 'banker-daniel' },
+  ];
+  for (const [k, h] of history.entries()) {
+    const issuer = issuers.find((i) => i.id === h.issuerId)!;
+    const subject = `ABS East 2026 — ${issuer.name} availability`;
+    const { asks } = mockExtractAsks(h.body, subject, { conferences, issuers, investors }, { conferenceId: 'abs-east', issuerId: h.issuerId });
+    const ask = asks[0];
+    const received = ago(h.hoursAgo);
+    const reviewed = new Date(+received + (1 + (k % 4)) * 3600000);
+    const mail = await db.email.create({
+      data: {
+        messageId: `demo-history-${k}`,
+        threadId: `demo-history-thread-${k}`,
+        sender: issuer.contactEmail,
+        to: [`${h.reviewer.replace('banker-', '')}@conferenceos.demo`],
+        cc: [],
+        subject,
+        body: `${h.body}\n\n(Demo history record)`,
+        newContent: h.body,
+        receivedAt: received,
+        conferenceId: 'abs-east',
+        issuerId: h.issuerId,
+        category: ask.category,
+        status: h.status === 'Pending' ? 'Pending review' : h.status,
+        senderStatus: 'verified',
+        source: 'demo-history',
+      },
+    });
+    const proposal = await db.proposal.create({
+      data: {
+        emailId: mail.id,
+        askIndex: 0,
+        summary: ask.summary,
+        extraction: ask,
+        status: h.status,
+        reviewerId: h.status === 'Pending' ? null : h.reviewer,
+        reviewNote: h.note || null,
+        editedOnReview: Boolean(h.edited),
+        reviewedAt: h.status === 'Pending' ? null : reviewed,
+        createdAt: received,
+      },
+    });
+    if (h.status === 'Pending')
+      await db.action.create({
+        data: { type: ask.category, title: `${issuer.name} · ${ask.summary}`, conferenceId: 'abs-east', issuerId: h.issuerId, emailId: mail.id, proposalId: proposal.id, assignedTo: issuer.ownerId, priority: 'Normal', recommendation: 'Review extracted availability and source evidence.', createdAt: received },
+      });
+    else
+      await db.auditLog.create({
+        data: { actorId: h.reviewer, action: `Ask ${h.status.toLowerCase()}`, entityType: 'Proposal', entityId: proposal.id, issuerId: h.issuerId, emailId: mail.id, note: h.note || null, after: { demoHistory: true, edited: Boolean(h.edited) }, createdAt: reviewed },
+      });
+  }
+  // 3. An open escalation a few hours old.
+  const esc = await db.email.create({
+    data: { messageId: 'demo-history-escalation', threadId: 'demo-history-escalation', sender: 'meetings@kkr.example', to: ['sarah.chen@conferenceos.demo'], cc: [], subject: 'Discover × KKR — third move this week', body: 'This is the third time this meeting has moved. If it moves again we will pass.\n\n(Demo history record)', newContent: 'This is the third time this meeting has moved. If it moves again we will pass.', receivedAt: ago(3), conferenceId: 'abs-east', investorId: 'kkr', issuerId: 'discover', category: 'Escalation / complaint', status: 'Pending review', senderStatus: 'verified', source: 'demo-history', escalation: true, escalationReasons: ['Threat to drop the meeting'] },
+  });
+  const escAsk = mockExtractAsks('This is the third time this meeting has moved. If it moves again we will pass.', esc.subject, { conferences, issuers, investors }, { conferenceId: 'abs-east' }).asks[0];
+  const escProposal = await db.proposal.create({ data: { emailId: esc.id, askIndex: 0, summary: 'KKR: third move this week — will pass if it moves again', extraction: { ...escAsk, category: 'Escalation / complaint', operation: 'escalate', issuerId: 'discover', investorId: 'kkr' }, createdAt: ago(3) } });
+  await db.action.create({ data: { type: 'Escalation / complaint', title: 'KKR · third move this week, will pass if moved again', conferenceId: 'abs-east', issuerId: 'discover', investorId: 'kkr', emailId: esc.id, proposalId: escProposal.id, assignedTo: 'banker-sarah', priority: 'Urgent', recommendation: 'Call KKR; do not move Discover × KKR again without their agreement.', createdAt: ago(3) } });
+  void absStart;
 }
 main()
   .catch((e) => {

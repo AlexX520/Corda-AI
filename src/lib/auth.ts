@@ -1,3 +1,4 @@
+import { isDesk } from './roles';
 import { cookies } from 'next/headers';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { db } from './db';
@@ -25,7 +26,7 @@ export async function currentUser() {
   return user;
 }
 export function banker(user: { role: string }) {
-  if (user.role !== 'BANKER') throw new Error('Forbidden');
+  if (!isDesk(user.role)) throw new Error('Forbidden');
 }
 /** The origin this request was addressed to. Proxy headers count only when TRUST_PROXY=true. */
 function expectedOrigin(req: Request) {

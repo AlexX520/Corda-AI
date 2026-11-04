@@ -1,4 +1,5 @@
 'use client';
+import { isDesk } from '@/lib/roles';
 import { useState } from 'react';
 import { addMinutes } from 'date-fns';
 import { conferenceTime } from '@/lib/scheduling';
@@ -34,7 +35,7 @@ export function RequestForm({
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const c = data.conferences.find((x) => x.id === conference)!;
-  const isBanker = data.user.role === 'BANKER';
+  const isBanker = isDesk(data.user.role);
   const issuers = [...data.issuers].sort((a, b) => a.name.localeCompare(b.name));
   // An investor that shares a name with an issuer (e.g. an issuer's investing arm) is labelled as such.
   const investors = [...data.investors].sort((a, b) => a.name.localeCompare(b.name));

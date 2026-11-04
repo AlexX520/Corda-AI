@@ -1,3 +1,4 @@
+import { isDesk } from '@/lib/roles';
 import { banker, currentUser, errorResponse } from '@/lib/auth';
 import { auditCsv, parseAuditQuery, queryAudit } from '@/lib/audit-query';
 import { db } from '@/lib/db';
@@ -9,7 +10,7 @@ export async function GET(req: Request) {
     const user = await currentUser();
     const params = new URL(req.url).searchParams;
     const query = parseAuditQuery(params);
-    if (user.role !== 'BANKER') {
+    if (!isDesk(user.role)) {
       // Sales may read the history of a request or meeting for their own clients, nothing else.
       if (params.get('format') === 'csv' || !(await salesMayRead(user.id, query.request, query.meeting))) banker(user);
       const out = await queryAudit({ ...query, actor: undefined, action: undefined, issuer: undefined, q: undefined, email: undefined });

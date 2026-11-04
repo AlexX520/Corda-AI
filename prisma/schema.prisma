@@ -28,6 +28,8 @@ model Conference {
   preferenceWeight Int @default(100)
   workloadWeight Int @default(12)
   backToBackWeight Int @default(5)
+  /// Conference / NDR / Roadshow
+  type String @default("Conference")
 }
 model Issuer {
   id String @id
@@ -97,6 +99,9 @@ model Proposal {
   reviewNote String?
   /// Reviewer re-checked the ask after its meeting changed.
   refreshedAt DateTime?
+  /// The reviewer changed what Corda read before approving (for "handled without edits").
+  editedOnReview Boolean @default(false)
+  reviewedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@unique([emailId, askIndex])
@@ -158,6 +163,7 @@ model Meeting {
   /// An investor threatened to drop it if it moves again.
   protected Boolean @default(false)
   protectedReason String @default("")
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([conferenceId, issuerId])
 }

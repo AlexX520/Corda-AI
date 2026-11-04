@@ -1,4 +1,5 @@
 'use client';
+import { isDesk } from '@/lib/roles';
 import { useState } from 'react';
 import { Loader2, MessageCircleQuestion, Send } from 'lucide-react';
 import type { AppState } from '@/lib/types';
@@ -41,7 +42,7 @@ export function AskPanel({ data, onOpenMeeting, compact = false }: { data: AppSt
         {!turns.length && (
           <div className="ask-examples">
             <p className="muted">Answers come from the schedule and the audit history, with sources. Ask Corda never changes anything.</p>
-            {EXAMPLES(data.user.role === 'BANKER').map((x) => (
+            {EXAMPLES(isDesk(data.user.role)).map((x) => (
               <button key={x} onClick={() => ask(x)}>{x}</button>
             ))}
           </div>

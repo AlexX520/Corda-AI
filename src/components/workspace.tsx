@@ -1,4 +1,5 @@
 'use client';
+import { isDesk, roleLabel } from '@/lib/roles';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
 import {
@@ -21,6 +22,7 @@ import {
   LayoutDashboard,
   LogOut,
   Loader2,
+  BarChart3,
   Mail,
   MessageCircleQuestion,
   Settings,
@@ -48,7 +50,8 @@ import { RequestDecision } from './decision';
 import { AvailabilityView, PlannerView, RequestDetail, RequestsView, requestStatus } from './views';
 import { ResourceAllocationView } from './resources';
 import { AuditTrail } from './audit';
-import { SalesEmailsView } from './sales';
+import { SalesEmailsView, SalesHome } from './sales';
+import { ManagerHome } from './manager';
 import { MyDay } from './myday';
 import { AskCorda, AskPanel } from './ask';
 import { MeetingDrawer, MeetingForm } from './meeting';
@@ -397,7 +400,9 @@ export function Workspace() {
         )}
       </main>
     );
-  const banker = data.user.role === 'BANKER',
+  const banker = isDesk(data.user.role),
+    manager = data.user.role === 'MANAGER',
+    homeLabel = manager ? 'Team overview' : banker ? 'My day' : 'My clients',
     c = data.conferences.find((c) => c.id === conferenceId)!,
     n = names(data),
     work = openWork(data, conferenceId),
@@ -435,7 +440,7 @@ export function Workspace() {
           </div>
           <div>
             <strong>Capital Markets</strong>
-            <span>{banker ? 'Banker workspace' : 'Sales workspace'}</span>
+            <span>{manager ? 'Manager workspace' : banker ? 'Banker workspace' : 'Sales workspace'}</span>
           </div>
           <ChevronsUpDown size={14} />
         </div>
@@ -449,10 +454,14 @@ export function Workspace() {
                 className={page === m.id ? 'nav-item active' : 'nav-item'}
                 onClick={() => navigate(m.id)}
               >
-                {banker && m.id === 'overview' ? <Sun size={18} strokeWidth={1.7} /> : <m.icon size={18} strokeWidth={1.7} />}
+                {m.id === 'overview' ? (
+                  manager ? <BarChart3 size={18} strokeWidth={1.7} /> : banker ? <Sun size={18} strokeWidth={1.7} /> : <Users size={18} strokeWidth={1.7} />
+                ) : (
+                  <m.icon size={18} strokeWidth={1.7} />
+                )}
                 <span>
-                  {banker && m.id === 'overview'
-                    ? 'My day'
+                  {m.id === 'overview'
+                    ? homeLabel
                     : !banker && m.id === 'requests'
                     ? 'Request tracker'
                     : !banker && m.id === 'schedule'
@@ -493,7 +502,7 @@ export function Workspace() {
             <Avatar name={data.user.name} color="#436b5e" />
             <div>
               <strong>{data.user.name}</strong>
-              <span>{banker ? 'Investment Banking' : 'Institutional Sales'}</span>
+              <span>{roleLabel(data.user.role)}</span>
             </div>
             {data.demo && (
               <select
@@ -503,7 +512,7 @@ export function Workspace() {
               >
                 {data.users.map((u) => (
                   <option key={u.id} value={u.id}>
-                    {u.name} · {u.role === 'BANKER' ? 'Banker' : 'Sales'}
+                    {u.name} · {u.role === 'MANAGER' ? 'Manager' : u.role === 'BANKER' ? 'Banker' : 'Sales'}
                   </option>
                 ))}
               </select>
@@ -520,15 +529,15 @@ export function Workspace() {
             <button className="mobile-menu" onClick={() => setMobile(!mobile)}>
               <LayoutDashboard size={19} />
             </button>
-            <span>{banker ? 'Banker workspace' : 'Sales workspace'}</span>
+            <span>{manager ? 'Manager workspace' : banker ? 'Banker workspace' : 'Sales workspace'}</span>
             <ChevronRight size={13} />
             <strong>
               {!banker && page === 'requests'
                 ? 'Request tracker'
                 : !banker && page === 'schedule'
                   ? 'Schedule'
-                  : banker && page === 'overview'
-                    ? 'My day'
+                  : page === 'overview'
+                    ? homeLabel
                     : menu.find((m) => m.id === page)?.label || { audit: 'Audit trail', settings: 'Settings', emails: 'My emails' }[page]}
             </strong>
           </div>
@@ -644,7 +653,17 @@ export function Workspace() {
               <button className={scheduleSection === 'availability' ? 'active' : ''} onClick={() => setScheduleSection('availability')}>Issuer availability</button>
             </div>
           )}
-          {page === 'overview' && banker && (
+          {page === 'overview' && manager && (
+            <ManagerHome
+              data={data}
+              onOpenEvent={(id) => {
+                setConferenceId(id);
+                navigate('planner');
+              }}
+              onOpenQueue={() => navigate('queue')}
+            />
+          )}
+          {page === 'overview' && banker && !manager && (
             <MyDay
               data={data}
               conferenceId={conferenceId}
@@ -658,231 +677,14 @@ export function Workspace() {
           )}
           {page === 'ask' && <AskCorda data={data} onOpenMeeting={setMeetingId} />}
           {page === 'overview' && !banker && (
-            <>
-              <div className="page-heading overview-heading">
-                <div>
-                  <h1>{c.name}</h1>
-                  <p>
-                    {banker ? `${openActions.length} decisions need attention.` : 'Your meeting activity.'}
-                  </p>
-                </div>
-                <Button onClick={() => setRequestOpen(true)}>
-                  <Plus size={16} />
-                  New meeting request
-                </Button>
-              </div>
-              <div className="stats-grid overview-stats">
-                <Stat
-                  icon={banker ? Sparkles : CheckCheck}
-                  label={banker ? 'Needs your decision' : 'Potential matches'}
-                  value={
-                    banker
-                      ? openActions.length
-                      : data.requests.filter(
-                          (r) => r.conferenceId === conferenceId && r.status === 'Potential Match',
-                        ).length
-                  }
-                  foot={banker ? 'AI has done the groundwork' : 'Subject to banker approval'}
-                  cta={banker ? 'Start reviewing' : 'See requests'}
-                  onClick={() => {
-                    setQueueFocus('all');
-                    navigate(banker ? 'queue' : 'requests');
-                  }}
-                  tone="amber"
-                />
-                {banker ? (
-                  <Stat
-                    icon={Users}
-                    label="New meeting requests"
-                    value={openActions.filter((a) => actionKind(a, data).id === 'new').length}
-                    foot="Investors and issuers asking to meet"
-                    cta="Review new requests"
-                    onClick={() => {
-                      setQueueFocus('new');
-                      navigate('queue');
-                    }}
-                    tone="blue"
-                  />
-                ) : (
-                  <Stat
-                    icon={Users}
-                    label="Open meeting requests"
-                    value={
-                      data.requests.filter(
-                        (r) => r.conferenceId === conferenceId && !['Confirmed', 'Cancelled'].includes(r.status),
-                      ).length
-                    }
-                    foot="Investor conversations in motion"
-                    cta="Open requests"
-                    onClick={() => navigate('requests')}
-                    tone="blue"
-                  />
-                )}
-                <Stat
-                  icon={CalendarDays}
-                  label="Confirmed meetings"
-                  value={confirmed.length}
-                  foot="Approved and on the planner"
-                  cta="Open schedule"
-                  onClick={() => navigate('planner')}
-                  tone="green"
-                />
-              </div>
-              {banker ? (
-                <div className="panel decide-panel">
-                  <div className="panel-heading">
-                    <div>
-                      <h3>
-                        Needs your decision <span className="count-pill">{openActions.length}</span>
-                      </h3>
-                    </div>
-                    <div className="decide-tools">
-                      <SortToggle value={overviewSort} onChange={setOverviewSort} />
-                      <button
-                        className="text-button"
-                        onClick={() => {
-                          setQueueFocus('all');
-                          navigate('queue');
-                        }}
-                      >
-                        View all <ArrowUpRight size={14} />
-                      </button>
-                    </div>
-                  </div>
-                  <DecisionStrip
-                    actions={sortActions(
-                      openActions.filter((a) =>
-                        `${a.title} ${a.type} ${n.issuer(a.issuerId)} ${n.investor(a.investorId)}`
-                          .toLowerCase()
-                          .includes(search.toLowerCase()),
-                      ),
-                      data,
-                      overviewSort,
-                    )}
-                    data={data}
-                    zone={c.timezone}
-                    onClick={actionClick}
-                  />
-                </div>
-              ) : (
-                <div className="panel">
-                  <div className="panel-heading">
-                    <div>
-                      <h3>
-                        Your recent requests{' '}
-                        <span className="count-pill">
-                          {data.requests.filter((r) => r.conferenceId === conferenceId).length}
-                        </span>
-                      </h3>
-                    </div>
-                    <button className="text-button" onClick={() => navigate('requests')}>
-                      View all <ArrowUpRight size={14} />
-                    </button>
-                  </div>
-                  <div className="recent-requests">
-                    {data.requests
-                      .filter((r) => r.conferenceId === conferenceId)
-                      .slice(0, 5)
-                      .map((r) => (
-                        <button key={r.id} onClick={() => setSheetRequestId(r.id)}>
-                          <Avatar
-                            name={n.investor(r.investorId)}
-                            color={data.issuers.find((i) => i.id === r.issuerId)?.color}
-                          />
-                          <div>
-                            <strong>{n.investor(r.investorId)}</strong>
-                            <small>with {n.issuer(r.issuerId)}</small>
-                          </div>
-                          <Badge tone={requestStatus(r, 'SALES').tone || undefined}>{requestStatus(r, 'SALES').text}</Badge>
-                        </button>
-                      ))}
-                    {!data.requests.some((r) => r.conferenceId === conferenceId) && (
-                      <Empty
-                        title="Start a conversation"
-                        description="Create your first meeting request for this conference."
-                      />
-                    )}
-                  </div>
-                </div>
-              )}
-              <div className="panel issuer-overview">
-                <div className="panel-heading">
-                  <div>
-                    <h3>Issuer readiness</h3>
-                    <p>A quick pulse on your conference coverage.</p>
-                  </div>
-                  <button className="text-button" onClick={() => navigate('availability')}>
-                    Manage availability <ArrowUpRight size={14} />
-                  </button>
-                </div>
-                <div className="table-scroll">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Issuer</th>
-                        <th>Coverage banker</th>
-                        <th>Availability</th>
-                        <th>Confirmed meetings</th>
-                        <th>Open slots</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {data.issuers
-                        .filter((i) => i.name.toLowerCase().includes(search.toLowerCase()))
-                        .slice(0, 5)
-                        .map((i) => {
-                          const slots =
-                            data.slots.find(
-                              (s) => s.issuerId === i.id && s.conferenceId === conferenceId,
-                            )?.slots.length || 0;
-                          return (
-                            <tr key={i.id}>
-                              <td>
-                                <div className="entity-cell">
-                                  <Avatar name={i.name} color={i.color} size="small" />
-                                  <strong>{i.name}</strong>
-                                </div>
-                              </td>
-                              <td>{n.user(i.ownerId)}</td>
-                              <td>
-                                <Badge tone={slots ? 'green' : 'amber'}>
-                                  {slots ? 'Availability received' : 'Awaiting availability'}
-                                </Badge>
-                              </td>
-                              <td>
-                                {
-                                  data.meetings.filter(
-                                    (m) =>
-                                      m.issuerId === i.id &&
-                                      m.conferenceId === conferenceId &&
-                                      m.status === 'Confirmed',
-                                  ).length
-                                }{' '}
-                                meetings
-                              </td>
-                              <td>
-                                <div className="slot-indicator">
-                                  <span style={{ width: `${Math.min(100, slots * 2)}%` }} />
-                                </div>
-                                <span className="slot-number">{slots}</span>
-                              </td>
-                              <td>
-                                <button
-                                  aria-label={`View ${i.name} availability`}
-                                  onClick={() => navigate('availability')}
-                                >
-                                  <ChevronRight size={15} />
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </>
+            <SalesHome
+              data={data}
+              conferenceId={conferenceId}
+              run={run}
+              onOpenRequest={setSheetRequestId}
+              onOpenMeeting={setMeetingId}
+              onOpenEmails={() => navigate('emails')}
+            />
           )}
           {page === 'queue' && queueSection === 'emails' && (
             <InboxView
@@ -1661,7 +1463,7 @@ function QueueView({
     return Boolean(
       a.status === 'Open' && email && proposal?.status === 'Pending' && extraction &&
         ['verified', 'internal'].includes(email.senderStatus) && !email.suspicious && !email.escalation &&
-        !extraction.uncertainties?.length && !extraction.conditional && actionKind(a, data).id !== 'escalation',
+        !extraction.uncertainties?.length && !extraction.conditional && extraction.operation !== 'reschedule' && actionKind(a, data).id !== 'escalation',
     );
   };
   async function bulkApprove(ids: string[]) {
@@ -1884,7 +1686,7 @@ function QueueView({
                 Approve {selected.size}
               </Button>
             )}
-            <small className="muted">Clean = verified sender, no open questions, not an escalation. Each one is still checked and audited. Keys: j/k move · Enter open · a approve · r reject · x select</small>
+            <small className="muted">Clean = verified sender, no open questions, not an escalation, not a move (moves need both parties' consent). Each one is still checked and audited. Keys: j/k move · Enter open · a approve · r reject · x select</small>
           </div>
         )}
         {bulkResult && bulkResult.skipped.length > 0 && (
@@ -1926,6 +1728,7 @@ function LoginScreen({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const groups = [
+    ['MANAGER', 'Management'],
     ['BANKER', 'Bankers'],
     ['SALES', 'Sales'],
   ] as const;
@@ -1960,7 +1763,7 @@ function LoginScreen({
                         <Avatar name={p.name} color="#436b5e" />
                         <span>
                           <strong>{p.name}</strong>
-                          <small>{role === 'BANKER' ? 'Investment Banking' : 'Institutional Sales'}</small>
+                          <small>{roleLabel(role)}</small>
                         </span>
                         {busy === p.id ? <Loader2 size={15} className="spin" /> : <ChevronRight size={15} />}
                       </button>
@@ -2041,7 +1844,7 @@ function RecentChanges({
           <button className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>
             For you {data.notifications.filter((x) => !x.readAt).length ? `(${data.notifications.filter((x) => !x.readAt).length})` : ''}
           </button>
-          {data.user.role === 'BANKER' && (
+          {isDesk(data.user.role) && (
             <button className={tab === 'all' ? 'active' : ''} onClick={() => setTab('all')}>
               All changes
             </button>
@@ -2079,7 +1882,7 @@ function RecentChanges({
       ) : (
         <p className="muted">No changes yet.</p>
       )}
-      {data.user.role === 'BANKER' && (
+      {isDesk(data.user.role) && (
         <button className="text-button" onClick={onOpenAudit}>
           Open audit trail <ArrowUpRight size={13} />
         </button>

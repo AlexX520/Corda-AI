@@ -1,3 +1,4 @@
+import { isDesk } from './roles';
 import { Prisma, User } from '@prisma/client';
 import { z } from 'zod';
 import { db } from './db';
@@ -631,7 +632,7 @@ export async function handleResourceCommand(user: User, type: string, input: unk
 }
 
 export async function getResourceState(user: User) {
-  if (user.role !== 'BANKER')
+  if (!isDesk(user.role))
     return {
       bankerPreferences: [],
       bankerAvailability: [],

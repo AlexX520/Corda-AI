@@ -1,4 +1,5 @@
 'use client';
+import { isDesk } from '@/lib/roles';
 import { useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
 import { Button } from './ui/button';
@@ -430,7 +431,7 @@ export function DraftEditor({
               <Button disabled={busy} variant="outline" onClick={() => save(false)}>
                 {compose ? 'Save draft' : 'Save draft'}
               </Button>
-              {data.user.role === 'BANKER' && (
+              {isDesk(data.user.role) && (
                 <Button
                   disabled={
                     busy ||

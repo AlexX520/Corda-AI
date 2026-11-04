@@ -1,3 +1,4 @@
+import { isDesk } from '@/lib/roles';
 import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -19,7 +20,7 @@ export async function GET(req: Request) {
       conferenceId = q.get('conferenceId') || 'abs-east';
     if (!['master', 'issuer', 'investor', 'meeting', 'banker', 'cube'].includes(scope))
       throw new Error('Invalid planner scope.');
-    if (['banker', 'cube'].includes(scope) && user.role !== 'BANKER')
+    if (['banker', 'cube'].includes(scope) && !isDesk(user.role))
       throw new Error('This internal schedule requires Banker access.');
     if (scope !== 'master' && !id) throw new Error('Select a planner audience.');
     const c = await db.conference.findUniqueOrThrow({ where: { id: conferenceId } });
@@ -34,7 +35,15 @@ export async function GET(req: Request) {
             : scope === 'meeting'
               ? { id: id! }
               : {}),
-        ...(user.role === 'SALES' ? { request: { salespersonId: user.id } } : {}),
+        // Sales: their own requests and every meeting of the clients they cover.
+        ...(user.role === 'SALES'
+          ? {
+              OR: [
+                { request: { salespersonId: user.id } },
+                { investorId: { in: (await db.investor.findMany({ where: { coverageSalesId: user.id }, select: { id: true } })).map((x) => x.id) } },
+              ],
+            }
+          : {}),
       },
       orderBy: { start: 'asc' },
     });
