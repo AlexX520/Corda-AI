@@ -1,8 +1,10 @@
 import type { Metadata } from 'next';
+import '@fontsource-variable/inter';
 import './globals.css';
+import './v5.css';
 export const metadata: Metadata = {
-  title: 'Corda AI — Conference coordination, connected',
-  description: 'AI-assisted capital markets conference scheduling. Human-approved, always.',
+  title: 'Corda',
+  description: 'Investor meeting coordination for capital markets desks.',
 };
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

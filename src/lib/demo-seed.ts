@@ -74,10 +74,10 @@ export async function seedDemo(db: Prisma.TransactionClient, opts: DemoSeedOptio
   ];
   const JAMES = ['pimco', 'blackrock', 'wellington', 'fidelity', 'apollo'];
   const cubes = [
-    { id: 'cube-1', name: 'Meeting Cube 1', capacity: 4, location: 'Ocean Tower · Level 2' },
-    { id: 'cube-2', name: 'Meeting Cube 2', capacity: 6, location: 'Ocean Tower · Level 2' },
-    { id: 'cube-3', name: 'Meeting Cube 3', capacity: 6, location: 'Ocean Tower · Level 2' },
-    { id: 'cube-4', name: 'Meeting Cube 4', capacity: 8, location: 'Tresor · Level 1' },
+    { id: 'cube-1', name: 'Room 1', capacity: 4, location: 'Ocean Tower · Level 2' },
+    { id: 'cube-2', name: 'Room 2', capacity: 6, location: 'Ocean Tower · Level 2' },
+    { id: 'cube-3', name: 'Room 3', capacity: 6, location: 'Ocean Tower · Level 2' },
+    { id: 'cube-4', name: 'Room 4', capacity: 8, location: 'Tresor · Level 1' },
     { id: 'cube-5', name: 'Boardroom', capacity: 14, location: 'Tresor · Level 1' },
   ];
   const A = (offset: number) => ANCHOR + offset;

@@ -1,6 +1,6 @@
 'use client';
 import { isDesk } from '@/lib/roles';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
 import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
@@ -10,9 +10,11 @@ import { unhandledSentences } from '@/lib/review-rules';
 import type { Extraction } from '@/lib/extraction-schema';
 import { EventSelect } from './extraction-form';
 import { Badge, Field, fmt, names, Run } from './shared';
+import { askBlocker, senderCompany } from './inbox-model';
 import {
   AlertTriangle,
   CalendarDays,
+  Check,
   Circle,
   CircleCheck,
   Mail,
@@ -37,6 +39,8 @@ export function EmailReview({
   run,
   onReply,
   onOpenEmail,
+  inline,
+  headline,
 }: {
   email: EmailItem;
   proposalId?: string | null;
@@ -45,6 +49,9 @@ export function EmailReview({
   run: Run;
   onReply: (emailId: string, extraQuestions?: string[]) => void;
   onOpenEmail?: (id: string) => void;
+  /** Render in the inbox pane instead of a side sheet. */
+  inline?: boolean;
+  headline?: string;
 }) {
   const n = names(data);
   const asks = email.proposals;
@@ -118,17 +125,70 @@ export function EmailReview({
     setBusy(false);
     await run('ping', {}, `${out.filter((x) => !x.includes('not applied')).length} of ${openAsks.length} asks applied.`);
   }
-  return (
-    <Sheet
-      open
-      onOpenChange={(v) => !v && close()}
-      title={issuerName === 'Unassociated' ? 'Email review' : `${issuerName} · email review`}
-      description={
-        asks.length > 1
-          ? `${asks.length} asks in this email. Nothing updates until you approve each one.`
-          : 'AI prepared the change. Nothing updates until you approve.'
-      }
-    >
+  // Inline pane: one check line per open ask, so the card shows what would block it before anyone clicks.
+  type Check = { hard: string[]; soft: string[]; hold: string | null; protected: string | null; stale: string | null };
+  const [checks, setChecks] = useState<Record<string, Check>>({});
+  const pendingKey = asks.filter((p) => p.status === 'Pending').map((p) => p.id + p.updatedAt).join(',');
+  useEffect(() => {
+    if (!inline || !isDesk(data.user.role)) return;
+    let off = false;
+    void Promise.all(
+      asks
+        .filter((p) => p.status === 'Pending')
+        .map(async (p) => {
+          const e = p.extraction as unknown as Extraction;
+          const r = await fetch('/api/commands', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'reviewCheck', data: { id: p.id, meetingId: e?.meetingId || undefined } }),
+          });
+          return [p.id, r.ok ? (await r.json()).result : null] as const;
+        }),
+    ).then((rows) => {
+      if (!off) setChecks(Object.fromEntries(rows.filter((x) => x[1])));
+    });
+    return () => {
+      off = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inline, pendingKey]);
+  const zone = data.conferences.find((c) => c.id === email.conferenceId)?.timezone || 'America/New_York';
+  const checkLine = (p: (typeof asks)[number]) => {
+    if (ASK_DONE.includes(p.status)) return { text: p.status === 'Resolved' ? 'Handled' : p.status, tone: 'done' };
+    const block = askBlocker(p, email);
+    if (block) return { text: block, tone: 'warn' };
+    const k = checks[p.id];
+    if (!k) return { text: 'Checking…', tone: 'quiet' };
+    if (k.hold) return { text: `On hold: ${k.hold}`, tone: 'bad' };
+    if (k.protected) return { text: `Protected: ${k.protected}`, tone: 'bad' };
+    if (k.hard.length) return { text: k.hard[0], tone: 'bad' };
+    if (k.stale) return { text: `Meeting changed since this email: ${k.stale}`, tone: 'warn' };
+    if (k.soft.length) return { text: k.soft[0], tone: 'warn' };
+    return { text: 'Checks pass', tone: 'ok' };
+  };
+  const fromTo = (p: (typeof asks)[number]) => {
+    const e = p.extraction as unknown as Extraction;
+    const target = e?.windows?.find((w) => w.kind === 'availability');
+    const t = (v: string) => fmt(v, zone, 'EEE h:mm a');
+    if (e?.operation === 'cancel') return { from: e.referenceTime ? t(e.referenceTime) : '', to: 'Cancelled', strike: true, bad: true };
+    if (e?.operation === 'reschedule') return { from: e.referenceTime ? t(e.referenceTime) : '', to: target ? t(target.start) : 'New time?', strike: false, bad: false };
+    if (e?.category === 'New Meeting Request' || e?.operation === 'confirm') return { from: e.operation === 'confirm' ? 'Requested' : 'New', to: target ? t(target.start) : 'Time?', strike: false, bad: false };
+    if (e?.operation === 'add' || e?.operation === 'replace') return { from: 'Availability', to: target ? `${fmt(target.start, zone, 'EEE h:mm')}–${fmt(target.end, zone, 'h:mm a')}` : '', strike: false, bad: false };
+    return { from: '', to: '', strike: false, bad: false };
+  };
+  const sender = email.originalSenderName || email.originalSender || email.sender;
+  const company = senderCompany(email, data) || '';
+  const trust =
+    email.status === 'Quarantined'
+      ? { tone: 'bad', text: 'Reported as phishing' }
+      : unverified || senderFlags.length
+        ? { tone: 'bad', text: 'Sender not verified' }
+        : email.senderStatus === 'internal'
+          ? { tone: 'ok', text: `Internal${forwardedBy ? ` · forwarded by ${String(forwardedBy)}` : ''}` }
+          : { tone: 'ok', text: `Verified sender${company ? ` · ${company}` : ''}` };
+  const canApplyAll = openAsks.length > 1 && !email.suspicious && !email.escalation;
+  const content = (
+    <>
       {notify && (
         <div className="notify-banner">
           <strong>{notify.text}</strong>
@@ -139,7 +199,7 @@ export function EmailReview({
           <button className="text-button" onClick={() => setNotify(null)}>Not now</button>
         </div>
       )}
-      {(openAsks.length > 1 || applyResult) && !email.suspicious && !email.escalation && (
+      {!inline && (openAsks.length > 1 || applyResult) && !email.suspicious && !email.escalation && (
         <div className="apply-all">
           {applyResult && !openAsks.length ? (
             <>
@@ -167,7 +227,7 @@ export function EmailReview({
           )}
         </div>
       )}
-      <div className="email-head">
+      {!inline && <div className="email-head">
         <div>
           <strong>{email.originalSenderName || email.originalSender || email.sender}</strong>
           {email.originalSender && <span> &lt;{email.originalSender}&gt;</span>}
@@ -181,7 +241,7 @@ export function EmailReview({
             <Mail size={13} /> Reply
           </Button>
         )}
-      </div>
+      </div>}
       {email.status === 'Quarantined' && (
         <div className="sender-alert" role="alert">
           <ShieldAlert size={18} />
@@ -212,7 +272,7 @@ export function EmailReview({
           ))}
         </div>
       )}
-      {email.escalation && email.escalationReasons.length > 0 && (
+      {!inline && email.escalation && email.escalationReasons.length > 0 && (
         <div className="flag-list escalation" role="note">
           <span>
             <AlertTriangle size={13} /> Escalation: {email.escalationReasons.join(' · ')}
@@ -266,7 +326,7 @@ export function EmailReview({
           )}
         </div>
       )}
-      {asks.length > 1 && (
+      {!inline && asks.length > 1 && (
         <div className="ask-list" aria-label="Asks in this email">
           <div className="ask-list-head">
             <strong>
@@ -291,6 +351,54 @@ export function EmailReview({
             );
           })}
         </div>
+      )}
+      {inline && asks.length > 1 && (
+        <section className="v5-card v5-changes" aria-label="Changes in this email">
+          {asks.map((p, i) => {
+            const k = checkLine(p);
+            const ft = fromTo(p);
+            return (
+              <button key={p.id} className={`row ${p.id === proposal?.id ? 'active' : ''} ${ASK_DONE.includes(p.status) ? 'done' : ''}`} onClick={() => setSelected(p.id)} aria-current={p.id === proposal?.id}>
+                <span className="n">{ASK_DONE.includes(p.status) ? <Check size={13} strokeWidth={2.6} /> : i + 1}</span>
+                <span className="body">
+                  <strong>{p.summary || `Change ${i + 1}`}</strong>
+                  <small className={k.tone}>{k.text}</small>
+                </span>
+                {ft.to && (
+                  <span className="ft">
+                    {ft.from && <span className={ft.strike ? 'from strike' : 'from'}>{ft.from}</span>}
+                    {ft.from && <span className="arrow" aria-hidden>→</span>}
+                    <span className={ft.bad ? 'to bad' : 'to'}>{ft.to}</span>
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {(canApplyAll || applyResult) && (
+            <div className="foot">
+              {applyResult && !openAsks.length ? (
+                <ul className="apply-result">{applyResult.map((r, i) => <li key={i}>{r}</li>)}</ul>
+              ) : (
+                <>
+                  <label className="agree">
+                    <input type="checkbox" checked={agreed} onChange={(ev) => setAgreed(ev.target.checked)} />
+                    Both sides agreed to these changes
+                  </label>
+                  <span className="grow" />
+                  <button className="v5-btn primary" disabled={!agreed || busy} onClick={approveAll}>
+                    {busy ? 'Applying…' : `Apply all ${openAsks.length}`}
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+          {applyResult && openAsks.length > 0 && <ul className="apply-result pad">{applyResult.map((r, i) => <li key={i}>{r}</li>)}</ul>}
+        </section>
+      )}
+      {inline && asks.length > 1 && proposal && (
+        <h3 className="v5-sub">
+          Change {index + 1} of {asks.length} in detail
+        </h3>
       )}
       {!ignored && !email.suspicious && loose.length > 0 && isDesk(data.user.role) && (
         <div className="loose-sentences">
@@ -328,6 +436,44 @@ export function EmailReview({
           <pre className="dc-email-body">{email.body}</pre>
         </div>
       )}
+    </>
+  );
+  if (inline)
+    return (
+      <div className={`v5-detail ${asks.length === 1 && !ignored ? 'single' : ''}`}>
+        <header className="v5-mail-head">
+          <div className={`trust ${trust.tone}`}>
+            {trust.tone === 'ok' ? <Check size={14} strokeWidth={2.4} /> : <ShieldAlert size={14} />}
+            {trust.text}
+          </div>
+          <h2>{headline || email.subject}</h2>
+          <div className="meta">
+            <span>
+              {sender} · {fmt(email.receivedAt, zone, 'EEE h:mm a')}
+              {email.cc.length ? ` · cc ${email.cc.length}` : ''}
+            </span>
+            {!ignored && !email.suspicious && email.status !== 'Quarantined' && (
+              <button className="v5-link" onClick={() => onReply(email.id)}>
+                Reply
+              </button>
+            )}
+          </div>
+        </header>
+        {content}
+      </div>
+    );
+  return (
+    <Sheet
+      open
+      onOpenChange={(v) => !v && close()}
+      title={issuerName === 'Unassociated' ? 'Email review' : `${issuerName} · email review`}
+      description={
+        asks.length > 1
+          ? `${asks.length} asks in this email. Nothing updates until you approve each one.`
+          : 'Corda prepared the change. Nothing updates until you approve.'
+      }
+    >
+      {content}
     </Sheet>
   );
 }

@@ -215,30 +215,68 @@ export function SalesHome({
       setCopied(false);
     }
   }
+  const today = fmt(data.now, zone, 'yyyy-MM-dd');
+  const inEvent = today >= c.startDate && today <= c.endDate;
+  const dayNo = Math.round((+new Date(`${today}T12:00:00Z`) - +new Date(`${c.startDate}T12:00:00Z`)) / 86400000) + 1;
+  const dayCount = Math.round((+new Date(`${c.endDate}T12:00:00Z`) - +new Date(`${c.startDate}T12:00:00Z`)) / 86400000) + 1;
+  const confirmedAll = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed' && clients.some((cl) => cl.id === m.investorId));
+  const waitingAll = data.requests.filter((r) => r.conferenceId === conferenceId && !['Confirmed', 'Cancelled'].includes(r.status) && clients.some((cl) => cl.id === r.investorId));
+  const card = (id: string) => {
+    const meetings = confirmedAll.filter((m) => m.investorId === id);
+    const waiting = waitingAll.filter((r) => r.investorId === id).length;
+    const cancelled = data.meetings.filter((m) => m.conferenceId === conferenceId && m.investorId === id && m.status === 'Cancelled' && m.changedAt && fmt(m.changedAt, zone, 'yyyy-MM-dd') === today).length;
+    const note = cancelled
+      ? { text: `${cancelled} cancelled today`, tone: 'warn' }
+      : waiting
+        ? { text: `${waiting} request${waiting === 1 ? '' : 's'} waiting`, tone: '' }
+        : meetings.length
+          ? { text: 'All confirmed', tone: 'ok' }
+          : { text: 'No meetings yet', tone: '' };
+    return { count: `${meetings.length} meeting${meetings.length === 1 ? '' : 's'}`, note };
+  };
   return (
-    <>
-      <div className="page-heading">
-        <div>
-          <h1>My clients</h1>
-          <p>
-            {clients.length} account{clients.length === 1 ? '' : 's'} you cover · {c.name}
-          </p>
-        </div>
-        <button className="text-button" onClick={onOpenEmails}>
-          My emails <Mail size={13} />
-        </button>
-      </div>
-      <div className="panel">
+    <div className="v5-page wide">
+      <header className="v5-hero">
+        <span className="eyebrow">
+          {c.name}
+          {inEvent ? ` · Day ${dayNo} of ${dayCount}` : ''} · {clients.length} account{clients.length === 1 ? '' : 's'} you cover
+        </span>
+        <h1>
+          Your clients have {confirmedAll.length} meeting{confirmedAll.length === 1 ? '' : 's'}.
+        </h1>
+        <p>
+          {waitingAll.length ? `${waitingAll.length} request${waitingAll.length === 1 ? ' is' : 's are'} still waiting on the desk. ` : ''}
+          {feed.length ? `Latest change: ${feed[0].text}` : 'No changes to their meetings yet.'}
+        </p>
+      </header>
+      <section aria-label="Ask for meetings" className="v5-card v5-quick">
         <QuickRequest data={data} conferenceId={conferenceId} run={run} />
-      </div>
-      <div className="client-chips" role="tablist" aria-label="Client">
-        <button className={client === 'all' ? 'active' : ''} onClick={() => setClient('all')}>All clients</button>
-        {clients.map((cl) => (
-          <button key={cl.id} className={client === cl.id ? 'active' : ''} onClick={() => setClient(cl.id)}>
-            {cl.name}
+      </section>
+      <section aria-label="Clients" className="v5-stack">
+        <div className="v5-section-head">
+          <h2>Clients</h2>
+          <button className="v5-link" onClick={onOpenEmails}>
+            My emails
           </button>
-        ))}
-      </div>
+        </div>
+        <div className="v5-clients" role="tablist" aria-label="Client">
+          <button className={`v5-client ${client === 'all' ? 'on' : ''}`} onClick={() => setClient('all')}>
+            <strong>All clients</strong>
+            <span>{confirmedAll.length} meetings</span>
+            <span>{waitingAll.length ? `${waitingAll.length} waiting` : 'Nothing waiting'}</span>
+          </button>
+          {clients.map((cl) => {
+            const k = card(cl.id);
+            return (
+              <button key={cl.id} className={`v5-client ${client === cl.id ? 'on' : ''}`} onClick={() => setClient(cl.id)}>
+                <strong>{cl.name}</strong>
+                <span>{k.count}</span>
+                <span className={k.note.tone}>{k.note.text}</span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
       <div className="sales-grid">
         <section className="panel">
           <div className="panel-heading"><h3>Requests and meetings</h3></div>
@@ -308,6 +346,6 @@ export function SalesHome({
           </section>
         </div>
       </div>
-    </>
+    </div>
   );
 }

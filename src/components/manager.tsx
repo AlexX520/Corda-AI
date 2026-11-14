@@ -1,23 +1,12 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { AlertTriangle, CalendarRange, Clock3, Inbox, Users } from 'lucide-react';
 import type { AppState } from '@/lib/types';
-import { Badge, Empty, fmt } from './shared';
+import { Empty, fmt } from './shared';
 
 type M = NonNullable<AppState['metrics']>;
 const pct = (v: number | null) => (v === null ? '—' : `${Math.round(v * 100)}%`);
 const hours = (h: number | null) => (h === null ? '—' : h < 1 ? `${Math.round(h * 60)} min` : h < 48 ? `${Math.round(h * 10) / 10} h` : `${Math.round(h / 24)} d`);
 const age = (h: number) => (h < 24 ? `${h} h` : `${Math.round(h / 24)} d`);
-
-function Kpi({ label, value, hint, tone, onClick }: { label: string; value: string | number; hint?: string; tone?: 'amber' | 'red'; onClick?: () => void }) {
-  return (
-    <div className={`kpi ${tone || ''} ${onClick ? 'clickable' : ''}`} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined} onClick={onClick} onKeyDown={(e) => onClick && e.key === 'Enter' && onClick()}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      {hint && <small>{hint}</small>}
-    </div>
-  );
-}
 
 /** Manager home: every event, computed from the live records (plus clearly marked demo history). */
 export type Drill = { scope?: 'mine' | 'issuers' | 'everyone'; owner?: string; urgent?: boolean; focus?: 'escalation' | 'all'; status?: string };
@@ -53,122 +42,148 @@ export function ManagerHome({
   if (!m) return <Empty title="Loading metrics" description="Team metrics are available to managers." />;
   const handled = m.emails.approvedClean + m.emails.approvedEdited + m.emails.rejected;
   const share = (n: number) => (handled ? `${Math.round((n / handled) * 100)}%` : '—');
+  const esc = m.escalations.length;
+  const late = m.unanswered.length;
+  const plural = (k: number, w: string) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  const verdict = esc || late ? `Your desk needs you in ${plural(esc + late, 'place')}.` : 'Your desk is on track.';
+  const detail =
+    esc && late
+      ? `${plural(esc, 'client escalation')} ${esc === 1 ? 'is' : 'are'} open and ${plural(late, 'issuer email')} ${late === 1 ? 'has' : 'have'} waited more than 4 hours.`
+      : esc
+        ? `${plural(esc, 'client escalation')} ${esc === 1 ? 'is' : 'are'} open. No issuer email has waited more than 4 hours.`
+        : late
+          ? `${plural(late, 'issuer email')} ${late === 1 ? 'has' : 'have'} waited more than 4 hours. No escalations are open.`
+          : `No escalations are open and no issuer email has waited more than 4 hours. ${plural(m.totals.openItems, 'item')} in the team inbox.`;
+  const maxOpen = Math.max(...m.workload.map((w) => w.openItems), 1);
+  const oldest = (id: string) => m.openByCoordinator.find((o) => o.userId === id)?.oldestHours;
   return (
-    <>
-      <div className="page-heading">
-        <div>
-          <h1>Team overview</h1>
-          <p>{eventId ? data.conferences.find((c) => c.id === eventId)?.name : 'All events'} · updated {fmt(m.generatedAt, data.conferences[0]?.timezone, 'MMM d, h:mm a')}</p>
+    <div className="v5-page wide">
+      <header className="v5-hero">
+        <span className="eyebrow">
+          <select aria-label="Event" className="v5-inline-select" value={eventId} onChange={(e) => setEventId(e.target.value)}>
+            <option value="">All events</option>
+            {data.conferences.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {' · '}updated {fmt(m.generatedAt, data.conferences[0]?.timezone, 'MMM d, h:mm a')}
+        </span>
+        <h1>{verdict}</h1>
+        <p>{detail}</p>
+      </header>
+
+      <section aria-label="Key numbers" className="v5-kpis">
+        <button className="v5-card v5-kpi" onClick={() => onOpenMeetings(eventId || undefined)}>
+          <span className="l">Meetings confirmed</span>
+          <span className="v">{m.totals.meetings}</span>
+          <span className="n">{m.totals.requested ? `${pct(m.totals.rate)} of requests granted (${m.totals.confirmed} of ${m.totals.requested})` : 'No requests yet'}</span>
+        </button>
+        <div className="v5-card v5-kpi">
+          <span className="l">Time to confirm</span>
+          <span className="v">{hours(m.totals.medianHoursToConfirm)}</span>
+          <span className="n">median, request to confirmed meeting · {plural(m.totals.confirmedFromRequests, 'request')}</span>
         </div>
-        <select aria-label="Event" className="compact-select" value={eventId} onChange={(e) => setEventId(e.target.value)}>
-          <option value="">All events</option>
-          {data.conferences.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-      </div>
-      <div className="kpi-row">
-        <Kpi label="Confirmed meetings" value={m.totals.meetings} onClick={() => onOpenMeetings(eventId || undefined)} />
-        <Kpi label="Fill rate" value={pct(m.totals.rate)} hint={`${m.totals.confirmed} of ${m.totals.requested} requests`} onClick={() => onOpenMeetings(eventId || undefined)} />
-        <Kpi label="Median time to confirm" value={hours(m.totals.medianHoursToConfirm)} hint={`${m.totals.confirmedFromRequests} requests`} />
-        <Kpi label="Open items" value={m.totals.openItems} onClick={() => onOpenQueue({ scope: 'everyone' })} />
-        <Kpi label="Escalations open" value={m.totals.escalationsOpen} tone={m.totals.escalationsOpen ? 'red' : undefined} onClick={() => onOpenQueue({ scope: 'everyone', focus: 'escalation' })} />
-        <Kpi label="Issuer emails > 4 h" value={m.totals.unansweredIssuerEmails} tone={m.totals.unansweredIssuerEmails ? 'amber' : undefined} hint="waiting on us" onClick={() => m.unanswered[0] && onOpenEmail(m.unanswered[0].id)} />
-        <Kpi label="Asks handled by Corda" value={m.roi.asksHandled} hint={`≈ ${m.roi.hoursSaved} h saved (${m.roi.minutesPerAsk} min per ask, assumed)`} onClick={() => onOpenAudit({ action: '' })} />
-      </div>
-      <div className="mgr-grid">
-        <section className="panel mgr-events">
-          <div className="panel-heading"><h3><CalendarRange size={14} /> Events</h3></div>
-          <div className="table-scroll">
-            <table>
-              <thead><tr><th>Event</th><th>Type</th><th>Dates</th><th>Meetings</th><th>Fill rate</th><th>Open</th></tr></thead>
-              <tbody>
-                {m.events.map((e) => (
-                  <tr key={e.id} className="clickable" onClick={() => onOpenEvent(e.id)}>
-                    <td><strong>{e.name}</strong><small>{e.location}</small></td>
-                    <td><Badge tone={e.type === 'NDR' ? 'blue' : e.type === 'Roadshow' ? 'amber' : undefined}>{e.type}</Badge></td>
-                    <td>{fmt(`${e.startDate}T12:00:00Z`, 'UTC', 'MMM d')}{e.endDate !== e.startDate ? `–${fmt(`${e.endDate}T12:00:00Z`, 'UTC', 'MMM d')}` : ''}<small>{e.state}</small></td>
-                    <td>{e.meetings}</td>
-                    <td>{pct(e.rate)}<small>{e.confirmed}/{e.requested}</small></td>
-                    <td>{e.openItems}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <button className="v5-card v5-kpi" onClick={() => onOpenAudit({ action: '' })}>
+          <span className="l">Hours saved</span>
+          <span className="v">{m.roi.hoursSaved} h</span>
+          <span className="n">{plural(m.roi.asksHandled, 'request')} handled in Corda · {m.roi.minutesPerAsk} min each, assumed</span>
+        </button>
+      </section>
+
+      <section aria-label="Needs your attention" className="v5-stack">
+        <div className="v5-section-head">
+          <h2>Needs your attention</h2>
+          <button className="v5-link" onClick={() => onOpenQueue({ scope: 'everyone' })}>Team inbox · {m.totals.openItems}</button>
+        </div>
+        {m.escalations.map((e) => (
+          <div key={e.id} className="v5-need">
+            <span className="v5-dot red" />
+            <div className="body">
+              <strong>{e.title}</strong>
+              <span>Client escalation · owned by {e.owner} · open {age(e.ageHours)}</span>
+            </div>
+            <button className="v5-btn quiet" onClick={() => onOpenQueue({ scope: 'everyone', focus: 'escalation' })}>View</button>
           </div>
-        </section>
-        <section className="panel mgr-emails">
-          <div className="panel-heading"><h3><Inbox size={14} /> Email asks handled</h3></div>
-          <div className="mgr-bar" aria-label="Email asks handled">
-            <span className="clean" style={{ flexGrow: m.emails.approvedClean }} />
-            <span className="edited" style={{ flexGrow: m.emails.approvedEdited }} />
-            <span className="rejected" style={{ flexGrow: m.emails.rejected }} />
+        ))}
+        {m.unanswered.map((e) => (
+          <div key={e.id} className="v5-need">
+            <span className="v5-dot amber" />
+            <div className="body">
+              <strong>{e.issuer}: {e.subject}</strong>
+              <span>Issuer email with no reply for {age(e.ageHours)}</span>
+            </div>
+            <button className="v5-btn quiet" onClick={() => onOpenEmail(e.id)}>Open</button>
           </div>
-          <ul className="mgr-legend">
-            <li><i className="clean" /> Approved as read <b>{m.emails.approvedClean}</b> <small>{share(m.emails.approvedClean)}</small></li>
-            <li><i className="edited" /> Approved after edits <b>{m.emails.approvedEdited}</b> <small>{share(m.emails.approvedEdited)}</small></li>
-            <li><i className="rejected" /> Declined by the desk <b>{m.emails.declined}</b> <small>{share(m.emails.declined)}</small></li>
-            <li><i className="noise" /> Noise / phishing rejected <b>{m.emails.rejectedNoise}</b></li>
-            <li><i /> Still pending <b>{m.emails.pending}</b></li>
-          </ul>
-        </section>
-        <section className="panel">
-          <div className="panel-heading">
-            <h3><Clock3 size={14} /> Open items per coordinator</h3>
-            <button className="text-button" onClick={() => onOpenQueue({ scope: "everyone" })}>Open queue</button>
+        ))}
+        {!esc && !late && (
+          <div className="v5-need calm">
+            <span className="v5-dot ok" />
+            <div className="body">
+              <strong>Nothing overdue</strong>
+              <span>Escalations and issuer emails waiting more than 4 hours appear here.</span>
+            </div>
           </div>
-          <div className="table-scroll">
-            <table>
-              <thead><tr><th>Coordinator</th><th>Open</th><th>Oldest</th></tr></thead>
-              <tbody>
-                {m.openByCoordinator.map((o) => (
-                  <tr key={o.userId || 'none'} className="clickable" onClick={() => onOpenQueue({ scope: 'everyone', owner: o.userId || '' })}><td>{o.name}</td><td>{o.open}</td><td className={o.oldestHours > 24 ? 'warn-text' : ''}>{age(o.oldestHours)}</td></tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        )}
+      </section>
+
+      <div className="v5-two">
+        <section aria-label="Events" className="v5-card v5-panel big">
+          <h3>Events</h3>
+          {m.events.map((e) => (
+            <button key={e.id} className="line" style={{ gridTemplateColumns: 'minmax(0, 1fr) 96px 110px 64px' }} onClick={() => onOpenEvent(e.id)}>
+              <span className="two">
+                <strong>{e.name}</strong>
+                <small>
+                  {e.type} · {e.location} · {fmt(`${e.startDate}T12:00:00Z`, 'UTC', 'MMM d')}
+                  {e.endDate !== e.startDate ? `–${fmt(`${e.endDate}T12:00:00Z`, 'UTC', 'd')}` : ''} · {e.state.toLowerCase()}
+                </small>
+              </span>
+              <span className="r">{plural(e.meetings, 'meeting')}</span>
+              <span className="r q">{e.requested ? `${pct(e.rate)} granted` : 'Planning'}</span>
+              <span className="r q">{e.openItems ? `${e.openItems} open` : ''}</span>
+            </button>
+          ))}
         </section>
-        <section className="panel">
-          <div className="panel-heading"><h3><AlertTriangle size={14} /> Needs attention</h3></div>
-          <ul className="mgr-list">
-            {m.escalations.map((e) => (
-              <li key={e.id} className="clickable" onClick={() => onOpenQueue({ scope: 'everyone', focus: 'escalation' })}><Badge tone="red">Escalation</Badge> <span>{e.title}</span> <small>{e.owner} · {age(e.ageHours)}</small></li>
-            ))}
-            {m.unanswered.map((e) => (
-              <li key={e.id} className="clickable" onClick={() => onOpenEmail(e.id)}><Badge tone="amber">No reply {age(e.ageHours)}</Badge> <span>{e.issuer}: {e.subject}</span></li>
-            ))}
-            {!m.escalations.length && !m.unanswered.length && <li className="muted">Nothing overdue.</li>}
-          </ul>
-        </section>
-        <section className="panel mgr-workload">
-          <div className="panel-heading"><h3><Users size={14} /> Team workload</h3></div>
-          <div className="table-scroll">
-            <table>
-              <thead><tr><th>Person</th><th>Meetings covered</th><th>Next 7 days</th><th>Open items</th></tr></thead>
-              <tbody>
-                {m.workload.map((w) => {
-                  const max = Math.max(...m.workload.map((x) => x.meetings), 1);
-                  return (
-                    <tr key={w.userId} className="clickable" onClick={() => onOpenQueue({ scope: 'everyone', owner: w.userId })}>
-                      <td>{w.name}</td>
-                      <td><span className="mgr-meter"><i style={{ width: `${(w.meetings / max) * 100}%` }} /></span>{w.meetings}</td>
-                      <td>{w.next7Days}</td>
-                      <td>{w.openItems}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </section>
-        <section className="panel">
-          <div className="panel-heading"><h3>Meetings per issuer</h3></div>
-          <ul className="mgr-rank">{m.perIssuer.slice(0, 8).map((p) => <li key={p.id} className="clickable" onClick={() => onOpenAudit({ issuer: p.id })}><span>{p.name}</span><b>{p.meetings}</b><small>{p.requested} requested</small></li>)}</ul>
-        </section>
-        <section className="panel">
-          <div className="panel-heading"><h3>Meetings per investor</h3></div>
-          <ul className="mgr-rank">{m.perInvestor.slice(0, 8).map((p) => <li key={p.id}><span>{p.name}</span><b>{p.meetings}</b><small>{p.requested} requested</small></li>)}</ul>
+        <section aria-label="Team load" className="v5-card v5-panel small">
+          <h3>Team load</h3>
+          {m.workload.map((w) => (
+            <button key={w.userId} className="line" style={{ gridTemplateColumns: 'minmax(0, 1fr) 84px' }} onClick={() => onOpenQueue({ scope: 'everyone', owner: w.userId })}>
+              <span className="two">
+                <span>{w.name}</span>
+                <span className="v5-bar"><span style={{ width: `${(w.openItems / maxOpen) * 100}%` }} /></span>
+                <small>{plural(w.meetings, 'meeting')} covered{oldest(w.userId) ? ` · oldest item ${age(oldest(w.userId)!)}` : ''}</small>
+              </span>
+              <span className="r">{w.openItems} open</span>
+            </button>
+          ))}
         </section>
       </div>
 
-    </>
+      <div className="v5-two">
+        <section aria-label="How requests were handled" className="v5-card v5-panel big">
+          <h3>How email requests were handled</h3>
+          <div className="v5-mix" role="img" aria-label={`${m.emails.approvedClean} approved as read, ${m.emails.approvedEdited} approved after edits, ${m.emails.rejected} rejected`}>
+            <span style={{ flexGrow: m.emails.approvedClean, background: '#15803d' }} />
+            <span style={{ flexGrow: m.emails.approvedEdited, background: '#d97706' }} />
+            <span style={{ flexGrow: m.emails.rejected, background: '#a1a1aa' }} />
+          </div>
+          <div className="v5-legend">
+            <span><i style={{ background: '#15803d' }} />Approved as read <b>{m.emails.approvedClean}</b> · {share(m.emails.approvedClean)}</span>
+            <span><i style={{ background: '#d97706' }} />Approved after edits <b>{m.emails.approvedEdited}</b> · {share(m.emails.approvedEdited)}</span>
+            <span><i style={{ background: '#a1a1aa' }} />Declined by the desk <b>{m.emails.declined}</b> · {share(m.emails.declined)}</span>
+            <span>Phishing and noise rejected <b>{m.emails.rejectedNoise}</b></span>
+            <span>Still pending <b>{m.emails.pending}</b></span>
+          </div>
+        </section>
+        <section aria-label="Meetings per issuer" className="v5-card v5-panel small">
+          <h3>Meetings per issuer</h3>
+          {m.perIssuer.slice(0, 6).map((p) => (
+            <button key={p.id} className="line" style={{ gridTemplateColumns: 'minmax(0, 1fr) 40px 110px' }} onClick={() => onOpenAudit({ issuer: p.id })}>
+              <span>{p.name}</span>
+              <strong className="r">{p.meetings}</strong>
+              <span className="r q">{p.requested} requested</span>
+            </button>
+          ))}
+        </section>
+      </div>
+    </div>
   );
 }

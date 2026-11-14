@@ -312,7 +312,7 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
           void (sendable.length === 1 && result?.options.length === 1 ? send([sendable[0].issuerId]) : check());
         }}
       >
-        <Search size={15} color="#8a968c" />
+        <Search size={15} color="#8a8a96" />
         <input
           aria-label="Describe the meeting in one line"
           placeholder="e.g. PIMCO wants Ford Credit, Ally and Discover Tuesday · or Ally / Vanguard 2-3pm Tue"
@@ -790,7 +790,7 @@ export function PlannerView({
     <>
       <div className="page-heading">
         <div>
-          <h1>Schedule</h1>
+          <h1>All meetings</h1>
           <p>
             {meetings.length} confirmed meeting{meetings.length === 1 ? '' : 's'}
           </p>
@@ -908,7 +908,7 @@ export function PlannerView({
                       <>
                         <th>Primary banker</th>
                         <th>Additional coverage</th>
-                        <th>Meeting cube</th>
+                        <th>Room</th>
                       </>
                     ) : (
                       <th>Location</th>
@@ -1084,7 +1084,7 @@ function BankerWeekCalendar({
     <div className="banker-week">
       <div className="banker-week-summary">
         <div>
-          <Avatar name={n.user(bankerId)} color="#436b5e" />
+          <Avatar name={n.user(bankerId)} color="#29292e" />
           <div>
             <strong>{n.user(bankerId)}’s coverage schedule</strong>
             <p>{meetings.length} approved meeting{meetings.length === 1 ? '' : 's'} · {conference.timezone}</p>
@@ -1119,7 +1119,7 @@ function BankerWeekCalendar({
                 const role = assignment(meeting.id)?.coverageRole || 'Coverage';
                 return <button key={meeting.id} title={`${n.issuer(meeting.issuerId)} × ${n.investor(meeting.investorId)} · ${cube?.name || meeting.location || 'Room TBC'}`} className={`banker-calendar-event ${height < 56 ? 'short' : ''}`} style={{ top: Math.max(top, 0), height, borderLeftColor: issuer.color, background: `${issuer.color}14` }} onClick={() => onSelect(meeting.id)}>
                   <small>{fmt(meeting.start, conference.timezone, 'h:mm')}–{fmt(meeting.end, conference.timezone, 'h:mm a')} · {cube?.name || meeting.location || 'Room TBC'}</small>
-                  <div><strong>{n.issuer(meeting.issuerId)} <span style={{ fontWeight: 400, color: '#5d6f63' }}>× {n.investor(meeting.investorId)}</span></strong><Badge tone={role === 'Primary' ? 'green' : 'gray'}>{role}</Badge></div>
+                  <div><strong>{n.issuer(meeting.issuerId)} <span style={{ fontWeight: 400, color: '#595963' }}>× {n.investor(meeting.investorId)}</span></strong><Badge tone={role === 'Primary' ? 'green' : 'gray'}>{role}</Badge></div>
                 </button>;
               })}
             </div>;

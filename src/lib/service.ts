@@ -2735,7 +2735,8 @@ export async function getState(user: User) {
         ? i
         : { id: i.id, name: i.name, sector: i.sector, color: i.color, ownerId: i.ownerId },
     ),
-    investors: investors.map((i) => ({ id: i.id, name: i.name, coverageSalesId: i.coverageSalesId })),
+    // Desk roles get the contact domain (not the address) to label who an email is from.
+    investors: investors.map((i) => ({ id: i.id, name: i.name, coverageSalesId: i.coverageSalesId, ...(isDesk(user.role) ? { domain: domainOf(i.contactEmail) } : {}) })),
     clients,
     notifications,
     users: users.map((u) => ({ id: u.id, name: u.name, role: u.role, email: u.email })),

@@ -9,6 +9,9 @@ import {
   ArrowUpRight,
   Bell,
   Building2,
+  ClipboardList,
+  Inbox as InboxIcon,
+  Menu,
   CalendarDays,
   Check,
   CheckCheck,
@@ -53,6 +56,9 @@ import { AuditTrail } from './audit';
 import { SalesEmailsView, SalesHome } from './sales';
 import { ManagerHome, type Drill } from './manager';
 import { HoldsBar, MyDay } from './myday';
+import { Inbox } from './inbox';
+import { DayGrid } from './schedule-grid';
+import { inboxItems, type InboxItem } from './inbox-model';
 import { AskCorda, AskPanel } from './ask';
 import { MeetingDrawer, MeetingForm } from './meeting';
 import { actionKind, askOf, askPosition, kindLabel, kindOrder, openWork, type KindId } from './queue-model';
@@ -156,7 +162,8 @@ export function Workspace() {
     [inboxTab, setInboxTab] = useState<'review' | 'ignored'>('review'),
     [drill, setDrill] = useState<Drill | null>(null),
     [auditFilter, setAuditFilter] = useState<Record<string, string> | null>(null),
-    [mobile, setMobile] = useState(false);
+    [mobile, setMobile] = useState(false),
+    [classic, setClassic] = useState(false);
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
     const result = await response.json();
@@ -323,11 +330,23 @@ export function Workspace() {
     } else if (id === 'resources') {
       setPage('allocation');
     } else {
-      if (id === 'queue') setQueueSection('tasks');
+      if (id === 'queue') {
+        setQueueSection('tasks');
+        setClassic(false);
+      }
       setPage(id);
     }
     setSearch('');
     setMobile(false);
+  }
+  /** Emails are reviewed in the inbox pane, wherever they were opened from. */
+  function openEmail(id: string, proposalId?: string | null) {
+    setReview({ emailId: id, proposalId });
+    if (data && isDesk(data.user.role)) {
+      setClassic(false);
+      setQueueSection('tasks');
+      setPage('queue');
+    }
   }
   async function switchUser(id: string) {
     try {
@@ -394,8 +413,8 @@ export function Workspace() {
   if (!data)
     return (
       <main className="loading-screen">
-        <CordaMark />
-        <h1>Corda AI</h1>
+        <span className="v5-mark">C</span>
+        <h1>Corda</h1>
         {error ? (
           <>
             <p>{error}</p>
@@ -423,244 +442,206 @@ export function Workspace() {
     outlook = data.outlook,
     draft = data.drafts.find((d) => d.id === draftId);
   const confirmed = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed');
+  const allItems = inboxItems(data, openActions, c.timezone);
+  const inboxCount = manager ? allItems.length : allItems.filter((i) => i.mine).length || 0;
+  const inSchedule = page === 'schedule' || page === 'allocation' || page === 'requests';
+  const nav = (
+    manager
+      ? [
+          { id: 'overview', label: 'Overview', icon: BarChart3 },
+          { id: 'queue', label: 'Team inbox', icon: InboxIcon, count: inboxCount },
+          { id: 'schedule', label: 'Events', icon: CalendarDays },
+        ]
+      : banker
+        ? [
+            { id: 'overview', label: 'Today', icon: Sun },
+            { id: 'queue', label: 'Inbox', icon: InboxIcon, count: inboxCount },
+            { id: 'schedule', label: 'Schedule', icon: CalendarDays },
+          ]
+        : [
+            { id: 'overview', label: 'My clients', icon: Users },
+            { id: 'emails', label: 'My emails', icon: Mail },
+            { id: 'schedule', label: 'Schedule', icon: CalendarDays },
+          ]
+  ).map((m) => ({ count: 0, ...m, active: m.id === 'schedule' ? inSchedule : page === m.id }));
+  const v5Page = page === 'overview' || (page === 'queue' && queueSection === 'tasks' && !classic && banker);
+  const searchable = inSchedule || page === 'emails' || (page === 'queue' && (queueSection !== 'tasks' || classic));
+  const inboxFilter = drill?.owner !== undefined && drill.owner !== ''
+    ? { label: `Owner: ${n.user(drill.owner)}`, test: (a: AppState['actions'][number]) => a.assignedTo === drill.owner }
+    : drill?.focus === 'escalation'
+      ? { label: 'Escalations', test: (a: AppState['actions'][number]) => actionKind(a, data).id === 'escalation' }
+      : null;
+  function openItem(item: InboxItem) {
+    if (item.kind === 'email') openEmail(item.email!.id, item.actions[0]?.proposalId);
+    else if (item.kind === 'request') setSheetRequestId(item.request!.id);
+    else actionClick(item.actions[0]);
+  }
   function actionClick(a: AppState['actions'][number]) {
-    if (a.emailId) setReview({ emailId: a.emailId, proposalId: a.proposalId });
+    if (a.emailId) openEmail(a.emailId, a.proposalId);
     else if (a.requestId) setSheetRequestId(a.requestId);
     else if (a.meetingId && data!.meetings.some((m) => m.id === a.meetingId)) setMeetingId(a.meetingId);
     else if (a.type === 'Resource allocation') navigate('resources');
     else navigate('availability');
   }
   return (
-    <div className="app-shell">
-      <aside className={`sidebar ${mobile ? 'mobile-open' : ''}`}>
+    <div className="v5-shell">
+      <aside className={`v5-side ${mobile ? 'open' : ''}`}>
         <a
           href="#"
           onClick={(e) => {
             e.preventDefault();
             navigate('overview');
           }}
-          className="brand"
+          className="v5-brand"
         >
-          <CordaMark />
-          <span>Corda <span className="brand-ai">AI</span></span>
+          <i>C</i>
+          <span>Corda</span>
         </a>
-        <div className="workspace-label">
-          <div className="workspace-icon">
-            <Building2 size={16} />
-          </div>
-          <div>
-            <strong>Capital Markets</strong>
-            <span>{manager ? 'Manager workspace' : banker ? 'Banker workspace' : 'Sales workspace'}</span>
-          </div>
-          <ChevronsUpDown size={14} />
-        </div>
-        <div className="nav-label">WORKSPACE</div>
-        <nav>
-          {menu
-            .filter((m) => (banker ? m.id !== 'emails' : !['queue', 'allocation'].includes(m.id)))
-            .map((m) => (
-              <button
-                key={m.id}
-                className={page === m.id ? 'nav-item active' : 'nav-item'}
-                onClick={() => navigate(m.id)}
-              >
-                {m.id === 'overview' ? (
-                  manager ? <BarChart3 size={18} strokeWidth={1.7} /> : banker ? <Sun size={18} strokeWidth={1.7} /> : <Users size={18} strokeWidth={1.7} />
-                ) : (
-                  <m.icon size={18} strokeWidth={1.7} />
-                )}
-                <span>
-                  {m.id === 'overview'
-                    ? homeLabel
-                    : !banker && m.id === 'requests'
-                    ? 'Request tracker'
-                    : !banker && m.id === 'schedule'
-                      ? 'Schedule'
-                      : m.label}
-                </span>
-                {m.id === 'queue' && openActions.length > 0 && (
-                  <span className="nav-count">{openActions.length}</span>
-                )}
-              </button>
-            ))}
+        <nav aria-label="Main">
+          {nav.map((m) => (
+            <button key={m.id} className={m.active ? 'v5-nav active' : 'v5-nav'} onClick={() => navigate(m.id)} aria-current={m.active ? 'page' : undefined}>
+              <m.icon size={16} strokeWidth={1.8} />
+              <span>{m.label}</span>
+              {m.count ? <span className="count">{m.count}</span> : null}
+            </button>
+          ))}
         </nav>
-        <div className="sidebar-bottom">
-          <button className="nav-item" onClick={() => setHelp(true)}>
-            <CircleHelp size={18} />
-            <span>Help & workspace info</span>
+        <div className="v5-side-gap" />
+        <label className="v5-event">
+          <span>Event</span>
+          <select
+            aria-label="Active event"
+            value={conferenceId}
+            onChange={(e) => {
+              setConferenceId(e.target.value);
+              setSearch('');
+            }}
+          >
+            {data.conferences.map((x) => (
+              <option value={x.id} key={x.id}>
+                {x.name}
+              </option>
+            ))}
+          </select>
+          <small>
+            {c.location} · {fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'MMM d')}–{fmt(`${c.endDate}T12:00:00Z`, 'UTC', 'MMM d')}
+          </small>
+        </label>
+        <button className="v5-nav quiet" onClick={() => setAskOpen(true)}>
+          <MessageCircleQuestion size={15} strokeWidth={1.8} />
+          <span>Ask Corda</span>
+        </button>
+        {banker && (
+          <button className={`v5-nav quiet ${page === 'audit' ? 'active' : ''}`} onClick={() => navigate('audit')}>
+            <ShieldCheck size={15} strokeWidth={1.8} />
+            <span>Audit trail</span>
           </button>
-          {banker && (
-            <button
-              className={`nav-item ${page === 'audit' ? 'active' : ''}`}
-              onClick={() => navigate('audit')}
-            >
-              <ShieldCheck size={18} strokeWidth={1.7} />
-              <span>Audit trail</span>
-            </button>
-          )}
-          {banker && (
-            <button
-              className={`nav-item ${page === 'settings' ? 'active' : ''}`}
-              onClick={() => navigate('settings')}
-            >
-              <Settings size={18} strokeWidth={1.7} />
-              <span>Settings</span>
-              <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} title={outlook?.connected ? 'Outlook connected' : 'Outlook not connected'} />
-            </button>
-          )}
-          <div className="profile">
-            <Avatar name={data.user.name} color="#436b5e" />
-            <div>
-              <strong>{data.user.name}</strong>
-              <span>{roleLabel(data.user.role)}</span>
-            </div>
-            {data.demo && (
-              <select
-                aria-label="Switch demo profile"
-                value={data.user.id}
-                onChange={(e) => switchUser(e.target.value)}
-              >
-                {data.users.map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name} · {u.role === 'MANAGER' ? 'Manager' : u.role === 'BANKER' ? 'Banker' : 'Sales'}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button className="signout" onClick={signOut} title="Sign out" aria-label="Sign out">
-              <LogOut size={15} />
-            </button>
+        )}
+        {banker && (
+          <button className={`v5-nav quiet ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}>
+            <Settings size={15} strokeWidth={1.8} />
+            <span>Settings</span>
+            {outlook?.connected && <span className="count">Outlook on</span>}
+          </button>
+        )}
+        <div className="v5-profile">
+          <span className="av">
+            {data.user.name
+              .split(' ')
+              .map((x) => x[0])
+              .slice(0, 2)
+              .join('')}
+          </span>
+          <div>
+            <strong>{data.user.name}</strong>
+            <span>{manager ? 'Head of desk' : banker ? 'Banker' : 'Sales'}{data.demo ? ' · demo' : ''}</span>
           </div>
+          {data.demo && (
+            <select aria-label="Switch demo profile" value={data.user.id} onChange={(e) => switchUser(e.target.value)}>
+              {data.users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} · {u.role === 'MANAGER' ? 'Manager' : u.role === 'BANKER' ? 'Banker' : 'Sales'}
+                </option>
+              ))}
+            </select>
+          )}
+          <button className="out" onClick={signOut} title="Sign out" aria-label="Sign out">
+            <LogOut size={15} />
+          </button>
         </div>
       </aside>
-      <div className="main-shell">
-        <header className="topbar">
-          <div className="breadcrumb">
-            <button className="mobile-menu" onClick={() => setMobile(!mobile)}>
-              <LayoutDashboard size={19} />
+      <div className="v5-main">
+        <header className="v5-util">
+          <button className="v5-icon menu" onClick={() => setMobile(!mobile)} aria-label="Menu">
+            <Menu size={18} />
+          </button>
+          <span className="grow" />
+          {searchable && (
+            <div className="v5-search">
+              <Search size={14} />
+              <input aria-label="Search this view" placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} />
+            </div>
+          )}
+          <button className="v5-icon" onClick={() => setHelp(true)} aria-label="Help" title="Help and workspace info">
+            <CircleHelp size={17} />
+          </button>
+          <div className="bell-wrap">
+            <button
+              className="v5-icon"
+              aria-label="Notifications"
+              aria-expanded={bellOpen}
+              onClick={() => {
+                setBellOpen(!bellOpen);
+                // Opening the bell marks your notices as read.
+                if (!bellOpen && data.notifications.some((x) => !x.readAt))
+                  void fetch('/api/commands', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ type: 'notificationsRead', data: {} }),
+                  }).then(() => setTimeout(() => void reload(), 4000));
+              }}
+            >
+              <Bell size={17} />
+              {data.notifications.some((x) => !x.readAt) && <b className="bell-count">{data.notifications.filter((x) => !x.readAt).length}</b>}
             </button>
-            <span>{manager ? 'Manager workspace' : banker ? 'Banker workspace' : 'Sales workspace'}</span>
-            <ChevronRight size={13} />
-            <strong>
-              {!banker && page === 'requests'
-                ? 'Request tracker'
-                : !banker && page === 'schedule'
-                  ? 'Schedule'
-                  : page === 'overview'
-                    ? homeLabel
-                    : menu.find((m) => m.id === page)?.label || { audit: 'Audit trail', settings: 'Settings', emails: 'My emails' }[page]}
-            </strong>
-          </div>
-          <div className="topbar-right">
-            <div className="global-search">
-              <Search size={15} />
-              <input
-                aria-label="Search current workspace view"
-                placeholder="Search this view…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-            </div>
-            {data.demo && (
-              <span className="demo-pill" title="Demo mode: profiles sign in without a password and all data is synthetic.">
-                Demo mode
-              </span>
-            )}
-            {page !== 'ask' && (
-              <button className="ask-trigger" onClick={() => setAskOpen(true)} aria-label="Ask Corda">
-                <MessageCircleQuestion size={16} /> <span>Ask</span>
-              </button>
-            )}
-            <div className="bell-wrap">
-              <button
-                className="notification"
-                aria-label="Notifications"
-                aria-expanded={bellOpen}
-                onClick={() => {
-                  setBellOpen(!bellOpen);
-                  // Opening the bell marks your notices as read.
-                  if (!bellOpen && data.notifications.some((x) => !x.readAt))
-                    void fetch('/api/commands', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ type: 'notificationsRead', data: {} }),
-                    }).then(() => setTimeout(() => void reload(), 4000));
+            {bellOpen && (
+              <RecentChanges
+                data={data}
+                onClose={() => setBellOpen(false)}
+                onOpenAudit={() => {
+                  setBellOpen(false);
+                  navigate('audit');
                 }}
-              >
-                <Bell size={18} />
-                {data.notifications.some((x) => !x.readAt) && (
-                  <b className="bell-count">{data.notifications.filter((x) => !x.readAt).length}</b>
-                )}
-              </button>
-              {bellOpen && (
-                <RecentChanges
-                  data={data}
-                  onClose={() => setBellOpen(false)}
-                  onOpenAudit={() => {
-                    setBellOpen(false);
-                    navigate('audit');
-                  }}
-                  onOpenMeeting={(id) => {
-                    setBellOpen(false);
-                    setMeetingId(id);
-                  }}
-                  onOpenNotice={(x) => {
-                    setBellOpen(false);
-                    if (x.meetingId && data.meetings.some((m) => m.id === x.meetingId)) setMeetingId(x.meetingId);
-                    else if (x.requestId && data.requests.some((r) => r.id === x.requestId)) setSheetRequestId(x.requestId);
-                    else if (x.emailId) banker ? setReview({ emailId: x.emailId }) : navigate('emails');
-                  }}
-                />
-              )}
-            </div>
-            <Avatar name={data.user.name} color="#436b5e" size="small" />
+                onOpenMeeting={(id) => {
+                  setBellOpen(false);
+                  setMeetingId(id);
+                }}
+                onOpenNotice={(x) => {
+                  setBellOpen(false);
+                  if (x.meetingId && data.meetings.some((m) => m.id === x.meetingId)) setMeetingId(x.meetingId);
+                  else if (x.requestId && data.requests.some((r) => r.id === x.requestId)) setSheetRequestId(x.requestId);
+                  else if (x.emailId) banker ? openEmail(x.emailId) : navigate('emails');
+                }}
+              />
+            )}
           </div>
         </header>
-        <main className="main-content">
-          <div className="conference-bar">
-            <div className="conference-picker">
-              <CalendarDays size={16} />
-              <select
-                aria-label="Active conference"
-                value={conferenceId}
-                onChange={(e) => {
-                  setConferenceId(e.target.value);
-                  setSearch('');
-                }}
-              >
-                {data.conferences.map((c) => (
-                  <option value={c.id} key={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={14} />
-              <span className="conference-date">
-                {fmt(`${c.startDate}T12:00:00Z`, c.timezone, 'MMM d')}–
-                {fmt(`${c.endDate}T12:00:00Z`, c.timezone, 'd, yyyy')}
-              </span>
+        <main className={v5Page ? 'v5-content' : 'main-content v5-legacy'}>
+          {page === 'schedule' || page === 'allocation' || page === 'requests' ? (
+            <div className="workspace-subnav" aria-label="Schedule sections">
+              <button className={page === 'schedule' && scheduleSection === 'schedule' ? 'active' : ''} onClick={() => navigate('planner')}>Meetings</button>
+              <button className={page === 'requests' ? 'active' : ''} onClick={() => navigate('requests')}>{banker ? 'Requests' : 'Request tracker'}</button>
+              {banker && <button className={page === 'schedule' && scheduleSection === 'availability' ? 'active' : ''} onClick={() => navigate('availability')}>Issuer availability</button>}
+              {banker && <button className={page === 'allocation' ? 'active' : ''} onClick={() => navigate('resources')}>Rooms and coverage</button>}
             </div>
-            <div className="conference-location">
-              <MapPin size={14} />
-              {c.location}
-              <span className="vertical-line" />
-              <span className="live-dot" />
-              Live workspace
-            </div>
-          </div>
+          ) : null}
           {page === 'queue' && banker && queueSection !== 'tasks' && (
             <div className="queue-backbar" aria-label="Action queue navigation">
               <button onClick={() => setQueueSection('tasks')}>
-                <ChevronRight size={14} /> Back to action queue
+                <ChevronLeft size={14} /> Back to inbox
               </button>
               <span>/</span>
               <strong>{queueSection === 'emails' ? 'Email reviews' : 'Draft communications'}</strong>
-            </div>
-          )}
-          {page === 'schedule' && (
-            <div className="workspace-subnav" aria-label="Schedule sections">
-              <button className={scheduleSection === 'schedule' ? 'active' : ''} onClick={() => setScheduleSection('schedule')}>Meetings</button>
-              <button className={scheduleSection === 'availability' ? 'active' : ''} onClick={() => setScheduleSection('availability')}>Issuer availability</button>
             </div>
           )}
           {page === 'overview' && manager && (
@@ -680,7 +661,7 @@ export function Workspace() {
                 if (id) setConferenceId(id);
                 navigate('planner');
               }}
-              onOpenEmail={(id) => setReview({ emailId: id })}
+              onOpenEmail={(id) => openEmail(id)}
               onOpenAudit={(q) => {
                 setAuditFilter(q || null);
                 navigate('audit');
@@ -693,9 +674,10 @@ export function Workspace() {
               conferenceId={conferenceId}
               openActions={openActions}
               run={run}
-              onAction={actionClick}
+              onItem={openItem}
               onOpenMeeting={setMeetingId}
-              onOpenQueue={() => navigate('queue')}
+              onOpenQueue={() => { setDrill(null); setClassic(false); navigate('queue'); }}
+              onOpenSchedule={() => navigate('planner')}
               onOpenAudit={() => navigate('audit')}
             />
           )}
@@ -717,14 +699,42 @@ export function Workspace() {
               data={data}
               conferenceId={conferenceId}
               search={search}
-              onEmail={(id) => setReview({ emailId: id })}
+              onEmail={(id) => openEmail(id)}
               onAdd={() => setEmailOpen(true)}
               outlookConnected={Boolean(outlook?.connected)}
               onSync={syncOutlook}
               onConnect={() => navigate('settings')}
             />
           )}
-          {page === 'queue' && queueSection === 'tasks' && (
+          {page === 'queue' && queueSection === 'tasks' && !classic && banker && (
+            <Inbox
+              data={data}
+              conferenceId={conferenceId}
+              run={run}
+              emailId={review?.emailId || null}
+              proposalId={review?.proposalId}
+              onSelectEmail={(id) => setReview(id ? { emailId: id } : null)}
+              onReply={openReply}
+              onOther={actionClick}
+              onOpenDraft={(id) => setDraftId(id)}
+              onAddEmail={() => setEmailOpen(true)}
+              onSync={outlook?.connected ? syncOutlook : undefined}
+              onAllEmail={() => {
+                setInboxTab('review');
+                setQueueSection('emails');
+              }}
+              onDrafts={() => setQueueSection('drafts')}
+              onList={() => setClassic(true)}
+              filter={inboxFilter}
+              onClearFilter={() => setDrill(null)}
+            />
+          )}
+          {page === 'queue' && queueSection === 'tasks' && classic && (
+            <button className="v5-link back" onClick={() => setClassic(false)}>
+              ← Back to inbox
+            </button>
+          )}
+          {page === 'queue' && queueSection === 'tasks' && classic && (
             <QueueView
               data={data}
               conferenceId={conferenceId}
@@ -765,8 +775,11 @@ export function Workspace() {
               conferenceId={conferenceId}
               search={search}
               run={run}
-              onEmail={(id) => setReview({ emailId: id })}
+              onEmail={(id) => openEmail(id)}
             />
+          )}
+          {page === 'schedule' && scheduleSection === 'schedule' && (
+            <DayGrid key={`grid-${conferenceId}`} data={data} conferenceId={conferenceId} onOpenMeeting={setMeetingId} onOpenEmail={banker ? (id) => openEmail(id) : undefined} />
           )}
           {page === 'schedule' && scheduleSection === 'schedule' && (
             <PlannerView
@@ -843,7 +856,7 @@ export function Workspace() {
                 </p>
                 <div className="form-grid">
                   <div className="outlook-status">
-                    <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} style={{ width: 10, height: 10, borderRadius: 99, background: outlook?.connected ? '#2f8a5f' : '#b9c2b8' }} />
+                    <span className={`ol-dot ${outlook?.connected ? 'on' : ''}`} style={{ width: 10, height: 10, borderRadius: 99, background: outlook?.connected ? '#2b2b31' : '#babac0' }} />
                     <div style={{ flex: 1 }}>
                       <strong>{outlook?.connected ? `Connected as ${outlook.email}` : 'Not connected'}</strong>
                       <p>
@@ -933,19 +946,10 @@ export function Workspace() {
               initial={auditFilter || undefined}
               data={data}
               timezone={c.timezone}
-              onOpenEmail={(id) => setReview({ emailId: id })}
+              onOpenEmail={(id) => openEmail(id)}
               onOpenMeeting={setMeetingId}
             />
           )}
-          <footer className="workspace-footer">
-            <span>
-              <ShieldCheck size={13} />
-              Human decisions. Connected workflows.
-            </span>
-            <span>
-              Corda AI <span className="footer-dot">·</span> {c.timezone}
-            </span>
-          </footer>
         </main>
       </div>
       {toast && (
@@ -963,7 +967,7 @@ export function Workspace() {
           Saving changes
         </div>
       )}
-      {emailOpen && <EmailForm open close={() => setEmailOpen(false)} run={run} reload={reload} onAnalyzed={(id) => setReview({ emailId: id })} />}
+      {emailOpen && <EmailForm open close={() => setEmailOpen(false)} run={run} reload={reload} onAnalyzed={(id) => openEmail(id)} />}
       {requestOpen && (
         <RequestForm
           data={data}
@@ -973,7 +977,7 @@ export function Workspace() {
           run={run}
         />
       )}
-      {reviewEmail && (
+      {reviewEmail && !(page === 'queue' && queueSection === 'tasks' && !classic && banker) && (
         <EmailReview
           key={reviewEmail.id}
           email={reviewEmail}
@@ -982,7 +986,7 @@ export function Workspace() {
           close={() => setReview(null)}
           run={run}
           onReply={openReply}
-          onOpenEmail={(id) => setReview({ emailId: id })}
+          onOpenEmail={(id) => openEmail(id)}
         />
       )}
       {sheetRequest && banker && !['Confirmed', 'Cancelled'].includes(sheetRequest.status) && (
@@ -1048,7 +1052,7 @@ export function Workspace() {
         </Sheet>
       )}
       {drawerMeeting && (
-        <MeetingDrawer key={drawerMeeting.id} meeting={drawerMeeting} data={data} run={run} close={() => setMeetingId(null)} onOpenEmail={banker ? (id) => { setMeetingId(null); setReview({ emailId: id }); } : undefined} />
+        <MeetingDrawer key={drawerMeeting.id} meeting={drawerMeeting} data={data} run={run} close={() => setMeetingId(null)} onOpenEmail={banker ? (id) => { setMeetingId(null); openEmail(id); } : undefined} />
       )}
       {newMeeting && (
         <Sheet open onOpenChange={(v) => !v && setNewMeeting(false)} title="New meeting" description={`${c.name} · checked against availability, meetings, bankers and rooms`}>
@@ -1875,14 +1879,13 @@ function LoginScreen({
   ] as const;
   return (
     <main className="loading-screen login-screen">
-      <CordaMark />
-      <h1>Corda AI</h1>
+      <span className="v5-mark">C</span>
+      <h1>Corda</h1>
       {profiles.length ? (
         <>
-          <span className="demo-pill">Demo mode</span>
           <p>
-            These are demo profiles: anyone can pick one without a password. All organizations, people and emails are
-            synthetic. Production deployments disable this picker and require sign-in.
+            Pick a demo profile. Every company, person and email here is synthetic, and no password is needed. Live
+            deployments turn this picker off and require sign-in.
           </p>
           <div className="profile-picker">
             {groups.map(([role, label]) => (
@@ -1901,7 +1904,7 @@ function LoginScreen({
                           setBusy(null);
                         }}
                       >
-                        <Avatar name={p.name} color="#436b5e" />
+                        <Avatar name={p.name} color="#29292e" />
                         <span>
                           <strong>{p.name}</strong>
                           <small>{roleLabel(role)}</small>

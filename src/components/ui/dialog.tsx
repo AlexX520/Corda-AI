@@ -20,7 +20,7 @@ export function Dialog({
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-[#112e26]/25 backdrop-blur-[3px]" />
+        <DialogPrimitive.Overlay className="fixed inset-0 z-40 bg-[#161618]/25 backdrop-blur-[3px]" />
         <DialogPrimitive.Content
           className={cn(
             'dialog fixed left-1/2 top-1/2 z-50 max-h-[90vh] w-[calc(100%-32px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-2xl border border-stone-200 bg-white p-7 shadow-2xl',

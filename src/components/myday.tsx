@@ -1,9 +1,8 @@
 'use client';
-import { ArrowRight, CalendarDays, CheckCheck, Clock3, History } from 'lucide-react';
 import type { AppState } from '@/lib/types';
-import { actionKind, askOf } from './queue-model';
-import { Button } from './ui/button';
-import { Badge, Empty, fmt, names, type Run } from './shared';
+import { actionKind } from './queue-model';
+import { inboxItems, type InboxItem } from './inbox-model';
+import { fmt, names, type Run } from './shared';
 
 type Action = AppState['actions'][number];
 type Meeting = AppState['meetings'][number];
@@ -38,18 +37,20 @@ export function MyDay({
   conferenceId,
   openActions,
   run,
-  onAction,
+  onItem,
   onOpenMeeting,
   onOpenQueue,
+  onOpenSchedule,
   onOpenAudit,
 }: {
   data: AppState;
   conferenceId: string;
   openActions: Action[];
   run: Run;
-  onAction: (a: Action) => void;
+  onItem: (item: InboxItem) => void;
   onOpenMeeting: (id: string) => void;
   onOpenQueue: () => void;
+  onOpenSchedule: () => void;
   onOpenAudit: () => void;
 }) {
   const n = names(data);
@@ -58,163 +59,206 @@ export function MyDay({
   const now = new Date(data.now);
   const today = fmt(now.toISOString(), zone, 'yyyy-MM-dd');
   const tomorrow = fmt(new Date(+now + 86400000).toISOString(), zone, 'yyyy-MM-dd');
-  const days = [
-    { key: today, label: 'Today' },
-    { key: tomorrow, label: 'Tomorrow' },
-  ];
-  const decisions = myDecisions(data, openActions);
+  const items = inboxItems(data, myDecisions(data, openActions), zone);
   const me = data.user.id;
   const myIssuers = new Set(data.issuers.filter((i) => i.ownerId === me).map((i) => i.id));
   const myMeetingIds = new Set(data.meetings.filter((m) => myIssuers.has(m.issuerId) || m.bankerIds.includes(me)).map((m) => m.id));
   const lastSeen = (data.user as { lastSeenAt?: string | null }).lastSeenAt || null;
   const changes = data.auditLogs
     .filter((a) => a.actorId !== me && ((a.issuerId && myIssuers.has(a.issuerId)) || (a.meetingId && myMeetingIds.has(a.meetingId))))
-    .slice(0, 12);
+    .slice(0, 8);
   const fresh = changes.filter((a) => !lastSeen || a.createdAt > lastSeen).length;
-  const meetingLabel = (m: Meeting) => `${n.issuer(m.issuerId)} × ${n.investor(m.investorId)}`;
+  const pair = (m: Meeting) => `${n.issuer(m.issuerId)} × ${n.investor(m.investorId)}`;
   const room = (m: Meeting) => {
     const r = data.cubeAssignments.find((a) => a.meetingId === m.id);
-    return data.meetingCubes.find((x) => x.id === r?.cubeId)?.name || m.location || 'Room TBC';
+    return data.meetingCubes.find((x) => x.id === r?.cubeId)?.name || m.location || 'Room to be confirmed';
   };
   const coBankers = (m: Meeting) =>
     [...new Set([...m.bankerIds, ...data.coverageAssignments.filter((a) => a.meetingId === m.id).map((a) => a.bankerId)])]
       .filter((id) => id !== me)
       .map(n.user);
+  const detail = (m: Meeting) => [room(m), coBankers(m).length ? `with ${coBankers(m).join(', ')}` : 'you lead'].join(' · ');
   const inEvent = today >= c.startDate && today <= c.endDate;
+  const dayNo = Math.round((+new Date(`${today}T12:00:00Z`) - +new Date(`${c.startDate}T12:00:00Z`)) / 86400000) + 1;
+  const dayCount = Math.round((+new Date(`${c.endDate}T12:00:00Z`) - +new Date(`${c.startDate}T12:00:00Z`)) / 86400000) + 1;
+  const todayList = myMeetings(data, conferenceId, today, zone);
+  const tomorrowList = myMeetings(data, conferenceId, tomorrow, zone);
+  const done = todayList.filter((x) => +new Date(x.m.end) <= +now);
+  const live = todayList.find((x) => +new Date(x.m.start) <= +now && +new Date(x.m.end) > +now);
+  const upcoming = todayList.filter((x) => +new Date(x.m.start) > +now);
+  const next = live || upcoming[0];
+  const later = upcoming.filter((x) => x !== next);
+  const mins = next ? Math.round((+new Date(next.m.start) - +now) / 60000) : 0;
+  const inText = (m: number) => (m < 60 ? `in ${m} min` : `in ${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`);
+  const hour = Number(fmt(now.toISOString(), zone, 'H'));
+  const first = data.user.name.split(' ')[0];
+  const needLine = items.length ? `${items.length} thing${items.length === 1 ? '' : 's'} need${items.length === 1 ? 's' : ''} you.` : 'Nothing is waiting on you.';
+  const nextLine = live
+    ? `You are in ${pair(live.m)} until ${fmt(live.m.end, zone, 'h:mm a')}.`
+    : next
+      ? `Your next meeting starts ${inText(mins)}.`
+      : todayList.length
+        ? 'Your meetings for today are done.'
+        : tomorrowList.length
+          ? `No meetings today. ${tomorrowList.length} tomorrow.`
+          : 'No meetings today.';
+  const shown = items.slice(0, 5);
 
   return (
-    <>
-      <div className="page-heading">
-        <div>
-          <h1>My day</h1>
-          <p>
-            {fmt(now.toISOString(), zone, 'EEEE, MMMM d')} · {c.name}
-            {inEvent ? ' is on' : today < c.startDate ? ` starts ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'EEE MMM d')}` : ' has ended'}
-          </p>
-        </div>
-        <Button variant="outline" onClick={onOpenQueue}>
-          <CheckCheck size={15} /> Full queue · {openActions.length}
-        </Button>
-      </div>
+    <div className="v5-page">
+      <header className="v5-hero">
+        <span className="eyebrow">
+          {c.name}
+          {inEvent ? ` · Day ${dayNo} of ${dayCount}` : today < c.startDate ? ` · starts ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'EEE MMM d')}` : ' · ended'}
+          {' · '}
+          {fmt(now.toISOString(), zone, 'EEE MMM d, h:mm a')}
+        </span>
+        <h1>
+          Good {hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}, {first}.
+        </h1>
+        <p>
+          {needLine} {nextLine}
+        </p>
+      </header>
+
       <HoldsBar data={data} run={run} />
-      <div className="myday-grid">
-        <section className="panel myday-meetings">
-          <div className="panel-heading">
-            <h3>
-              <CalendarDays size={14} /> My meetings
-            </h3>
+
+      {next && (
+        <section aria-label="Next meeting" className="v5-card v5-next">
+          <div className="when">
+            <strong>{live ? 'NOW' : 'NEXT'} · {fmt(next.m.start, zone, 'h:mm a')}</strong>
+            <span>{live ? `until ${fmt(next.m.end, zone, 'h:mm a')}` : inText(mins)}</span>
           </div>
-          {days.map((d) => {
-            const list = myMeetings(data, conferenceId, d.key, zone);
-            return (
-              <div key={d.key} className="myday-day">
-                <h4>
-                  {d.label} <small>{fmt(`${d.key}T12:00:00Z`, 'UTC', 'EEE MMM d')}</small>
-                </h4>
-                {list.length ? (
-                  <ul>
-                    {list.map(({ m, pending }, i) => (
-                      <li key={m.id} className={+new Date(m.end) <= +now ? 'past' : +new Date(m.start) <= +now ? 'live' : ''}>
-                        {d.key === today && +new Date(m.start) > +now && (i === 0 || +new Date(list[i - 1].m.start) <= +now) && (
-                          <span className="now-line">Now · {fmt(now.toISOString(), zone, 'h:mm a')}</span>
-                        )}
-                        <button onClick={() => onOpenMeeting(m.id)}>
-                          <span className="md-time">{fmt(m.start, zone, 'h:mm a')}</span>
-                          <span className="md-what">
-                            <strong>{n.investor(m.investorId)}</strong>
-                            <small>
-                              with {n.issuer(m.issuerId)} · {room(m)}
-                              {coBankers(m).length ? ` · with ${coBankers(m).join(', ')}` : ''}
-                            </small>
-                          </span>
-                          {pending && <Badge tone="amber">Pending</Badge>}
-                          {+new Date(m.end) <= +now ? <small className="md-done">Done</small> : +new Date(m.start) <= +now ? <Badge tone="green">Now</Badge> : null}
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted">No meetings for you{d.key < c.startDate || d.key > c.endDate ? ` (${c.name} runs ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'MMM d')}–${fmt(`${c.endDate}T12:00:00Z`, 'UTC', 'MMM d')})` : ''}.</p>
-                )}
-              </div>
-            );
-          })}
-          <p className="myday-foot muted">“Pending” seats come from the allocation proposal and are not approved yet.</p>
+          <div className="what">
+            <strong>{pair(next.m)}</strong>
+            <span>
+              {detail(next.m)} · {next.m.expectedAttendees} attendees{next.pending ? ' · seat not approved yet' : ''}
+            </span>
+          </div>
+          <button className="v5-btn quiet" onClick={() => onOpenMeeting(next.m.id)}>
+            Open meeting
+          </button>
         </section>
-        <section className="panel myday-decisions">
-          <div className="panel-heading">
-            <h3>Needs my decision <span className="tab-count">{decisions.length}</span></h3>
-          </div>
-          {decisions.length ? (
-            <ul>
-              {decisions.slice(0, 8).map((a) => {
-                const kind = actionKind(a, data);
-                const { email, proposal } = askOf(a, data);
-                return (
-                  <li key={a.id}>
-                    <button onClick={() => onAction(a)}>
-                      <span className={`kind-tag kind-${kind.id}`}>{kind.label}</span>
-                      <span className="md-what">
-                        <strong>{proposal?.summary || a.title}</strong>
-                        <small>
-                          {a.status === 'Acknowledged' ? 'Acknowledged · yours · ' : a.priority === 'Urgent' ? 'Urgent · ' : ''}
-                          {email ? `from ${email.originalSenderName || email.sender}` : a.recommendation}
-                        </small>
-                      </span>
-                      <ArrowRight size={14} />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <Empty title="Nothing waiting on you" description="Items assigned to you or your issuers appear here." />
-          )}
-          {decisions.length > 8 && (
-            <button className="text-button" onClick={onOpenQueue}>
-              {decisions.length - 8} more in the queue <ArrowRight size={13} />
+      )}
+
+      <section aria-label="Needs you" className="v5-stack">
+        <div className="v5-section-head">
+          <h2>Needs you</h2>
+          {items.length > 0 && (
+            <button className="v5-link" onClick={onOpenQueue}>
+              Open inbox
             </button>
           )}
+        </div>
+        {shown.length ? (
+          shown.map((item, i) => (
+            <div key={item.id} className="v5-need">
+              <span className={`v5-dot ${item.tone}`} />
+              <div className="body">
+                <strong>{item.headline}</strong>
+                <span>{item.sub}</span>
+              </div>
+              <button className={`v5-btn ${i === 0 ? 'primary' : 'quiet'}`} onClick={() => onItem(item)}>
+                {item.cta}
+              </button>
+            </div>
+          ))
+        ) : (
+          <div className="v5-need calm">
+            <span className="v5-dot ok" />
+            <div className="body">
+              <strong>You are all caught up</strong>
+              <span>New emails about your issuers appear here as soon as they arrive.</span>
+            </div>
+          </div>
+        )}
+        {items.length > shown.length && (
+          <button className="v5-link" onClick={onOpenQueue}>
+            {items.length - shown.length} more in the inbox
+          </button>
+        )}
+      </section>
+
+      {(later.length > 0 || tomorrowList.length > 0 || done.length > 0) && (
+        <section aria-label="Schedule" className="v5-stack">
+          <div className="v5-section-head">
+            <h2>{later.length ? 'Later today' : tomorrowList.length ? 'Tomorrow' : 'Earlier today'}</h2>
+            <button className="v5-link" onClick={onOpenSchedule}>
+              Full schedule
+            </button>
+          </div>
+          {later.length > 0 && (
+            <div className="v5-tiles">
+              {later.map(({ m, pending }) => (
+                <button key={m.id} className="v5-tile" onClick={() => onOpenMeeting(m.id)}>
+                  <span className="t">{fmt(m.start, zone, 'h:mm a')}{pending ? ' · seat pending' : ''}</span>
+                  <strong>{pair(m)}</strong>
+                  <span>{detail(m)}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {tomorrowList.length > 0 && (
+            <>
+              {later.length > 0 && <h2 className="v5-sub">Tomorrow</h2>}
+              <div className="v5-card v5-list">
+                {tomorrowList.map(({ m, pending }) => (
+                  <button key={m.id} onClick={() => onOpenMeeting(m.id)}>
+                    <span className="t">{fmt(m.start, zone, 'h:mm a')}</span>
+                    <strong>{pair(m)}</strong>
+                    <span>{detail(m)}{pending ? ' · seat pending' : ''}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+          {done.length > 0 && (
+            <details className="v5-details">
+              <summary>{done.length} done earlier today</summary>
+              <div className="v5-card v5-list muted">
+                {done.map(({ m }) => (
+                  <button key={m.id} onClick={() => onOpenMeeting(m.id)}>
+                    <span className="t">{fmt(m.start, zone, 'h:mm a')}</span>
+                    <strong>{pair(m)}</strong>
+                    <span>{room(m)}</span>
+                  </button>
+                ))}
+              </div>
+            </details>
+          )}
         </section>
-        <section className="panel myday-changes">
-          <div className="panel-heading">
-            <h3>
-              <History size={14} /> What changed {fresh > 0 && <span className="tab-count hot">{fresh} new</span>}
-            </h3>
+      )}
+
+      {changes.length > 0 && (
+        <section aria-label="What changed" className="v5-stack">
+          <div className="v5-section-head">
+            <h2>Changed by others{fresh > 0 ? ` · ${fresh} new` : ''}</h2>
             {fresh > 0 && (
-              <button className="text-button" onClick={() => run('markSeen', {}, 'Marked as seen.')}>
+              <button className="v5-link" onClick={() => run('markSeen', {}, 'Marked as seen.')}>
                 Mark as seen
               </button>
             )}
           </div>
-          {changes.length ? (
-            <ul>
-              {changes.map((a) => {
-                const m = data.meetings.find((x) => x.id === a.meetingId);
-                const isNew = !lastSeen || a.createdAt > lastSeen;
-                return (
-                  <li key={a.id} className={isNew ? 'new' : ''}>
-                    <button onClick={() => (m ? onOpenMeeting(m.id) : onOpenAudit())}>
-                      <span className="md-what">
-                        <strong>{a.action}</strong>
-                        <small>
-                          {m ? `${meetingLabel(m)} · ` : a.issuerId ? `${n.issuer(a.issuerId)} · ` : ''}
-                          {n.user(a.actorId)} · {fmt(a.createdAt, zone, 'EEE h:mm a')}
-                        </small>
-                        {a.note && <em>“{a.note}”</em>}
-                      </span>
-                      <Clock3 size={13} />
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          ) : (
-            <p className="muted">No changes by others to your issuers or meetings.</p>
-          )}
+          <div className="v5-card v5-list">
+            {changes.map((a) => {
+              const m = data.meetings.find((x) => x.id === a.meetingId);
+              const isNew = !lastSeen || a.createdAt > lastSeen;
+              return (
+                <button key={a.id} className={isNew ? 'new' : ''} onClick={() => (m ? onOpenMeeting(m.id) : onOpenAudit())}>
+                  <span className="t">{fmt(a.createdAt, zone, 'EEE h:mm a')}</span>
+                  <strong>{a.action}</strong>
+                  <span>
+                    {m ? `${pair(m)} · ` : a.issuerId ? `${n.issuer(a.issuerId)} · ` : ''}
+                    {n.user(a.actorId)}
+                    {a.note ? ` · “${a.note}”` : ''}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </section>
-      </div>
-    </>
+      )}
+    </div>
   );
 }
 

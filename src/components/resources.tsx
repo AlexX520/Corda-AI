@@ -65,24 +65,24 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
     await run('saveMeetingCube', {
       conferenceId, name: cubeName, capacity: cubeCapacity, location: conference.location, status: 'Active', restrictions: '',
       windows: conferenceDays.map((day) => ({ start: fromZonedTime(`${day}T09:00:00`, conference.timezone).toISOString(), end: fromZonedTime(`${day}T17:00:00`, conference.timezone).toISOString(), status: 'Available' })),
-    }, 'Meeting cube added.');
+    }, 'Room added.');
     setCubeName('');
   }
   return <>
     <div className="page-heading">
-      <div><h1>Allocation</h1><p>Bankers and meeting cubes · {unresolved} items need review</p></div>
+      <div><h1>Rooms and coverage</h1><p>Who covers each meeting and which room it is in · {unresolved} items need review</p></div>
       <Button onClick={() => run('optimizeConference', { conferenceId }, 'New allocation proposal generated.')}><Play size={16}/>Run allocation</Button>
     </div>
     <div className="stats-grid resource-stats">
       <ResourceStat label="Fully allocated" value={complete} icon={<CheckCircle2 size={17}/>} />
       <ResourceStat label="Needs review" value={unresolved} icon={<SlidersHorizontal size={17}/>} />
-      <ResourceStat label="Active cubes" value={cubes.filter((c) => c.status === 'Active').length} icon={<Boxes size={17}/>} />
+      <ResourceStat label="Active rooms" value={cubes.filter((c) => c.status === 'Active').length} icon={<Boxes size={17}/>} />
     </div>
     <div className="panel resource-panel">
       <div className="panel-toolbar"><div className="tab-buttons">
         <button className={tab === 'allocation' ? 'active' : ''} onClick={() => setTab('allocation')}>Allocation review <span>{proposals.length}</span></button>
         <button className={tab === 'preferences' ? 'active' : ''} onClick={() => setTab('preferences')}>My preferences</button>
-        <button className={tab === 'cubes' ? 'active' : ''} onClick={() => setTab('cubes')}>Meeting cubes <span>{cubes.length}</span></button>
+        <button className={tab === 'cubes' ? 'active' : ''} onClick={() => setTab('cubes')}>Rooms <span>{cubes.length}</span></button>
       </div>{latestRun && <Badge>{latestRun.runStatus}</Badge>}</div>
       {tab === 'allocation' && <AllocationReview data={data} conferenceId={conferenceId} proposals={proposals} latestRun={latestRun} run={run}/>} 
       {tab === 'preferences' && <div className="resource-split">
@@ -97,11 +97,11 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
         </section>
       </div>}
       {tab === 'cubes' && <div className="resource-split">
-        <section><div className="resource-section-title"><div><h3>Meeting cubes</h3></div></div>
+        <section><div className="resource-section-title"><div><h3>Rooms</h3></div></div>
           <div className="cube-grid">{cubes.map((cube) => { const used = data.cubeAssignments.filter((a) => a.cubeId === cube.id).length; return <div className="cube-card" key={cube.id}><div><Boxes size={18}/><Badge>{cube.status}</Badge></div><strong>{cube.name}</strong><span>{cube.location}</span><small>Capacity {cube.capacity} · {used} approved meetings</small></div>})}</div>
         </section>
-        <section><div className="resource-section-title"><div><h3>Add cube</h3></div></div>
-          <div className="form-grid"><Field label="Cube name"><input value={cubeName} onChange={(e) => setCubeName(e.target.value)} placeholder="Meeting Cube 6"/></Field><Field label="Capacity"><input type="number" min={1} value={cubeCapacity} onChange={(e) => setCubeCapacity(Number(e.target.value))}/></Field><Button onClick={addCube}>Add meeting cube</Button></div>
+        <section><div className="resource-section-title"><div><h3>Add room</h3></div></div>
+          <div className="form-grid"><Field label="Room name"><input value={cubeName} onChange={(e) => setCubeName(e.target.value)} placeholder="Room 6"/></Field><Field label="Capacity"><input type="number" min={1} value={cubeCapacity} onChange={(e) => setCubeCapacity(Number(e.target.value))}/></Field><Button onClick={addCube}>Add a room</Button></div>
         </section>
       </div>}
     </div>
@@ -146,7 +146,7 @@ function AllocationReview({data, conferenceId, proposals, latestRun, run}: {data
         <div className="resource-actions"><Button variant="outline" onClick={() => setDiff(null)}>Cancel</Button><Button onClick={approve}>Approve {diff.changes.length} change{diff.changes.length === 1 ? '' : 's'}</Button></div>
       </div>}
     </Dialog>
-    <div className="table-scroll"><table><thead><tr><th>Meeting</th><th>Time</th><th>Coverage</th><th>Meeting cube</th><th>Validation</th></tr></thead><tbody>{proposals.map((proposal) => { const meeting = meetings.get(proposal.meetingId); if (!meeting) return null; return <ProposalRow key={proposal.id} proposal={proposal} meeting={meeting} data={data} conferenceId={conferenceId} run={run}/>; })}</tbody></table></div>
+    <div className="table-scroll"><table><thead><tr><th>Meeting</th><th>Time</th><th>Coverage</th><th>Room</th><th>Validation</th></tr></thead><tbody>{proposals.map((proposal) => { const meeting = meetings.get(proposal.meetingId); if (!meeting) return null; return <ProposalRow key={proposal.id} proposal={proposal} meeting={meeting} data={data} conferenceId={conferenceId} run={run}/>; })}</tbody></table></div>
     <div className="table-footer"><span><Lock size={12}/> Approval writes the reviewed proposal to the master schedule.</span><span>Algorithm: deterministic constraints + weighted preferences</span></div>
   </>;
 }

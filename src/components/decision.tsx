@@ -771,7 +771,7 @@ export function EmailDecision({
 
       {!done && (
         <details className="dc-more" open={showEditor} onToggle={(ev) => setShowEditor((ev.target as HTMLDetailsElement).open)}>
-          <summary>Edit what the AI extracted</summary>
+          <summary>Edit what Corda read</summary>
           <ExtractionForm value={e} onChange={setE} data={data} />
           <div className="dc-actions">
             <Button size="sm" disabled={busy || !dirty} onClick={() => decide('edit')}>
