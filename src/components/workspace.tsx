@@ -846,7 +846,7 @@ export function Workspace() {
               <div className="page-heading">
                 <div>
                   <h1>Settings</h1>
-                  <p>Email connection for your workspace.</p>
+                  <p>Email and AI connections for your workspace.</p>
                 </div>
               </div>
               <div className="panel settings-panel">
@@ -928,6 +928,7 @@ export function Workspace() {
               </div>
             </>
           )}
+          {page === 'settings' && banker && <AiModelPanel data={data} />}
           {page === 'settings' && manager && data.demo && (
             <div className="panel settings-panel">
               <h3>Demo data</h3>
@@ -2031,6 +2032,52 @@ function RecentChanges({
           Open audit trail <ArrowUpRight size={13} />
         </button>
       )}
+    </div>
+  );
+}
+
+/** Settings: is the AI model set up and answering? Emails fall back to the built-in rules either way. */
+function AiModelPanel({ data }: { data: AppState }) {
+  const llm = (data as { llm?: { configured: boolean; model: string } }).llm;
+  const [result, setResult] = useState<{ ok: boolean; model: string; ms?: number; reason?: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  async function test() {
+    setBusy(true);
+    try {
+      const r = await fetch('/api/commands', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'llmCheck', data: {} }) });
+      const j = await r.json();
+      setResult(r.ok ? j.result : { ok: false, model: llm?.model || '', reason: j.error });
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="panel settings-panel">
+      <h3>AI model</h3>
+      <p className="muted">
+        Corda uses the model to read emails into changes and to draft replies. Every change still needs your approval, and
+        if the model is slow or unavailable the built-in rules read the email instead.
+      </p>
+      <div className="outlook-status">
+        <span className={`ol-dot ${result ? (result.ok ? 'on' : '') : llm?.configured ? 'on' : ''}`} />
+        <div style={{ flex: 1 }}>
+          <strong>
+            {result
+              ? result.ok
+                ? `${result.model} answered in ${result.ms} ms`
+                : 'Model not answering'
+              : llm?.configured
+                ? `${llm.model} configured`
+                : 'Not configured: built-in rules only'}
+          </strong>
+          <p>{result?.reason || (llm?.configured ? 'Run a test to check the connection.' : 'Add LLM_API_KEY to the server environment to turn it on.')}</p>
+        </div>
+        {llm?.configured && (
+          <Button size="sm" onClick={test} disabled={busy}>
+            {busy ? 'Testing…' : 'Test the model'}
+          </Button>
+        )}
+      </div>
     </div>
   );
 }

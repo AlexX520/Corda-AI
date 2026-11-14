@@ -179,6 +179,7 @@ export function Inbox({
             run={run}
             onReply={onReply}
             onOpenEmail={(id) => onSelectEmail(id)}
+            onOpenDrafts={onDrafts}
           />
         ) : selected?.request ? (
           <div className="v5-detail">

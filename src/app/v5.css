@@ -1399,3 +1399,7 @@ button.v5-kpi:hover {
   font-weight: 600;
   letter-spacing: -0.02em;
 }
+.v5-legacy .settings-panel + .settings-panel,
+.v5-legacy .settings-panel + .panel {
+  margin-top: 16px;
+}

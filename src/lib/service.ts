@@ -47,6 +47,7 @@ import { accessTokenFor, outlookStatus } from './outlook-service';
 import { replyInThread, sendMail } from './graph';
 import { parseRequestText } from './request-parser';
 import { answerQuestion, llmPhrase } from './ask';
+import { llmChat, llmConfigured, LlmUnavailable } from './llm';
 import { computeMetrics, extractionEdited } from './metrics';
 import { availabilityMode } from './review-rules';
 import { mockExtractAsks } from './rule-parser';
@@ -2286,6 +2287,19 @@ export async function command(user: User, type: string, input: unknown): Promise
     return { ok: true, summary };
   }
   if (type === 'ping') return { ok: true }; // lets the client refresh after a batch of direct calls
+  if (type === 'llmCheck') {
+    // Settings → "Test the AI model": one tiny request, so the desk can see the model is reachable.
+    banker(user);
+    const model = process.env.LLM_MODEL || 'gpt-4.1-mini';
+    if (!llmConfigured()) return { ok: false, model, reason: 'No AI key is set on the server. Emails are read by the built-in rules.' };
+    const t0 = Date.now();
+    try {
+      const r = await llmChat({ messages: [{ role: 'user', content: 'Reply with the single word OK.' }], max_tokens: 3 }, 10000);
+      return { ok: Boolean(r.choices?.[0]?.message?.content), model, ms: Date.now() - t0 };
+    } catch (e) {
+      return { ok: false, model, ms: Date.now() - t0, reason: e instanceof LlmUnavailable ? `The model did not answer (${e.message}). Emails fall back to the built-in rules.` : 'Unexpected answer from the model.' };
+    }
+  }
   if (type === 'markSeen') {
     // "What changed since my last visit" starts again from now.
     await db.user.update({ where: { id: user.id }, data: { lastSeenAt: now() } });
@@ -2769,6 +2783,7 @@ export async function getState(user: User) {
     metrics: user.role === 'MANAGER' ? await managerMetrics() : null,
     now: now().toISOString(),
     parser: process.env.LLM_API_KEY ? 'Configured LLM (rule parser when unreachable)' : 'Deterministic mock',
+    llm: { configured: Boolean(process.env.LLM_API_KEY), model: process.env.LLM_MODEL || 'gpt-4.1-mini' },
     demo: process.env.DEMO_MODE === 'true',
   };
 }

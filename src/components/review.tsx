@@ -41,6 +41,7 @@ export function EmailReview({
   onOpenEmail,
   inline,
   headline,
+  onOpenDrafts,
 }: {
   email: EmailItem;
   proposalId?: string | null;
@@ -52,6 +53,7 @@ export function EmailReview({
   /** Render in the inbox pane instead of a side sheet. */
   inline?: boolean;
   headline?: string;
+  onOpenDrafts?: () => void;
 }) {
   const n = names(data);
   const asks = email.proposals;
@@ -377,7 +379,15 @@ export function EmailReview({
           {(canApplyAll || applyResult) && (
             <div className="foot">
               {applyResult && !openAsks.length ? (
-                <ul className="apply-result">{applyResult.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                <>
+                  <ul className="apply-result">{applyResult.map((r, i) => <li key={i}>{r}</li>)}</ul>
+                  <span className="grow" />
+                  {onOpenDrafts && (
+                    <button className="v5-btn quiet" onClick={onOpenDrafts}>
+                      Review the replies
+                    </button>
+                  )}
+                </>
               ) : (
                 <>
                   <label className="agree">
@@ -395,7 +405,7 @@ export function EmailReview({
           {applyResult && openAsks.length > 0 && <ul className="apply-result pad">{applyResult.map((r, i) => <li key={i}>{r}</li>)}</ul>}
         </section>
       )}
-      {inline && asks.length > 1 && proposal && (
+      {inline && asks.length > 1 && proposal && openAsks.length > 0 && (
         <h3 className="v5-sub">
           Change {index + 1} of {asks.length} in detail
         </h3>
@@ -418,7 +428,7 @@ export function EmailReview({
           ))}
         </div>
       )}
-      {proposal ? (
+      {inline && asks.length > 1 && !openAsks.length ? null : proposal ? (
         <EmailDecision
           key={proposal.id + proposal.updatedAt}
           email={email}
@@ -446,7 +456,7 @@ export function EmailReview({
             {trust.tone === 'ok' ? <Check size={14} strokeWidth={2.4} /> : <ShieldAlert size={14} />}
             {trust.text}
           </div>
-          <h2>{headline || email.subject}</h2>
+          <h2>{headline || (asks.length > 1 ? `${company || 'The sender'} sent ${asks.length} changes` : asks[0]?.summary || email.subject)}</h2>
           <div className="meta">
             <span>
               {sender} · {fmt(email.receivedAt, zone, 'EEE h:mm a')}

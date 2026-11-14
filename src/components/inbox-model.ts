@@ -96,7 +96,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         id: `action:${a.id}`,
         kind: 'other',
         actions: [a],
-        who: actionKind(a, data).label,
+        who: issuerName(a.issuerId) || actionKind(a, data).label,
         what: a.title,
         headline: a.title,
         sub: a.recommendation,
