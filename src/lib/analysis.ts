@@ -40,8 +40,8 @@ export type AnalyseDeps = {
     ctx: Context,
     hints: Hints,
   ) =>
-    | Promise<{ asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean }>
-    | { asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean };
+    | Promise<{ asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean; fallbackNote?: string; readNote?: string }>
+    | { asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean; fallbackNote?: string; readNote?: string };
 };
 const namesFrom = (
   issuers: { id: string; name: string }[],
@@ -251,6 +251,8 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
     investorNames: Object.fromEntries(investors.map((i) => [i.id, i.name])) as Record<string, string>,
     addressed,
     parser: result.parser,
+    /** Why the AI answer was not used, or which of its asks were dropped (for the audit trail). */
+    readNote: (result as { fallbackNote?: string; readNote?: string }).fallbackNote || (result as { readNote?: string }).readNote || '',
     suspicious,
     escalation: final.escalation,
     escalationReasons: final.reasons,

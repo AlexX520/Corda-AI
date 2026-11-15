@@ -1,6 +1,7 @@
 import { LlmUnavailable, llmChat } from './llm';
 import { z } from 'zod';
 import { conferenceTime } from './scheduling';
+import { formatInTimeZone } from 'date-fns-tz';
 import {
   categories,
   extractionSchema,
@@ -17,20 +18,29 @@ export async function extractEmail(
   subject: string,
   ctx: Context,
   hints?: Hints,
-): Promise<{ asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean; fallbackNote?: string }> {
+): Promise<{ asks: Extraction[]; parser: 'llm' | 'rules'; whole?: boolean; fallbackNote?: string; readNote?: string }> {
   if (!process.env.LLM_API_KEY) return { ...mockExtractAsks(body, subject, ctx, hints), parser: 'rules' };
   try {
-    return { asks: await llmExtract(body, subject, ctx, hints), parser: 'llm' };
+    const { asks, dropped } = await llmExtract(body, subject, ctx, hints);
+    return { asks, parser: 'llm', ...(dropped.length ? { readNote: `AI answer: ${dropped.length} ask(s) dropped (${dropped.join('; ').slice(0, 300)})` } : {}) };
   } catch (e) {
     // Outlook sync moves past each message once, so a provider outage must not drop the email.
     // Fall back to the built-in parser and say so; the banker still reviews everything.
     // The note says so on the email; it is not an open question about the ask itself.
     const fallback = mockExtractAsks(body, subject, ctx, hints);
     for (const ask of fallback.asks) ask.needsReview = ask.category !== 'Unrelated Email';
-    const why = e instanceof LlmUnavailable ? e.message : 'unexpected answer';
+    // Our own validation messages (field paths, "no evidence"), never provider text.
+    const why = e instanceof LlmUnavailable ? e.message : `unexpected answer: ${e instanceof SyntaxError ? 'not JSON' : String((e as Error)?.message || e).slice(0, 200)}`;
     console.warn(`[llm] extraction fell back to the rule parser: ${why}`);
     return { ...fallback, parser: 'rules', fallbackNote: `AI model unavailable (${why}); read with the built-in parser.` };
   }
+}
+/** "Today" for the model: relative words (today, tomorrow, Wed) are resolved from the received date. */
+function today(ctx: Context, hints?: Hints) {
+  const zone = ctx.conferences.find((c) => c.id === (hints?.conferenceId || hints?.defaultConferenceId))?.timezone || ctx.conferences[0]?.timezone || 'America/New_York';
+  const at = hints?.receivedAt ? new Date(hints.receivedAt) : new Date();
+  if (Number.isNaN(+at)) return '';
+  return `The email was received ${formatInTimeZone(at, zone, "EEEE yyyy-MM-dd HH:mm")} (${zone}). Resolve "today", "tonight", "tomorrow", "tmrw" and "this morning" from that date. `;
 }
 /** Reasoning models (o-series, gpt-5) reject a temperature setting. */
 const tuning = (model: string) => (/^(o\d|gpt-5)/i.test(model) ? {} : { temperature: 0 });
@@ -39,7 +49,8 @@ const SYSTEM = (ctx: Context, hints?: Hints) =>
   `Categories: ${categories.join(', ')}. Operations: add, replace, remove, confirm, reschedule, cancel, escalate, inquiry. How to choose: an issuer saying when it can meet investors ("available", "can take meetings", "open", "free") is "Issuer Availability Update" with operation add, or replace if it says these times supersede earlier ones, or remove if it withdraws times. Asking for a meeting with a specific investor (including a second slot) is "New Meeting Request" with operation inquiry. Agreeing to a proposed meeting is "Meeting Confirmation" (confirm); "thanks for confirming" is not a confirmation. Moving a meeting ("move", "push", "shift", "instead of … to …") is "Reschedule Request" (reschedule) even if the word cancel appears elsewhere for a different meeting. Calling one off is "Meeting Cancellation" (cancel); one ask per cancelled meeting. A new headcount or room need for an existing meeting is "Meeting Update" (update) with attendees. Set conditional true (and condition to the exact clause) when an ask applies only if something holds ("if 2:30 doesn't work, move to Wed", "or we'd rather move it", "prefer 3:30 if they can, else keep 3"); a plain alternative ("otherwise Tuesday morning") is not conditional. Set flexible true for a request that gives a window to fit a shorter meeting in ("any time 10-12"). A client complaint, an error report ("not acceptable", "nobody agreed", "showed up to an empty room"), a threat to drop a meeting, or an urgent same-day problem ("URGENT … this morning", "stuck at the airport") also gets one extra ask with category "Escalation / complaint" (escalate); still return the email's other asks. "asap" alone is not urgent. Other conference questions are "General Conference Inquiry" (inquiry); anything not about the conference is "Unrelated Email". Statements that something is unchanged or still on are not asks. ` +
   `Window kind: use "availability" for any time the email proposes or offers, including the new time of a reschedule and the time of a meeting being requested or confirmed. Use "existingMeeting" only for a meeting the email mentions as already booked and not changing. Use "unavailable" for a time the sender says does not work or when the issuer cannot meet ("Monday 10am-1pm doesn't work", "nothing before 1pm Monday"); record these so Corda never offers that time again. referenceTime is the current date and time of the existing meeting the ask refers to (for cancel/reschedule), as {"date","time"} in conference local time, or null. attendees is the number of people the requester says will attend, or null. durationMinutes only when stated. vague lists exact phrases from the email that name a time without an exact window ("tues after lunch till ~4ish"). Set tentative true only for hedged language ("might", "possibly", "pencil in", "tentatively"); a request to hold slots is not tentative. ` +
   `${hints?.conferenceId || hints?.issuerId || hints?.defaultConferenceId || hints?.senderIssuerId || hints?.senderInvestorId ? `Hints (use only when the email itself names nothing else): ${JSON.stringify({ conferenceId: hints?.conferenceId || hints?.defaultConferenceId, issuerId: hints?.issuerId || hints?.senderIssuerId, senderInvestorId: hints?.senderInvestorId })}. ` : ''}` +
-  `Context: ${JSON.stringify(ctx)}. Resolve weekdays to the conference's dates. Give each window as date (YYYY-MM-DD) plus startTime and endTime in 24-hour HH:mm in the conference's local time; when the email states another time zone (e.g. "2:30pm ET (7:30pm UK)" or "after 2pm Central"), convert to the conference's local time and ignore the duplicate in the other zone. Do not convert to UTC; Corda does that. A compact range like "2–4pm" means 2pm to 4pm. Never invent windows from vague times such as "morning" or "after lunch"; list them in vague and uncertainties instead. Every window's evidence and every evidence entry must be an exact substring of the email body. Missing or contradictory information goes in uncertainties. All relevant changes require human review. Never resolve meetingId yourself; set null.`;
+  `${today(ctx, hints)}` +
+  `Context: ${JSON.stringify(ctx)}. Resolve weekdays to the conference's dates; if a date or weekday falls outside every conference's dates, still give it and add an uncertainty saying it is outside the event dates. When the email gives a range to fit a shorter meeting into ("any time 1-3", "tomorrow morning, before 11", "45 min"), set flexible true, give the whole range as the window and set durationMinutes to the stated length. An automatic reply (out of office) or an email with no request is one ask with category "Unrelated Email" or "General Conference Inquiry". Internal staffing notes (a colleague who cannot cover meetings) are "General Conference Inquiry" with operation inquiry. Give each window as date (YYYY-MM-DD) plus startTime and endTime in 24-hour HH:mm in the conference's local time; when the email states another time zone (e.g. "2:30pm ET (7:30pm UK)" or "after 2pm Central"), convert to the conference's local time and ignore the duplicate in the other zone. Do not convert to UTC; Corda does that. A compact range like "2–4pm" means 2pm to 4pm. Never invent windows from vague times such as "morning" or "after lunch"; list them in vague and uncertainties instead. Every window's evidence and every evidence entry must be an exact substring of the email body. Missing or contradictory information goes in uncertainties. All relevant changes require human review. Never resolve meetingId yourself; set null.`;
 async function llmExtract(body: string, subject: string, ctx: Context, hints?: Hints) {
   const content = newEmailContent(body);
   const payload = await llmChat(
@@ -55,9 +66,42 @@ async function llmExtract(body: string, subject: string, ctx: Context, hints?: H
   );
   const raw = JSON.parse(payload.choices?.[0]?.message?.content || '{}');
   // Older prompt shape (one object) is still accepted.
-  const list: Record<string, unknown>[] = Array.isArray(raw?.asks) ? raw.asks : [raw];
-  if (!list.length) throw new Error('answer had no asks');
-  return list.slice(0, 12).map((a) => normaliseAsk(a, content, ctx, hints));
+  const list: Record<string, unknown>[] = Array.isArray(raw?.asks) ? raw.asks : raw && typeof raw === 'object' && raw.category ? [raw] : [];
+  // No asks at all (an out-of-office reply, a thank-you): nothing to schedule.
+  if (!list.length)
+    return { asks: [extractionSchema.parse({ category: 'Unrelated Email', conferenceId: hints?.conferenceId || hints?.defaultConferenceId || null, issuerId: null, investorId: null, operation: 'inquiry', tentative: false, windows: [], uncertainties: [], evidence: [], needsReview: false, summary: 'No request in this email' })], dropped: [] as string[] };
+  // One bad ask must not throw away the good ones; a dropped ask still shows as an uncovered sentence.
+  const asks: Extraction[] = [];
+  const dropped: string[] = [];
+  for (const a of list.slice(0, 12)) {
+    try {
+      asks.push(normaliseAsk(a, content, ctx, hints));
+    } catch (e) {
+      dropped.push(`${typeof a?.summary === 'string' ? a.summary.slice(0, 60) : 'ask'}: ${(e as Error).message.slice(0, 120)}`);
+    }
+  }
+  if (!asks.length) throw new Error(dropped.join('; ') || 'answer had no usable asks');
+  return { asks, dropped };
+}
+
+const CATEGORY_WORDS: [RegExp, Extraction['category']][] = [
+  [/escalat|complain/i, 'Escalation / complaint'],
+  [/availab/i, 'Issuer Availability Update'],
+  [/cancel/i, 'Meeting Cancellation'],
+  [/resched|move/i, 'Reschedule Request'],
+  [/confirm/i, 'Meeting Confirmation'],
+  [/new|request/i, 'New Meeting Request'],
+  [/update|headcount|room/i, 'Meeting Update'],
+  [/unrelated|out of office|auto/i, 'Unrelated Email'],
+];
+const OPERATION_WORDS: Record<string, Extraction['operation']> = { move: 'reschedule', shift: 'reschedule', delete: 'cancel', drop: 'cancel', request: 'inquiry', question: 'inquiry', none: 'inquiry', complaint: 'escalate' };
+/** Models sometimes paraphrase an enum value ("Reschedule", "move"); map it instead of rejecting. */
+function coerceEnums(raw: Record<string, unknown>) {
+  const cat = String(raw.category ?? '');
+  const category = (categories as readonly string[]).includes(cat) ? cat : CATEGORY_WORDS.find(([re]) => re.test(cat))?.[1] || 'General Conference Inquiry';
+  const op = String(raw.operation ?? '').toLowerCase();
+  const operation = ['add', 'replace', 'remove', 'confirm', 'reschedule', 'cancel', 'update', 'escalate', 'inquiry'].includes(op) ? op : OPERATION_WORDS[op] || 'inquiry';
+  return { category, operation };
 }
 /** Map one model answer onto the strict schema; reject it only if evidence cannot be found. */
 function normaliseAsk(raw: Record<string, unknown>, content: string, ctx: Context, hints?: Hints): Extraction {
@@ -98,6 +142,9 @@ function normaliseAsk(raw: Record<string, unknown>, content: string, ctx: Contex
         : null;
   const checked = extractionSchema.safeParse({
     ...raw,
+    ...coerceEnums(raw),
+    tentative: raw.tentative === true,
+    needsReview: true,
     conferenceId,
     issuerId: (raw.issuerId as string) || hints?.issuerId || hints?.senderIssuerId || null,
     investorId: (raw.investorId as string) || hints?.senderInvestorId || null,
@@ -136,7 +183,20 @@ function normaliseAsk(raw: Record<string, unknown>, content: string, ctx: Contex
     if (score < 0.6) throw new Error('Extraction evidence did not match the email.');
     return best;
   };
-  parsed.windows = parsed.windows.map((w) => ({ ...w, evidence: quote(w.evidence) }));
+  // A window whose quote cannot be found keeps the ask's own (matched) evidence instead.
+  const fallbackQuote = parsed.evidence.map((q) => { try { return quote(q); } catch { return null; } }).find(Boolean);
+  parsed.windows = parsed.windows.map((w) => {
+    try {
+      return { ...w, evidence: quote(w.evidence) };
+    } catch (err) {
+      if (!fallbackQuote) throw err;
+      return { ...w, evidence: fallbackQuote };
+    }
+  });
+  // "45 min any time 1–3": a range longer than the stated length is a range to fit the meeting in.
+  const avail = parsed.windows.find((w) => w.kind === 'availability');
+  if (avail && parsed.durationMinutes && (+new Date(avail.end) - +new Date(avail.start)) / 60000 > parsed.durationMinutes + 5 && parsed.category === 'New Meeting Request')
+    parsed.flexible = true;
   // The time a reschedule moves to (or a request/confirmation names) is the proposed slot, even
   // when the model labels it as a booked meeting.
   const proposes =
@@ -144,7 +204,8 @@ function normaliseAsk(raw: Record<string, unknown>, content: string, ctx: Contex
   const notBlocked = parsed.windows.filter((w) => w.kind !== 'unavailable');
   if (proposes && !notBlocked.some((w) => w.kind === 'availability') && notBlocked.length)
     notBlocked[notBlocked.length - 1].kind = 'availability';
-  parsed.evidence = parsed.evidence.map(quote);
+  parsed.evidence = parsed.evidence.map((q) => { try { return quote(q); } catch { return null; } }).filter((q): q is string => Boolean(q));
+  if (!parsed.evidence.length && parsed.category !== 'Unrelated Email') throw new Error('Extraction evidence did not match the email.');
   parsed.needsReview = parsed.category !== 'Unrelated Email';
   parsed.meetingId = null;
   parsed.missing = missingFor(parsed);

@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { extractEmail } from '../src/lib/extraction';
+import { resetLlmState } from '../src/lib/llm';
 
 const ctx = {
   conferences: [
@@ -35,6 +36,7 @@ function mockModel(answer: unknown, ok = true) {
       },
     )) as typeof fetch;
   process.env.LLM_API_KEY = 'test';
+  resetLlmState();
   return () => {
     globalThis.fetch = original;
     delete process.env.LLM_API_KEY;
@@ -122,5 +124,54 @@ test('model failure falls back to the rule parser, which still splits the asks',
     assert(r.asks.every((a) => !a.uncertainties.some((u) => /sk-|api key/i.test(u))));
   } finally {
     restore();
+  }
+});
+
+test('an answer with no asks (out-of-office) is read as unrelated, not a fallback', async () => {
+  const restore = mockModel({ asks: [] });
+  try {
+    const r = await extractEmail('I am out of the office with limited access to email.', 'Automatic reply', ctx);
+    assert.equal(r.parser, 'llm');
+    assert.equal(r.asks.length, 1);
+    assert.equal(r.asks[0].category, 'Unrelated Email');
+  } finally {
+    restore();
+  }
+});
+
+test('one unusable ask is dropped and the good ones are kept; paraphrased enums are mapped', async () => {
+  const restore = mockModel({
+    asks: [
+      { category: 'Reschedule', operation: 'move', conferenceId: 'abs-east', issuerId: 'ford', investorId: 'blackrock', tentative: false, windows: [{ date: '2026-10-20', startTime: '14:00', endTime: '14:30', kind: 'availability', evidence: 'BlackRock - can we move that to Tuesday 2:00pm ET?' }], uncertainties: [], evidence: ['BlackRock - can we move that to Tuesday 2:00pm ET?'], needsReview: true, meetingId: null, summary: 'Move BlackRock' },
+      { category: 'Meeting Cancellation', operation: 'cancel', conferenceId: 'abs-east', issuerId: 'ford', investorId: 'pimco', tentative: false, windows: [], uncertainties: [], evidence: ['Something the email never said at all, invented by the model'], needsReview: true, meetingId: null, summary: 'Cancel PIMCO' },
+    ],
+  });
+  try {
+    const r = await extractEmail(body, 'Ford updates', ctx);
+    assert.equal(r.parser, 'llm');
+    assert.equal(r.asks.length, 1);
+    assert.equal(r.asks[0].category, 'Reschedule Request');
+    assert.equal(r.asks[0].operation, 'reschedule');
+    assert.match(r.readNote || '', /1 ask\(s\) dropped/);
+  } finally {
+    restore();
+  }
+});
+
+test('the model is told the received date, so "tomorrow" resolves from it', async () => {
+  const original = globalThis.fetch;
+  let sent = '';
+  globalThis.fetch = (async (_u: unknown, init?: { body?: string }) => {
+    sent = String(init?.body || '');
+    return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ asks: [] }) } }] }), { status: 200 });
+  }) as typeof fetch;
+  process.env.LLM_API_KEY = 'test';
+  resetLlmState();
+  try {
+    await extractEmail('Can we do tomorrow at 11?', 'Tomorrow', ctx, { receivedAt: '2026-10-19T15:00:00Z' });
+    assert.match(sent, /received Monday 2026-10-19 11:00/);
+  } finally {
+    globalThis.fetch = original;
+    delete process.env.LLM_API_KEY;
   }
 });

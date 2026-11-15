@@ -716,6 +716,7 @@ async function ingestEmail(user: User, input: unknown) {
     await audit(tx, user, 'Email ingested', 'Email', mail.id, undefined, {
       asks: a.asks,
       parser: a.parser,
+      ...(a.readNote ? { readNote: a.readNote } : {}),
       senderStatus: a.trust.status,
       securityFlags: a.flags,
       contextNote: a.contextNote,
