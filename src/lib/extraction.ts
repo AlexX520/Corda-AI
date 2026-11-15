@@ -193,6 +193,8 @@ function normaliseAsk(raw: Record<string, unknown>, content: string, ctx: Contex
       return { ...w, evidence: fallbackQuote };
     }
   });
+  fixRelativeDays(parsed, zone, hints?.receivedAt);
+  fixUnconvertedZones(parsed, zone);
   // "45 min any time 1–3": a range longer than the stated length is a range to fit the meeting in.
   const avail = parsed.windows.find((w) => w.kind === 'availability');
   if (avail && parsed.durationMinutes && (+new Date(avail.end) - +new Date(avail.start)) / 60000 > parsed.durationMinutes + 5 && parsed.category === 'New Meeting Request')
@@ -243,4 +245,78 @@ export async function generateDraft(facts: string, fallback: string) {
   } catch {
     return fallback; // model unreachable or slow: the template draft is used
   }
+}
+
+const RELATIVE: [RegExp, number][] = [
+  [/\b(?:tomorrow|tomorow|tmrw|tmw|tmr)\b/i, 1],
+  [/\b(?:today|tonight|this (?:morning|afternoon|evening))\b/i, 0],
+];
+const WEEKDAY = /\b(mon|tue|wed|thu|fri|sat|sun)[a-z]*\b/i;
+const plusDays = (day: string, n: number) => {
+  const d = new Date(`${day}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+/**
+ * "Tomorrow" and "today" are resolved by code from the received date, not by the model: a window
+ * whose own quote (or, failing that, the ask's quotes) says "tomorrow" is moved onto that day,
+ * keeping its local times. A weekday that disagrees ("tomorrow (Wed)" on a Sunday) is flagged.
+ */
+export function fixRelativeDays(e: Extraction, zone: string, receivedAt?: string) {
+  if (!receivedAt || Number.isNaN(+new Date(receivedAt))) return;
+  const received = formatInTimeZone(new Date(receivedAt), zone, 'yyyy-MM-dd');
+  const askText = e.evidence.join(' ');
+  e.windows = e.windows.map((w) => {
+    const text = RELATIVE.some(([re]) => re.test(w.evidence)) ? w.evidence : WEEKDAY.test(w.evidence) ? '' : askText;
+    const hit = RELATIVE.find(([re]) => re.test(text));
+    if (!hit) return w;
+    const day = plusDays(received, hit[1]);
+    const current = formatInTimeZone(new Date(w.start), zone, 'yyyy-MM-dd');
+    const weekday = WEEKDAY.exec(text)?.[1];
+    if (weekday && formatInTimeZone(new Date(`${day}T17:00:00Z`), 'UTC', 'EEE').toLowerCase().slice(0, 3) !== weekday.toLowerCase().slice(0, 3))
+      e.uncertainties.push(`The email says "${hit[1] ? 'tomorrow' : 'today'}" (${formatInTimeZone(new Date(`${day}T17:00:00Z`), 'UTC', 'EEE MMM d')}) but also names ${weekday}; check the day.`);
+    if (current === day) return w;
+    const move = (iso: string) => conferenceTime(day, formatInTimeZone(new Date(iso), zone, 'HH:mm'), zone).toISOString();
+    try {
+      // A window that ran past midnight keeps its length.
+      const end = new Date(+new Date(move(w.start)) + (+new Date(w.end) - +new Date(w.start))).toISOString();
+      return { ...w, start: move(w.start), end };
+    } catch {
+      return w;
+    }
+  });
+}
+
+const ZONES: [RegExp, string][] = [
+  [/^(?:CT|CST|CDT|Central)$/i, 'America/Chicago'],
+  [/^(?:MT|MST|MDT|Mountain)$/i, 'America/Denver'],
+  [/^(?:PT|PST|PDT|Pacific)$/i, 'America/Los_Angeles'],
+  [/^(?:ET|EST|EDT|Eastern)$/i, 'America/New_York'],
+  [/^(?:UK|GMT|BST|London)$/i, 'Europe/London'],
+];
+const ZONED_TIME = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*(?:-|–|to)\s*\d{1,2}(?::\d{2})?\s*(am|pm)?)?\s*\(?\b(CT|CST|CDT|Central|MT|MST|MDT|Mountain|PT|PST|PDT|Pacific|ET|EST|EDT|Eastern|UK|GMT|BST|London)\b/i;
+/**
+ * "2:00pm CT" for an event in New York is 3:00 PM event time. If the model kept the clock time as
+ * written (the window starts at 2:00 PM event time), convert it here; a window the model already
+ * converted is left alone.
+ */
+export function fixUnconvertedZones(e: Extraction, zone: string) {
+  e.windows = e.windows.map((w) => {
+    const m = ZONED_TIME.exec(w.evidence);
+    if (!m) return w;
+    const src = ZONES.find(([re]) => re.test(m[5]))?.[1];
+    if (!src || src === zone) return w;
+    const hh = Number(m[1]) % 12, mm = Number(m[2] || 0);
+    const local = new Date(w.start);
+    const lh = Number(formatInTimeZone(local, zone, 'H')) % 12, lm = Number(formatInTimeZone(local, zone, 'm'));
+    if (hh !== lh || mm !== lm) return w;
+    const day = formatInTimeZone(local, zone, 'yyyy-MM-dd'), hm = formatInTimeZone(local, zone, 'HH:mm');
+    try {
+      const shift = +conferenceTime(day, hm, src) - +conferenceTime(day, hm, zone);
+      if (!shift) return w;
+      return { ...w, start: new Date(+local + shift).toISOString(), end: new Date(+new Date(w.end) + shift).toISOString() };
+    } catch {
+      return w;
+    }
+  });
 }

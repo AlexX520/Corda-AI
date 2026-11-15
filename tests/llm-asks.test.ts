@@ -175,3 +175,20 @@ test('the model is told the received date, so "tomorrow" resolves from it', asyn
     delete process.env.LLM_API_KEY;
   }
 });
+
+test('"tomorrow" and unconverted time zones are corrected by code after the model', async () => {
+  const { fixRelativeDays, fixUnconvertedZones } = await import('../src/lib/extraction');
+  const base = { category: 'New Meeting Request', conferenceId: 'abs-east', issuerId: 'ford', investorId: 'blackrock', operation: 'add', tentative: false, uncertainties: [] as string[], needsReview: true, meetingId: null, summary: '', referenceTime: null, attendees: null, durationMinutes: null, missing: [], vague: [], conditional: false, condition: '', fromEscalation: false, flexible: false };
+  // Received Sat Oct 17 evening ET; the model put "tomorrow 11:00" on Saturday.
+  const a = { ...base, evidence: ['Jen can do tomorrow 11:00-11:30am ET'], windows: [{ start: '2026-10-17T15:00:00.000Z', end: '2026-10-17T15:30:00.000Z', kind: 'availability' as const, evidence: 'Jen can do tomorrow 11:00-11:30am ET', source: 'email' as const }] };
+  fixRelativeDays(a as never, 'America/New_York', '2026-10-18T00:40:00Z');
+  assert.equal(a.windows[0].start, '2026-10-18T15:00:00.000Z', 'moved to Sunday, same local time');
+  // "2:00pm CT" kept as 2:00 PM event time by the model -> 3:00 PM ET.
+  const b = { ...base, evidence: ['can we do 2:00pm CT instead of the 3pm slot?'], windows: [{ start: '2026-10-18T18:00:00.000Z', end: '2026-10-18T18:30:00.000Z', kind: 'availability' as const, evidence: 'can we do 2:00pm CT instead of the 3pm slot?', source: 'email' as const }] };
+  fixUnconvertedZones(b as never, 'America/New_York');
+  assert.equal(b.windows[0].start, '2026-10-18T19:00:00.000Z');
+  // Already converted (3:00 PM ET) stays.
+  const c = { ...base, evidence: ['can we do 2:00pm CT instead of the 3pm slot?'], windows: [{ start: '2026-10-18T19:00:00.000Z', end: '2026-10-18T19:30:00.000Z', kind: 'availability' as const, evidence: 'can we do 2:00pm CT instead of the 3pm slot?', source: 'email' as const }] };
+  fixUnconvertedZones(c as never, 'America/New_York');
+  assert.equal(c.windows[0].start, '2026-10-18T19:00:00.000Z');
+});

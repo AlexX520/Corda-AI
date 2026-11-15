@@ -156,7 +156,7 @@ export function MyDay({
               <span className={`v5-dot ${item.tone}`} />
               <div className="body">
                 <strong>{item.headline}</strong>
-                <span>{item.sub}</span>
+                {item.sub && <span>{item.sub}</span>}
               </div>
               <button className={`v5-btn ${i === 0 ? 'primary' : 'quiet'}`} onClick={() => onItem(item)}>
                 {item.cta}

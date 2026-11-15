@@ -84,8 +84,8 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         actions: [a],
         who: investor,
         what: `Wants ${issuer} · ${fmt(r.start, zone, 'EEE h:mm a')}`,
-        headline: `${investor} asks to meet ${issuer}`,
-        sub: `${fmt(r.start, zone, 'EEE h:mm a')} · requested by ${data.users.find((u) => u.id === r.salespersonId)?.name || 'sales'}`,
+        headline: `${investor} wants ${issuer}, ${fmt(r.start, zone, 'EEE h:mm a')}`,
+        sub: `From ${data.users.find((u) => u.id === r.salespersonId)?.name || 'sales'}`,
         cta: 'Review',
         tone: a.priority === 'Urgent' ? 'amber' : 'indigo',
         at: a.createdAt,
@@ -99,7 +99,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         who: issuerName(a.issuerId) || actionKind(a, data).label,
         what: a.title,
         headline: a.title,
-        sub: a.recommendation,
+        sub: actionKind(a, data).label,
         cta: 'Open',
         tone: 'indigo',
         at: a.createdAt,
@@ -116,35 +116,47 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
     const who = suspicious ? 'Unverified sender' : company || senderName(e);
     const blockers = changes.map((p) => askBlocker(p, e)).filter(Boolean) as string[];
     const first = changes[0] || open[0];
+    // Short wording: "move Wellington to Sun 11:30 AM" (the sender's own name is in the row already).
+    const short = (p: (typeof changes)[number]) => {
+      const a = x(p);
+      if (!a) return p.summary;
+      const other = (a.issuerId && senderCompany(e, data) === issuerName(a.issuerId) ? investorName(a.investorId) : issuerName(a.issuerId) || investorName(a.investorId)) || '';
+      const w = a.windows?.find((v) => v.kind === 'availability');
+      const at = w ? fmt(w.start, zone, 'EEE h:mm a') : '';
+      const span = w ? `${fmt(w.start, zone, 'EEE h:mm')}–${fmt(w.end, zone, 'h:mm a')}` : '';
+      if (a.operation === 'reschedule') return `move ${other}${at ? ` to ${at}` : ''}`;
+      if (a.operation === 'cancel') return `cancel ${other || 'a meeting'}`;
+      if (a.operation === 'confirm') return `confirm ${other}${at ? ` at ${at}` : ''}`;
+      if (a.category === 'New Meeting Request') return `add ${other}${a.flexible && span ? ` (${span})` : at ? ` at ${at}` : ''}`;
+      if (a.category === 'Issuer Availability Update') return a.operation === 'remove' ? `not available${span ? ` ${span}` : ''}` : `available${span ? ` ${span}` : ''}`;
+      if (a.operation === 'update') return `update ${other}${a.attendees ? ` · ${a.attendees} people` : ''}`;
+      return p.summary;
+    };
+    const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
     let what: string, headline: string, sub: string, cta: string, tone: Tone;
     if (suspicious) {
       tone = 'amber';
-      what = 'Possible phishing — check before acting';
-      headline = 'This email may not be from who it claims';
-      sub = e.securityFlags[0] || 'The sender is not a registered contact.';
+      what = 'Possible phishing';
+      headline = 'Possible phishing — do not act on it';
+      sub = `Look-alike sender: ${(e.originalSender || e.sender).split('@').pop()}`;
       cta = 'Check';
     } else if (escalation) {
       tone = 'red';
       what = escalation.summary || 'Client escalation';
       headline = escalation.summary || `${who} escalation`;
-      sub = `Client escalation · ${e.escalationReasons[0] || 'needs an owner'}`;
+      sub = 'Client escalation';
       cta = 'Review';
     } else if (changes.length > 1) {
       tone = blockers.length ? 'amber' : 'indigo';
       what = plural(changes.length, 'change');
       headline = `${who} sent ${plural(changes.length, 'change')}`;
-      sub = changes
-        .slice(0, 3)
-        .map((p) => p.summary)
-        .filter(Boolean)
-        .join(' · ');
+      sub = cap(changes.slice(0, 3).map(short).join(', ')) + (changes.length > 3 ? ', …' : '');
       cta = `Review ${plural(changes.length, 'change')}`;
     } else {
       tone = blockers.length ? 'amber' : 'indigo';
-      what = first?.summary || e.subject;
-      headline = first?.summary || e.subject;
-      const from = company && !e.forwardedBy ? company : senderName(e);
-      sub = blockers[0] ? `${blockers[0]} · from ${from}` : `From ${from}${e.cc.length ? ` · cc ${e.cc.length}` : ''}`;
+      what = first ? cap(short(first)) : e.subject;
+      headline = first ? `${who}: ${short(first)}` : e.subject;
+      sub = blockers[0] || (e.forwardedBy ? `Forwarded by ${senderName({ ...e, originalSender: null, originalSenderName: null } as Email)}` : '');
       cta = blockers.length ? 'Resolve' : 'Review';
     }
     items.push({

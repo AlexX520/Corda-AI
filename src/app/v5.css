@@ -1403,3 +1403,13 @@ button.v5-kpi:hover {
 .v5-legacy .settings-panel + .panel {
   margin-top: 16px;
 }
+
+/* Fewer small lines in the decision pane: the match reasons repeat the "why" line. */
+.v5-detail .dc-reasons {
+  display: none;
+}
+.v5-detail .dc-why {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
