@@ -15,7 +15,7 @@ import { now } from './clock';
  * except users and Outlook links) first: use it to refresh a long-lived database such as Neon.
  * DEMO_FIXED_DATES=true keeps the old fixed October dates for screenshots that need them.
  */
-export type DemoSeedOptions = { now?: Date; reseed?: boolean; fixedDates?: boolean; log?: (line: string) => void };
+export type DemoSeedOptions = { now?: Date; reseed?: boolean; fixedDates?: boolean; leadDays?: number; log?: (line: string) => void };
 /** Seeds (or with reseed: wipes and reseeds) the demo data. Pass a transaction client to make it atomic. */
 export async function seedDemo(db: Prisma.TransactionClient, opts: DemoSeedOptions = {}): Promise<string> {
   const lines: string[] = [];
@@ -32,7 +32,10 @@ export async function seedDemo(db: Prisma.TransactionClient, opts: DemoSeedOptio
     return d.toISOString().slice(0, 10);
   };
   const TODAY = opts.fixedDates ? '2026-10-20' : ymd(NOW);
-  const DAYS = { Y: shift(TODAY, -1), T: TODAY, M: shift(TODAY, 1) };
+  // The conference is weeks away by default: the demo shows scheduling ahead of the event, which
+  // is when most of the coordination happens (Tao, Nov 15). DEMO_LEAD_DAYS=0 shows a live event day.
+  const LEAD = opts.fixedDates ? 0 : Math.max(0, Number(opts.leadDays ?? process.env.DEMO_LEAD_DAYS ?? 21) || 0);
+  const DAYS = { Y: shift(TODAY, LEAD - 1), T: shift(TODAY, LEAD), M: shift(TODAY, LEAD + 1) };
   const hhmm = (mins: number) => `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}`;
   /** Today's meetings are placed around the current half hour (kept within 10:30–15:30). */
   const ANCHOR = (() => {

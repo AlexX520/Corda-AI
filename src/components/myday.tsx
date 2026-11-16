@@ -127,7 +127,7 @@ export function MyDay({
       <header className="v5-hero">
         <span className="eyebrow">
           {c.name}
-          {inEvent ? ` · Day ${dayNo} of ${dayCount}` : today < c.startDate ? ` · starts ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'EEE MMM d')}` : ' · ended'}
+          {inEvent ? ` · Day ${dayNo} of ${dayCount}` : today < c.startDate ? ` · starts ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'EEE MMM d')} (in ${Math.round((+new Date(`${c.startDate}T12:00:00Z`) - +new Date(`${today}T12:00:00Z`)) / 86400000)} days)` : ' · ended'}
           {' · '}
           {fmt(now.toISOString(), zone, 'EEE MMM d, h:mm a')}
         </span>

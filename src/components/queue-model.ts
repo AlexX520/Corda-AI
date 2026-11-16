@@ -44,7 +44,7 @@ export function actionKind(a: Action, data?: AppState): { id: KindId; label: str
   if (/cancel/i.test(t)) return { id: 'cancel', label: 'Cancel' };
   if (/availability/i.test(t)) return { id: 'availability', label: 'Availability' };
   if (/resource/i.test(t)) return { id: 'other', label: 'Rooms' };
-  if (/confirmation/i.test(t)) return { id: 'other', label: 'Confirmation' };
+  if (/confirmation/i.test(t)) return { id: 'new', label: 'New request' }; // an issuer confirming a requested meeting
   if (/inquiry/i.test(t)) return { id: 'other', label: 'Question' };
   if (/request|alternative/i.test(t) || a.requestId) return { id: 'new', label: 'New request' };
   return { id: 'other', label: t };

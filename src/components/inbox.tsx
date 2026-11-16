@@ -1,10 +1,10 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
+import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import type { AppState } from '@/lib/types';
 import { RequestDecision } from './decision';
 import { EmailReview } from './review';
-import { inboxItems, itemKindLabel, shortWhen, sortItems, urgentKind, type InboxItem, type ItemKind, type SortMode } from './inbox-model';
+import { inboxItems, itemKindLabel, receivedAgo, shortWhen, sortItems, urgentKind, type InboxItem, type ItemKind, type SortMode } from './inbox-model';
 import { kindOrder } from './queue-model';
 import { openWork } from './queue-model';
 import { fmt, type Run } from './shared';
@@ -187,6 +187,7 @@ export function Inbox({
             key={email.id}
             inline
             headline={selected?.headline}
+            item={selected ? { who: selected.who, what: selected.kind === 'email' && selected.actions.length > 1 ? selected.sub || selected.what : selected.what, type: selected.type, typeLabel: `${itemKindLabel[selected.type]}${selected.more ? ` +${selected.more}` : ''}`, when: selected.whenText ? `${selected.whenLabel}: ${selected.whenText}` : '' } : undefined}
             email={email}
             proposalId={proposalId}
             data={data}
@@ -200,9 +201,12 @@ export function Inbox({
           <div className="v5-detail">
             <header className="v5-mail-head">
               <div className="trust ok">Request from {data.users.find((u) => u.id === selected.request!.salespersonId)?.name || 'sales'}</div>
-              <h2>{selected.headline}</h2>
+              <span className={`v5-kind k-${selected.type} big`}>{itemKindLabel[selected.type]}</span>
+              <h2>{selected.who}</h2>
+              <p className="what">{selected.what}</p>
               <div className="meta">
-                <span>{selected.sub}</span>
+                {selected.whenText && <strong className="when">{selected.whenLabel}: {selected.whenText}</strong>}
+                <span>Received {receivedAgo(selected.at, data.now, zone)}</span>
               </div>
             </header>
             <RequestDecision
@@ -257,11 +261,18 @@ export function Inbox({
                       {itemKindLabel[i.type]}
                       {i.more ? ` +${i.more}` : ''}
                     </span>
-                    <time>{i.meetingAt ? fmt(i.meetingAt, zone, 'EEE h:mm a') : shortWhen(i.at, data.now, zone)}</time>
                   </span>
                   <strong>{i.who}</strong>
                   <span className="what">{i.what}</span>
-                  <span className="foot">Email {shortWhen(i.at, data.now, zone)}</span>
+                  {i.whenText && (
+                    <span className="when">
+                      <span className="lbl">
+                        <CalendarDays size={12} /> {i.whenLabel}
+                      </span>
+                      <span className="t">{i.whenText}</span>
+                    </span>
+                  )}
+                  <span className="foot">Received {receivedAgo(i.at, data.now, zone)}</span>
                 </button>
               ))}
             </div>

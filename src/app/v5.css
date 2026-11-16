@@ -1998,3 +1998,70 @@ button.v5-kpi:hover {
   .v5-syn .row, .v5-team-prefs .row { grid-template-columns: 1fr; }
   .v5-syn .row .muted { grid-column: 1; }
 }
+
+/* To-do hierarchy: company first, the change second, then a labelled meeting time; email time is "Received …". */
+.v5-card-item .when {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+.v5-card-item .when span {
+  color: var(--muted);
+  font-weight: 400;
+}
+.v5-card-item .when svg {
+  color: var(--muted);
+}
+.v5-mail-head .v5-kind.big {
+  align-self: flex-start;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.v5-mail-head p.what {
+  margin: -2px 0 0;
+  font-size: 17px;
+  line-height: 1.4;
+  color: var(--ink2);
+}
+.v5-mail-head .meta .when {
+  font-weight: 600;
+  color: var(--ink);
+}
+.v5-mail-head .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  align-items: baseline;
+}
+.v5-card-item .when {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+.v5-card-item .when .lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.v5-card-item .when .t {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.v5-card-item .what {
+  -webkit-line-clamp: 1;
+}
+.v5-card-item {
+  min-height: 0;
+}
+.v5-card-item { flex-basis: 248px; }
+.v5-card-item .when .t { white-space: normal; }

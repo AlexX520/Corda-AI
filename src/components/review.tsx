@@ -12,7 +12,7 @@ import type { Extraction } from '@/lib/extraction-schema';
 import { EventSelect } from './extraction-form';
 import { Badge, Field, fmt, names, Run } from './shared';
 import { actionKind, kindLabel } from './queue-model';
-import { askBlocker, senderCompany } from './inbox-model';
+import { askBlocker, receivedAgo, senderCompany } from './inbox-model';
 import {
   AlertTriangle,
   CalendarDays,
@@ -43,6 +43,7 @@ export function EmailReview({
   onOpenEmail,
   inline,
   headline,
+  item,
   onOpenDrafts,
 }: {
   email: EmailItem;
@@ -55,6 +56,8 @@ export function EmailReview({
   /** Render in the inbox pane instead of a side sheet. */
   inline?: boolean;
   headline?: string;
+  /** From the to-do list: who (main title), what (second line), type tag, labelled meeting time. */
+  item?: { who: string; what: string; type: string; typeLabel: string; when: string };
   onOpenDrafts?: () => void;
 }) {
   const n = names(data);
@@ -467,10 +470,19 @@ export function EmailReview({
             {trust.tone === 'ok' ? <Check size={14} strokeWidth={2.4} /> : <ShieldAlert size={14} />}
             {trust.text}
           </div>
-          <h2>{headline || (asks.length > 1 ? `${company || 'The sender'} sent ${asks.length} changes` : asks[0]?.summary || email.subject)}</h2>
+          {item ? (
+            <>
+              <span className={`v5-kind k-${item.type} big`}>{item.typeLabel}</span>
+              <h2>{item.who}</h2>
+              <p className="what">{item.what}</p>
+            </>
+          ) : (
+            <h2>{headline || (asks.length > 1 ? `${company || 'The sender'} sent ${asks.length} changes` : asks[0]?.summary || email.subject)}</h2>
+          )}
           <div className="meta">
+            {item?.when && <strong className="when">{item.when}</strong>}
             <span>
-              {sender} · {fmt(email.receivedAt, zone, 'EEE h:mm a')}
+              Received {receivedAgo(email.receivedAt, data.now, zone)} from {sender}
               {email.cc.length ? ` · cc ${email.cc.length}` : ''}
             </span>
             {!ignored && !email.suspicious && email.status !== 'Quarantined' && (
