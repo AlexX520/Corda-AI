@@ -443,13 +443,13 @@ export function Workspace() {
     draft = data.drafts.find((d) => d.id === draftId);
   const confirmed = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed');
   const allItems = inboxItems(data, openActions, c.timezone);
-  const inboxCount = manager ? allItems.length : allItems.filter((i) => i.mine).length || 0;
+  const inboxCount = allItems.length;
   const inSchedule = page === 'schedule' || page === 'allocation' || page === 'requests';
   const nav = (
     manager
       ? [
           { id: 'overview', label: 'Overview', icon: BarChart3 },
-          { id: 'queue', label: 'Team inbox', icon: InboxIcon, count: inboxCount },
+          { id: 'queue', label: 'Inbox', icon: InboxIcon, count: inboxCount },
           { id: 'schedule', label: 'Events', icon: CalendarDays },
         ]
       : banker

@@ -60,7 +60,8 @@ export function MyDay({
   const now = new Date(data.now);
   const today = fmt(now.toISOString(), zone, 'yyyy-MM-dd');
   const tomorrow = fmt(new Date(+now + 86400000).toISOString(), zone, 'yyyy-MM-dd');
-  const items = inboxItems(data, myDecisions(data, openActions), zone);
+  // One coordinator handles the whole conference inbox: everything open is theirs.
+  const items = inboxItems(data, openActions, zone);
   const me = data.user.id;
   const myIssuers = new Set(data.issuers.filter((i) => i.ownerId === me).map((i) => i.id));
   const myMeetingIds = new Set(data.meetings.filter((m) => myIssuers.has(m.issuerId) || m.bankerIds.includes(me)).map((m) => m.id));

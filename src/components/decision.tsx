@@ -71,7 +71,10 @@ export function EmailDecision({
   const [busy, setBusy] = useState(false);
   const [check, setCheck] = useState<Check | null>(null);
   const action = data.actions.find((a) => a.proposalId === proposal.id);
-  const [owner, setOwner] = useState(action?.assignedTo || data.user.id);
+  // One coordinator runs the inbox: whoever acknowledges an escalation owns it.
+  const owner = data.user.id;
+  const [showRelated, setShowRelated] = useState(false);
+  const [holdOpen, setHoldOpen] = useState(false);
   const op = e.operation;
   const unverified = email.senderStatus === 'unverified';
   const suspicious = email.suspicious;
@@ -259,7 +262,7 @@ export function EmailDecision({
         : decision === 'reject'
           ? 'Rejected. Nothing changed on the schedule.'
           : decision === 'acknowledge'
-            ? `Acknowledged. ${n.user(owner)} owns the follow-up.`
+            ? 'Acknowledged.'
             : decision === 'refresh'
               ? 'Re-checked against the current meeting.'
               : decision === 'handled'
@@ -300,11 +303,18 @@ export function EmailDecision({
               {x.proposals.map((p) => p.summary).join(' · ') || x.subject}
             </button>
           ))}
-          {otherAsks.map(({ email: x, p }) => (
-            <button key={p.id} className="related-item" onClick={() => onOpenEmail?.(x.id)}>
-              <strong>Also open about this meeting:</strong> {p.summary} · from {x.originalSenderName || x.sender}
+          {otherAsks.length > 0 && (
+            <button className="related-item more" onClick={() => setShowRelated(!showRelated)} aria-expanded={showRelated}>
+              {otherAsks.length} other open {otherAsks.length === 1 ? 'email' : 'emails'} about this meeting
+              <ChevronDown size={13} />
             </button>
-          ))}
+          )}
+          {showRelated &&
+            otherAsks.map(({ email: x, p }) => (
+              <button key={p.id} className="related-item sub" onClick={() => onOpenEmail?.(x.id)}>
+                {p.summary}
+              </button>
+            ))}
         </div>
       )}
       {check?.stale && !done && (
@@ -329,7 +339,7 @@ export function EmailDecision({
         <div className="dc-waiting">
           <p>
             {proposal.status === 'Acknowledged'
-              ? `Acknowledged. ${n.user(action?.assignedTo || null)} owns the follow-up${action?.status === 'Resolved' ? ' (resolved).' : '.'}`
+              ? `Acknowledged${action?.status === 'Resolved' ? ' and resolved' : ''}.`
               : `Already handled: ${proposal.status.toLowerCase()}${proposal.reviewNote?.split('\n').find((l) => l.trim()) ? ` — ${proposal.reviewNote.split('\n').find((l) => l.trim())}` : ''}${proposal.reviewerId ? ` (by ${n.user(proposal.reviewerId)})` : ''}.`}
           </p>
           {proposal.status === 'Acknowledged' && action && action.status !== 'Resolved' && (
@@ -357,17 +367,13 @@ export function EmailDecision({
         <div className="dc-escalation">
           <AlertTriangle size={16} />
           <div>
-            <strong>Client escalation — a person must own this</strong>
-            {e.uncertainties.map((u, i) => (
-              <p key={i}>{u}</p>
-            ))}
-            {action?.ccUserIds?.length ? (
-              <p className="muted-line">
-                Routed to {n.user(action.assignedTo)} · also notified {action.ccUserIds.map(n.user).join(', ')}
-              </p>
-            ) : action ? (
-              <p className="muted-line">Routed to {n.user(action.assignedTo)}</p>
-            ) : null}
+            <strong>Client escalation</strong>
+            {[...new Set(e.uncertainties)]
+              .filter((u) => !/^client (complaint|escalation)\.?$/i.test(u.trim()))
+              .slice(0, 2)
+              .map((u, i) => (
+                <p key={i}>{u}</p>
+              ))}
           </div>
         </div>
       ) : (
@@ -620,48 +626,36 @@ export function EmailDecision({
 
       {!done && escalation && (
         <div className="dc-confirm">
-          <p>Acknowledge &amp; assign one owner. Use the meeting editor for any schedule change.</p>
-          <label className="dc-pick">
-            <span>Owner</span>
-            <select value={owner || ''} onChange={(ev) => setOwner(ev.target.value)}>
-              {data.users
-                .filter((u) => u.role === 'BANKER')
-                .map((u) => (
-                  <option key={u.id} value={u.id}>
-                    {u.name}
-                    {u.id === action?.assignedTo ? ' (addressed)' : ''}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <input className="dc-input" aria-label="Note for the owner" placeholder="Optional note for the owner (internal)" value={note} onChange={(ev) => setNote(ev.target.value)} />
+          <input className="dc-input" aria-label="Note" placeholder="Note (optional, internal)" value={note} onChange={(ev) => setNote(ev.target.value)} />
           <div className="dc-actions">
-            <Button disabled={busy || !owner} onClick={() => decide('acknowledge')}>
-              <Check size={14} /> Acknowledge &amp; assign
+            <Button disabled={busy} onClick={() => decide('acknowledge')}>
+              <Check size={14} /> Acknowledge
             </Button>
             <Button variant="outline" disabled={busy} onClick={onReply}>
-              <Mail size={14} /> Reply to {asker}
+              <Mail size={14} /> Reply
             </Button>
-          </div>
-          {e.issuerId && (
-            <div className="hold-set">
-              {issuerRow?.holdChanges ? (
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => run('issuerHold', { issuerId: e.issuerId, hold: false }, `Hold released for ${issuer}.`)}>
-                  Release the hold on {issuer}
-                </Button>
+            {e.issuerId &&
+              (issuerRow?.holdChanges ? (
+                <button className="text-button" disabled={busy} onClick={() => run('issuerHold', { issuerId: e.issuerId, hold: false }, `Hold released for ${issuer}.`)}>
+                  Release hold on {issuer}
+                </button>
               ) : (
-                <>
-                  <input className="dc-input" placeholder={`Why hold all ${issuer} changes? (e.g. CFO asked for a call first)`} value={holdReason} onChange={(ev) => setHoldReason(ev.target.value)} />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy || holdReason.trim().length < 3}
-                    onClick={() => run('issuerHold', { issuerId: e.issuerId, hold: true, reason: holdReason }, `All ${issuer} changes are on hold.`)}
-                  >
-                    Hold all changes for {issuer}
-                  </Button>
-                </>
-              )}
+                <button className="text-button" onClick={() => setHoldOpen(!holdOpen)}>
+                  Hold {issuer} changes…
+                </button>
+              ))}
+          </div>
+          {e.issuerId && holdOpen && !issuerRow?.holdChanges && (
+            <div className="hold-set">
+              <input className="dc-input" placeholder="Why? (e.g. CFO asked for a call first)" value={holdReason} onChange={(ev) => setHoldReason(ev.target.value)} />
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || holdReason.trim().length < 3}
+                onClick={() => run('issuerHold', { issuerId: e.issuerId, hold: true, reason: holdReason }, `All ${issuer} changes are on hold.`)}
+              >
+                Hold all changes
+              </Button>
             </div>
           )}
         </div>

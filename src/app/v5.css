@@ -1589,3 +1589,25 @@ button.v5-kpi:hover {
     font-size: 22px;
   }
 }
+
+/* Related emails: one quiet line, expandable. */
+.related-item.more {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f4f4f5;
+  color: var(--v5-ink-2, #52525b);
+  font-weight: 500;
+}
+.related-item.sub {
+  background: transparent;
+  color: #4f46e5;
+  padding: 4px 11px;
+}
+.related-item.sub:hover {
+  text-decoration: underline;
+}
+.dc-confirm .dc-actions .text-button {
+  margin-left: auto;
+  font-size: 13px;
+}
