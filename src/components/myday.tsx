@@ -1,7 +1,8 @@
 'use client';
 import type { AppState } from '@/lib/types';
 import { actionKind } from './queue-model';
-import { inboxItems, type InboxItem } from './inbox-model';
+import { inboxItems, itemKindLabel, urgentKind, type InboxItem, type ItemKind } from './inbox-model';
+import { kindOrder } from './queue-model';
 import { fmt, names, type Run } from './shared';
 
 type Action = AppState['actions'][number];
@@ -43,6 +44,7 @@ export function MyDay({
   onOpenQueue,
   onOpenSchedule,
   onOpenAudit,
+  onOpenType,
 }: {
   data: AppState;
   conferenceId: string;
@@ -53,6 +55,8 @@ export function MyDay({
   onOpenQueue: () => void;
   onOpenSchedule: () => void;
   onOpenAudit: () => void;
+  /** Open the inbox filtered to one of Alex's change types. */
+  onOpenType?: (t: ItemKind | 'urgent') => void;
 }) {
   const n = names(data);
   const c = data.conferences.find((x) => x.id === conferenceId)!;
@@ -105,6 +109,14 @@ export function MyDay({
           ? `No meetings today. ${tomorrowList.length} tomorrow.`
           : 'No meetings today.';
   const shown = items.slice(0, 5);
+  // Alex's first three questions: what's new since I last looked, what is still unscheduled, what is confirmed.
+  const newSince = items.filter((i) => i.type === 'new' && (!lastSeen || i.at > lastSeen)).length;
+  const unscheduled = items.filter((i) => i.type === 'new').length;
+  const confirmedCount = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed').length;
+  const typeCounts = [
+    ['urgent', items.filter((i) => urgentKind(i.type)).length] as const,
+    ...kindOrder.filter((k) => k !== 'escalation').map((k) => [k, items.filter((i) => i.type === k).length] as const),
+  ].filter(([, n]) => n > 0);
 
   return (
     <div className="v5-page">
@@ -122,6 +134,21 @@ export function MyDay({
           {needLine} {nextLine}
         </p>
       </header>
+
+      <section aria-label="At a glance" className="v5-glance">
+        <button onClick={() => onOpenType?.('new')}>
+          <strong>{newSince}</strong>
+          <span>New requests since you last looked</span>
+        </button>
+        <button onClick={() => onOpenType?.('new')}>
+          <strong>{unscheduled}</strong>
+          <span>Waiting to be scheduled</span>
+        </button>
+        <button onClick={onOpenSchedule}>
+          <strong>{confirmedCount}</strong>
+          <span>Confirmed meetings</span>
+        </button>
+      </section>
 
       <HoldsBar data={data} run={run} />
 
@@ -152,12 +179,24 @@ export function MyDay({
             </button>
           )}
         </div>
+        {typeCounts.length > 1 && (
+          <div className="v5-kinds today" role="group" aria-label="Open items by type">
+            {typeCounts.map(([k, count]) => (
+              <button key={k} className={k === 'urgent' ? 'urgent' : ''} onClick={() => onOpenType?.(k as ItemKind | 'urgent')}>
+                {k === 'urgent' ? 'Urgent' : itemKindLabel[k as ItemKind]} <span>{count}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {shown.length ? (
           shown.map((item, i) => (
             <div key={item.id} className="v5-need">
               <span className={`v5-dot ${item.tone}`} />
               <div className="body">
-                <strong>{item.headline}</strong>
+                <strong>
+                  <span className={`v5-kind k-${item.type}`}>{itemKindLabel[item.type]}</span>
+                  {item.headline}
+                </strong>
                 {item.sub && <span>{item.sub}</span>}
               </div>
               <button className={`v5-btn ${i === 0 ? 'primary' : 'quiet'}`} onClick={() => onItem(item)}>
@@ -181,56 +220,7 @@ export function MyDay({
         )}
       </section>
 
-      {(later.length > 0 || tomorrowList.length > 0 || done.length > 0) && (
-        <section aria-label="Schedule" className="v5-stack">
-          <div className="v5-section-head">
-            <h2>{later.length ? 'Later today' : tomorrowList.length ? 'Tomorrow' : 'Earlier today'}</h2>
-            <button className="v5-link" onClick={onOpenSchedule}>
-              Full schedule
-            </button>
-          </div>
-          {later.length > 0 && (
-            <div className="v5-tiles">
-              {later.map(({ m, pending }) => (
-                <button key={m.id} className="v5-tile" onClick={() => onOpenMeeting(m.id)}>
-                  <span className="t">{fmt(m.start, zone, 'h:mm a')}{pending ? ' · seat pending' : ''}</span>
-                  <strong>{pair(m)}</strong>
-                  <span>{detail(m)}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {tomorrowList.length > 0 && (
-            <>
-              {later.length > 0 && <h2 className="v5-sub">Tomorrow</h2>}
-              <div className="v5-card v5-list">
-                {tomorrowList.map(({ m, pending }) => (
-                  <button key={m.id} onClick={() => onOpenMeeting(m.id)}>
-                    <span className="t">{fmt(m.start, zone, 'h:mm a')}</span>
-                    <strong>{pair(m)}</strong>
-                    <span>{detail(m)}{pending ? ' · seat pending' : ''}</span>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-          {done.length > 0 && (
-            <details className="v5-details">
-              <summary>{done.length} done earlier today</summary>
-              <div className="v5-card v5-list muted">
-                {done.map(({ m }) => (
-                  <button key={m.id} onClick={() => onOpenMeeting(m.id)}>
-                    <span className="t">{fmt(m.start, zone, 'h:mm a')}</span>
-                    <strong>{pair(m)}</strong>
-                    <span>{room(m)}</span>
-                  </button>
-                ))}
-              </div>
-            </details>
-          )}
-        </section>
-      )}
-
+      {/* Alex: no agenda list here; the day's meetings live on Schedule. */}
       {changes.length > 0 && (
         <section aria-label="What changed" className="v5-stack">
           <div className="v5-section-head">

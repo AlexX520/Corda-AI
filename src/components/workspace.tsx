@@ -58,7 +58,7 @@ import { ManagerHome, type Drill } from './manager';
 import { HoldsBar, MyDay } from './myday';
 import { Inbox } from './inbox';
 import { DayGrid } from './schedule-grid';
-import { inboxItems, type InboxItem } from './inbox-model';
+import { inboxItems, type InboxItem, type ItemKind } from './inbox-model';
 import { AskCorda, AskPanel } from './ask';
 import { MeetingDrawer, MeetingForm } from './meeting';
 import { actionKind, askOf, askPosition, kindLabel, kindOrder, openWork, type KindId } from './queue-model';
@@ -163,7 +163,8 @@ export function Workspace() {
     [drill, setDrill] = useState<Drill | null>(null),
     [auditFilter, setAuditFilter] = useState<Record<string, string> | null>(null),
     [mobile, setMobile] = useState(false),
-    [classic, setClassic] = useState(false);
+    [classic, setClassic] = useState(false),
+    [inboxType, setInboxType] = useState<ItemKind | 'urgent' | 'all'>('all');
   const reload = useCallback(async () => {
     const response = await fetch('/api/state', { cache: 'no-store' });
     const result = await response.json();
@@ -444,7 +445,8 @@ export function Workspace() {
   const confirmed = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed');
   const allItems = inboxItems(data, openActions, c.timezone);
   const inboxCount = allItems.length;
-  const inSchedule = page === 'schedule' || page === 'allocation' || page === 'requests';
+  // Alex: schedule and allocation are separate jobs, so Rooms & coverage has its own place in the sidebar.
+  const inSchedule = page === 'schedule' || page === 'requests' || (page === 'allocation' && (!banker || manager));
   const nav = (
     manager
       ? [
@@ -457,6 +459,7 @@ export function Workspace() {
             { id: 'overview', label: 'Today', icon: Sun },
             { id: 'queue', label: 'Inbox', icon: InboxIcon, count: inboxCount },
             { id: 'schedule', label: 'Schedule', icon: CalendarDays },
+            { id: 'allocation', label: 'Rooms & coverage', icon: SlidersHorizontal },
           ]
         : [
             { id: 'overview', label: 'My clients', icon: Users },
@@ -627,12 +630,12 @@ export function Workspace() {
           </div>
         </header>
         <main className={v5Page ? 'v5-content' : 'main-content v5-legacy'}>
-          {page === 'schedule' || page === 'allocation' || page === 'requests' ? (
+          {inSchedule ? (
             <div className="workspace-subnav" aria-label="Schedule sections">
               <button className={page === 'schedule' && scheduleSection === 'schedule' ? 'active' : ''} onClick={() => navigate('planner')}>Meetings</button>
               <button className={page === 'requests' ? 'active' : ''} onClick={() => navigate('requests')}>{banker ? 'Requests' : 'Request tracker'}</button>
               {banker && <button className={page === 'schedule' && scheduleSection === 'availability' ? 'active' : ''} onClick={() => navigate('availability')}>Issuer availability</button>}
-              {banker && <button className={page === 'allocation' ? 'active' : ''} onClick={() => navigate('resources')}>Rooms and coverage</button>}
+              {manager && <button className={page === 'allocation' ? 'active' : ''} onClick={() => navigate('resources')}>Rooms and coverage</button>}
             </div>
           ) : null}
           {page === 'queue' && banker && queueSection !== 'tasks' && (
@@ -679,6 +682,7 @@ export function Workspace() {
               onOpenQueue={() => { setDrill(null); setClassic(false); navigate('queue'); }}
               onOpenSchedule={() => navigate('planner')}
               onOpenAudit={() => navigate('audit')}
+              onOpenType={(t) => { setDrill(null); setClassic(false); setInboxType(t); navigate('queue'); }}
             />
           )}
           {page === 'ask' && <AskCorda data={data} onOpenMeeting={setMeetingId} />}
@@ -727,6 +731,8 @@ export function Workspace() {
               onList={() => setClassic(true)}
               filter={inboxFilter}
               onClearFilter={() => setDrill(null)}
+              type={inboxType}
+              onType={setInboxType}
             />
           )}
           {page === 'queue' && queueSection === 'tasks' && classic && (

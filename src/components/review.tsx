@@ -10,6 +10,7 @@ import { unhandledSentences } from '@/lib/review-rules';
 import type { Extraction } from '@/lib/extraction-schema';
 import { EventSelect } from './extraction-form';
 import { Badge, Field, fmt, names, Run } from './shared';
+import { actionKind, kindLabel } from './queue-model';
 import { askBlocker, senderCompany } from './inbox-model';
 import {
   AlertTriangle,
@@ -363,7 +364,14 @@ export function EmailReview({
               <button key={p.id} className={`row ${p.id === proposal?.id ? 'active' : ''} ${ASK_DONE.includes(p.status) ? 'done' : ''}`} onClick={() => setSelected(p.id)} aria-current={p.id === proposal?.id}>
                 <span className="n">{ASK_DONE.includes(p.status) ? <Check size={13} strokeWidth={2.6} /> : i + 1}</span>
                 <span className="body">
-                  <strong>{p.summary || `Change ${i + 1}`}</strong>
+                  <strong>
+                    {(() => {
+                      const act = data.actions.find((x) => x.proposalId === p.id);
+                      const k = act ? actionKind(act, data).id : null;
+                      return k && k !== 'other' ? <span className={`v5-kind k-${k}`}>{kindLabel[k]}</span> : null;
+                    })()}
+                    {p.summary || `Change ${i + 1}`}
+                  </strong>
                   <small className={k.tone}>{k.text}</small>
                 </span>
                 {ft.to && (

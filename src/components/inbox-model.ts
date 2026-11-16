@@ -1,6 +1,6 @@
 import type { AppState } from '@/lib/types';
 import type { Extraction } from '@/lib/extraction-schema';
-import { actionKind } from './queue-model';
+import { actionKind, kindOrder, type KindId } from './queue-model';
 import { fmt } from './shared';
 
 type Action = AppState['actions'][number];
@@ -9,6 +9,19 @@ type Request = AppState['requests'][number];
 
 const DONE = ['Approved', 'Rejected', 'Acknowledged', 'Resolved', 'Expired'];
 export type Tone = 'red' | 'amber' | 'indigo' | 'grey';
+/** Alex's four schedule-change types, plus the urgent ones that sit above them. */
+export type ItemKind = KindId | 'phishing';
+export const itemKindLabel: Record<ItemKind, string> = {
+  escalation: 'Escalation',
+  phishing: 'Check sender',
+  new: 'New request',
+  reschedule: 'Reschedule',
+  availability: 'Availability',
+  cancel: 'Cancel',
+  other: 'Other',
+};
+export const urgentKind = (k: ItemKind) => k === 'escalation' || k === 'phishing';
+export type SortMode = 'meeting' | 'received' | 'type';
 
 /** One line of the inbox: an email (with all its open asks), a sales request, or another task. */
 export type InboxItem = {
@@ -27,6 +40,12 @@ export type InboxItem = {
   cta: string;
   tone: Tone;
   at: string;
+  /** Which of the four change types (the main one when an email has several). */
+  type: ItemKind;
+  /** How many more changes of other types the same email holds. */
+  more: number;
+  /** When the meeting it is about takes place (for "sort by meeting time"). */
+  meetingAt: string | null;
   mine: boolean;
   /** The one person who owns this item (assigned, else the issuer's coverage banker). */
   owner: string | null;
@@ -74,6 +93,8 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
   const ownerOf = (a: Action) => a.assignedTo || data.issuers.find((i) => i.id === a.issuerId)?.ownerId || null;
   const owns = (a: Action) => ownerOf(a) === me;
   const items: InboxItem[] = [];
+  const meetingStart = (id: string | null | undefined) => (id ? data.meetings.find((m) => m.id === id)?.start || null : null);
+  const earliest = (xs: (string | null | undefined)[]) => (xs.filter(Boolean) as string[]).sort()[0] || null;
   const byEmail = new Map<string, Action[]>();
   for (const a of actions) {
     if (a.emailId && data.emails.some((e) => e.id === a.emailId)) byEmail.set(a.emailId, [...(byEmail.get(a.emailId) || []), a]);
@@ -93,6 +114,9 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         cta: 'Review',
         tone: a.priority === 'Urgent' ? 'amber' : 'indigo',
         at: a.createdAt,
+        type: actionKind(a, data).id,
+        more: 0,
+        meetingAt: r.start,
         mine: owns(a),
         owner: ownerOf(a),
       });
@@ -108,6 +132,9 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         cta: 'Open',
         tone: 'indigo',
         at: a.createdAt,
+        type: actionKind(a, data).id,
+        more: 0,
+        meetingAt: meetingStart((a as { meetingId?: string | null }).meetingId),
         mine: owns(a),
         owner: ownerOf(a),
       });
@@ -165,6 +192,22 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
       sub = blockers[0] || (e.forwardedBy ? `Forwarded by ${senderName({ ...e, originalSender: null, originalSenderName: null } as Email)}` : '');
       cta = blockers.length ? 'Resolve' : 'Review';
     }
+    // Main type: the first change's type; other types in the same email count as "+N".
+    // In the order the email lists its changes, so "Move X, cancel Y" reads as a Reschedule.
+    const kinds = [
+      ...changes.map((p) => list.find((a) => a.proposalId === p.id)).filter(Boolean),
+      ...list.filter((a) => !a.proposalId),
+    ]
+      .map((a) => actionKind(a!, data).id)
+      .filter((k) => k !== 'escalation');
+    const kind: ItemKind = suspicious ? 'phishing' : escalation ? 'escalation' : kinds[0] || 'other';
+    const others = new Set(kinds.filter((k) => k !== kind));
+    const meetingAt = earliest(
+      open.flatMap((p) => {
+        const a = x(p);
+        return [...(a?.windows || []).map((w) => w.start), meetingStart(a?.meetingId)];
+      }),
+    );
     items.push({
       id: `email:${e.id}`,
       kind: 'email',
@@ -177,12 +220,33 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
       cta,
       tone,
       at: e.receivedAt,
+      type: kind,
+      more: suspicious || escalation ? 0 : Math.max(others.size, changes.length - 1),
+      meetingAt,
       mine: list.some(owns),
       owner: ownerOf(list[0]),
     });
   }
-  const rank = (i: InboxItem) => (i.tone === 'red' ? 0 : i.actions.some((a) => a.priority === 'Urgent') ? 1 : 2);
-  return items.sort((a, b) => rank(a) - rank(b) || b.at.localeCompare(a.at));
+  return sortItems(items, 'meeting');
+}
+
+/**
+ * Urgent items (escalations, look-alike senders) always come first; the rest follow the chosen
+ * order: soonest meeting first (Alex's default), newest email first, or grouped by type.
+ */
+export function sortItems(items: InboxItem[], mode: SortMode) {
+  const urgent = (i: InboxItem) => (urgentKind(i.type) || i.tone === 'red' ? 0 : 1);
+  const far = '9999';
+  return [...items].sort((a, b) => {
+    const u = urgent(a) - urgent(b);
+    if (u) return u;
+    if (mode === 'received') return b.at.localeCompare(a.at);
+    if (mode === 'type') {
+      const d = kindOrder.indexOf(a.type as KindId) - kindOrder.indexOf(b.type as KindId);
+      if (d) return d;
+    }
+    return (a.meetingAt || far).localeCompare(b.meetingAt || far) || b.at.localeCompare(a.at);
+  });
 }
 
 /** "2:04 PM" for today, "Thu" for other days. */

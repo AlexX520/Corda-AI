@@ -1,10 +1,11 @@
 'use client';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Plus, RefreshCw } from 'lucide-react';
 import type { AppState } from '@/lib/types';
 import { RequestDecision } from './decision';
 import { EmailReview } from './review';
-import { inboxItems, shortWhen, type InboxItem } from './inbox-model';
+import { inboxItems, itemKindLabel, shortWhen, sortItems, urgentKind, type InboxItem, type ItemKind, type SortMode } from './inbox-model';
+import { kindOrder } from './queue-model';
 import { openWork } from './queue-model';
 import { type Run } from './shared';
 
@@ -32,6 +33,8 @@ export function Inbox({
   onList,
   filter,
   onClearFilter,
+  type = 'all',
+  onType,
 }: {
   data: AppState;
   conferenceId: string;
@@ -50,6 +53,9 @@ export function Inbox({
   /** Manager drill-down: only these items (by owner or kind). */
   filter?: { label: string; test: (a: Action) => boolean } | null;
   onClearFilter?: () => void;
+  /** Alex's type filter: New request / Reschedule / Availability / Cancel (or urgent). */
+  type?: ItemKind | 'urgent' | 'all';
+  onType?: (t: ItemKind | 'urgent' | 'all') => void;
 }) {
   const zone = data.conferences.find((c) => c.id === conferenceId)?.timezone || 'America/New_York';
   const work = openWork(data, conferenceId);
@@ -59,7 +65,26 @@ export function Inbox({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data, conferenceId, filter]);
   // One coordinator runs the conference inbox, so the inbox is the whole conference (no 'mine' split).
-  const items = all;
+  const [sort, setSort] = useState<SortMode>('meeting');
+  const [localType, setLocalType] = useState<ItemKind | 'urgent' | 'all'>(type);
+  const shownType = onType ? type : localType;
+  const setType = onType || setLocalType;
+  const counts = new Map<string, number>();
+  for (const i of all) {
+    const k = urgentKind(i.type) ? 'urgent' : i.type;
+    counts.set(k, (counts.get(k) || 0) + 1);
+  }
+  const chips: { id: ItemKind | 'urgent' | 'all'; label: string }[] = [
+    { id: 'all', label: 'All' },
+    ...(counts.get('urgent') ? [{ id: 'urgent' as const, label: 'Urgent' }] : []),
+    ...kindOrder
+      .filter((k) => k !== 'escalation' && (k !== 'other' || counts.get('other')))
+      .map((k) => ({ id: k, label: itemKindLabel[k] })),
+  ];
+  const items = sortItems(
+    all.filter((i) => shownType === 'all' || (shownType === 'urgent' ? urgentKind(i.type) : i.type === shownType)),
+    sort,
+  );
   const [requestId, setRequestId] = useState<string | null>(null);
   const selected =
     items.find((i) => (emailId ? i.email?.id === emailId : requestId ? i.request?.id === requestId : false)) || null;
@@ -82,6 +107,15 @@ export function Inbox({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items.length, emailId, requestId]);
+  // Switching type shows the first item of that type instead of keeping a hidden one open.
+  const typeSeen = useRef(shownType);
+  useEffect(() => {
+    if (typeSeen.current === shownType) return; // not on first open: keep the email opened from elsewhere
+    typeSeen.current = shownType;
+    const first = items.find((i) => i.kind !== 'other');
+    if (first && window.innerWidth > 900) pick(first);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownType]);
   // j / k walk the list, like a mail client.
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
@@ -107,7 +141,22 @@ export function Inbox({
           <h1>Inbox</h1>
           <span>{items.length ? `${items.length} open` : 'Clear'}</span>
         </div>
+        <div className="v5-kinds" role="group" aria-label="Filter by type">
+          {chips.map((c) => (
+            <button key={c.id} className={`${shownType === c.id ? 'active' : ''} ${c.id === 'urgent' ? 'urgent' : ''}`} aria-pressed={shownType === c.id} onClick={() => setType(c.id)}>
+              {c.label} <span>{c.id === 'all' ? all.length : counts.get(c.id) || 0}</span>
+            </button>
+          ))}
+        </div>
         <div className="tools">
+          <label className="v5-sort">
+            <span>Sort</span>
+            <select value={sort} onChange={(ev) => setSort(ev.target.value as SortMode)} aria-label="Sort the inbox">
+              <option value="meeting">Meeting time</option>
+              <option value="received">Newest email</option>
+              <option value="type">Type</option>
+            </select>
+          </label>
           {filter && (
             <button className="v5-chip" onClick={onClearFilter}>
               {filter.label} ✕
@@ -132,14 +181,20 @@ export function Inbox({
                   <strong>{i.who}</strong>
                   <time>{shortWhen(i.at, data.now, zone)}</time>
                 </span>
-                <span className="what">{i.what}</span>
+                <span className="what">
+                  <span className={`v5-kind k-${i.type}`}>
+                    {itemKindLabel[i.type]}
+                    {i.more ? ` +${i.more}` : ''}
+                  </span>
+                  {i.what}
+                </span>
               </span>
             </button>
           ))}
           {!items.length && (
             <div className="none">
               <CheckCircle2 size={22} />
-              <strong>Inbox clear</strong>
+              <strong>{shownType === 'all' ? 'Inbox clear' : `No open ${itemKindLabel[shownType as ItemKind]?.toLowerCase() || 'urgent'} items`}</strong>
               <span>New conference emails and requests appear here as they arrive.</span>
             </div>
           )}

@@ -1611,3 +1611,109 @@ button.v5-kpi:hover {
   margin-left: auto;
   font-size: 13px;
 }
+
+/* Alex's four change types: filter chips, sort and a small tag on every row. */
+.v5-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+.v5-kinds button {
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12.5px;
+  color: var(--ink2);
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+}
+.v5-kinds button span {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.v5-kinds button.active {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fff;
+}
+.v5-kinds button.active span {
+  color: rgba(255, 255, 255, 0.7);
+}
+.v5-kinds button.urgent:not(.active) {
+  border-color: #f3c4bd;
+  color: #b42318;
+}
+.v5-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.v5-sort select {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--ink);
+  font-weight: 500;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.v5-kind {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  padding: 3px 6px;
+  border-radius: 5px;
+  margin-right: 6px;
+  vertical-align: 1px;
+  background: #f4f4f5;
+  color: #52525b;
+}
+.v5-kind.k-new { background: #eef0ff; color: #4338ca; }
+.v5-kind.k-reschedule { background: #fff4e5; color: #b45309; }
+.v5-kind.k-availability { background: #e9f7ef; color: #15803d; }
+.v5-kind.k-cancel { background: #f4f4f5; color: #3f3f46; }
+.v5-kind.k-escalation { background: #fdecea; color: #b42318; }
+.v5-kind.k-phishing { background: #fff4e5; color: #b45309; }
+
+/* Today: Alex's three numbers. */
+.v5-glance {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.v5-glance button {
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.v5-glance button:hover {
+  border-color: #d4d4d8;
+}
+.v5-glance strong {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.v5-glance span {
+  font-size: 13px;
+  color: var(--muted);
+}
+.v5-kinds.today {
+  padding: 0 0 4px;
+}
+@media (max-width: 640px) {
+  .v5-glance strong { font-size: 22px; }
+  .v5-glance button { padding: 12px; }
+}
