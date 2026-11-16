@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { banker, currentUser, errorResponse, sameOrigin } from '@/lib/auth';
+import { operator, currentUser, errorResponse, sameOrigin } from '@/lib/auth';
 import { parseEmailFile } from '@/lib/email-file';
 import { command } from '@/lib/service';
 export const maxDuration = 60;
@@ -7,7 +7,7 @@ export async function POST(req: Request) {
   try {
     sameOrigin(req);
     const user = await currentUser();
-    banker(user);
+    operator(user);
     const form = await req.formData(),
       file = form.get('file');
     if (!(file instanceof File) || file.size > 10_000_000)

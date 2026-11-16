@@ -57,8 +57,9 @@ export function actionKind(a: Action, data?: AppState): { id: KindId; label: str
  */
 export function openWork(data: AppState, conferenceId: string) {
   // Acknowledged escalations stay open for their owner only (not in everyone's urgent count).
+  // A "Sales check" is the salesperson's task, not the desk's.
   const open = data.actions.filter(
-    (a) => a.status === 'Open' || (a.status === 'Acknowledged' && a.assignedTo === data.user.id),
+    (a) => a.type !== 'Sales check' && (a.status === 'Open' || (a.status === 'Acknowledged' && a.assignedTo === data.user.id)),
   );
   const conference = open.filter((a) => a.conferenceId === conferenceId);
   const triage = open.filter((a) => !a.conferenceId);

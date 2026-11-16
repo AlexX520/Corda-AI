@@ -14,6 +14,8 @@ model User {
   sessionVersion Int @default(0)
   /// Start of the previous visit, for "What changed since you were last here".
   lastSeenAt DateTime?
+  /// Conference coordinator: may act on the schedule. Other bankers only view and set preferences.
+  coordinator Boolean @default(false)
 }
 model Conference {
   id String @id
@@ -43,6 +45,8 @@ model Issuer {
   holdReason String @default("")
   holdSetBy String?
   holdSetAt DateTime?
+  /// Extra sender addresses treated as this company (e.g. test mailboxes).
+  extraContacts String[] @default([])
 }
 model Investor {
   id String @id
@@ -50,6 +54,8 @@ model Investor {
   contactEmail String
   /// Salesperson covering this account.
   coverageSalesId String?
+  /// Extra sender addresses treated as this company (e.g. test mailboxes).
+  extraContacts String[] @default([])
 }
 model Email {
   id String @id @default(cuid())

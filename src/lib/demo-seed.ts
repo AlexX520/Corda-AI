@@ -47,8 +47,10 @@ export async function seedDemo(db: Prisma.TransactionClient, opts: DemoSeedOptio
   const ago = (hours: number) => new Date(+NOW - hours * 3600000);
 
   const users = [
-    { id: 'banker-alex', name: 'Alex Morgan', email: 'alex.morgan@conferenceos.demo', role: 'BANKER' },
-    { id: 'banker-sarah', name: 'Sarah Chen', email: 'sarah.chen@conferenceos.demo', role: 'BANKER' },
+    // The two conference coordinators act on the schedule; every other banker only views it and
+    // sets their preferences (Alex, Nov 16).
+    { id: 'banker-alex', name: 'Alex Morgan', email: 'alex.morgan@conferenceos.demo', role: 'BANKER', coordinator: true },
+    { id: 'banker-sarah', name: 'Sarah Chen', email: 'sarah.chen@conferenceos.demo', role: 'BANKER', coordinator: true },
     { id: 'banker-maya', name: 'Maya Patel', email: 'maya.patel@conferenceos.demo', role: 'BANKER' },
     { id: 'banker-daniel', name: 'Daniel Kim', email: 'daniel.kim@conferenceos.demo', role: 'BANKER' },
     { id: 'banker-priya', name: 'Priya Shah', email: 'priya.shah@conferenceos.demo', role: 'BANKER' },
@@ -127,7 +129,7 @@ export async function seedDemo(db: Prisma.TransactionClient, opts: DemoSeedOptio
       if (existing && existing.startDate !== DAYS.Y)
         log(`ABS East already seeded for ${existing.startDate}; run with DEMO_RESEED=true to move the demo to today.`);
     }
-    for (const u of users) await db.user.upsert({ where: { id: u.id }, create: u, update: { name: u.name, role: u.role } });
+    for (const u of users) await db.user.upsert({ where: { id: u.id }, create: u, update: { name: u.name, role: u.role, coordinator: Boolean((u as { coordinator?: boolean }).coordinator) } });
     const conferences = [
       { id: 'abs-east', name: 'ABS East 2026', location: 'Fontainebleau · Miami Beach', timezone: ZONE, startDate: DAYS.Y, endDate: DAYS.M, slotMinutes: 30, roomBufferMinutes: 0, preferenceDeadline: at(DAYS.Y, 0), type: 'Conference' },
       { id: 'discover-ndr', name: 'Discover NDR — Boston', location: 'Boston, MA', timezone: ZONE, startDate: shift(TODAY, 7), endDate: shift(TODAY, 7), slotMinutes: 60, type: 'NDR' },

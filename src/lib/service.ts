@@ -1,4 +1,4 @@
-import { isDesk } from './roles';
+import { canOperate, isDesk, SELF_SERVICE_COMMANDS } from './roles';
 import { Prisma, User } from '@prisma/client';
 import { z } from 'zod';
 import { addMinutes } from 'date-fns';
@@ -1082,6 +1082,9 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
   return undefined;
 }
 export async function command(user: User, type: string, input: unknown): Promise<unknown> {
+  // Bankers who are not coordinators only view the schedule and keep their own preferences.
+  if (user.role === 'BANKER' && !canOperate(user) && !SELF_SERVICE_COMMANDS.has(type))
+    throw new Error('Only the conference coordinators can change the schedule. You can view it and set your preferences.');
   if (type === 'ingest') return ingestEmail(user, input);
   if (type === 'reassignEmail') return reassignEmail(user, input);
   if (type === 'replyPreview') {
@@ -2359,6 +2362,105 @@ export async function command(user: User, type: string, input: unknown): Promise
       return { ok: true, banker: owner.name, saved: p.items.length };
     });
   }
+  if (type === 'senderContact') {
+    // Register an extra sender address for a company (a test mailbox, an assistant's address).
+    const p = z
+      .object({ kind: z.enum(['issuer', 'investor']), id: z.string(), email: z.string().trim().toLowerCase().email('Enter an email address.'), remove: z.boolean().default(false) })
+      .parse(input);
+    const row = p.kind === 'issuer' ? await db.issuer.findUniqueOrThrow({ where: { id: p.id } }) : await db.investor.findUniqueOrThrow({ where: { id: p.id } });
+    const list = (row.extraContacts || []).filter((x) => x !== p.email);
+    const next = p.remove ? list : [...list, p.email];
+    if (p.kind === 'issuer') await db.issuer.update({ where: { id: p.id }, data: { extraContacts: next } });
+    else await db.investor.update({ where: { id: p.id }, data: { extraContacts: next } });
+    await audit(db, user, p.remove ? 'Sender address removed' : 'Sender address added', p.kind === 'issuer' ? 'Issuer' : 'Investor', p.id, { extraContacts: row.extraContacts }, { extraContacts: next });
+    return { ok: true };
+  }
+  if (type === 'requestTimeNo') {
+    // "This time doesn't work": tell sales why, with up to three open times they can pick from.
+    const p = z
+      .object({ id: z.string(), reason: z.string().trim().min(3, 'Say why the time does not work.').max(400), alternatives: z.array(z.string().datetime()).max(3).default([]) })
+      .parse(input);
+    return db.$transaction(async (tx) => {
+      const r = await tx.meetingRequest.findUniqueOrThrow({ where: { id: p.id } });
+      if (['Confirmed', 'Cancelled'].includes(r.status)) throw new Error('This request is already closed.');
+      const zone = (await tx.conference.findUniqueOrThrow({ where: { id: r.conferenceId } })).timezone;
+      const updated = await tx.meetingRequest.update({
+        where: { id: r.id },
+        data: {
+          status: 'Needs New Time',
+          alternativeDates: p.alternatives,
+          notes: `${r.notes ? `${r.notes}\n` : ''}${user.name}: ${formatInTimeZone(r.start, zone, 'EEE MMM d, h:mm a')} doesn't work — ${p.reason}`,
+        },
+      });
+      await tx.action.updateMany({ where: { requestId: r.id, status: 'Open' }, data: { status: 'Resolved' } });
+      await notifyRequest(
+        tx,
+        user,
+        r,
+        `${formatInTimeZone(r.start, zone, 'EEE h:mm a')} doesn't work (${p.reason}).${p.alternatives.length ? ` Open: ${p.alternatives.map((x) => formatInTimeZone(new Date(x), zone, 'EEE h:mm a')).join(', ')}.` : ''} Pick another time.`,
+      );
+      await audit(tx, user, 'Request time declined', 'MeetingRequest', r.id, r, updated);
+      return updated;
+    });
+  }
+  if (type === 'askSalesReschedule') {
+    // Alex's reschedule flow: before telling the issuer yes, the salesperson checks with the investor.
+    const p = z.object({ proposalId: z.string(), note: z.string().max(400).default('') }).parse(input);
+    return db.$transaction(async (tx) => {
+      const pr = await tx.proposal.findUniqueOrThrow({ where: { id: p.proposalId }, include: { email: true } });
+      if (pr.status !== 'Pending') throw new Error('This change was already handled.');
+      const e = pr.extraction as unknown as Extraction;
+      const meeting = e.meetingId
+        ? await tx.meeting.findUnique({ where: { id: e.meetingId } })
+        : e.issuerId && e.investorId
+          ? await tx.meeting.findFirst({ where: { issuerId: e.issuerId, investorId: e.investorId, status: 'Confirmed', ...(e.conferenceId ? { conferenceId: e.conferenceId } : {}) } })
+          : null;
+      const request = meeting?.requestId ? await tx.meetingRequest.findUnique({ where: { id: meeting.requestId } }) : null;
+      const investorId = meeting?.investorId || e.investorId;
+      const investor = investorId ? await tx.investor.findUnique({ where: { id: investorId } }) : null;
+      const salesId = request?.salespersonId || investor?.coverageSalesId;
+      if (!salesId) throw new Error('No salesperson covers this investor, so there is nobody to ask. Reply to the issuer directly.');
+      const sales = await tx.user.findUniqueOrThrow({ where: { id: salesId } });
+      const zone = e.conferenceId ? (await tx.conference.findUnique({ where: { id: e.conferenceId } }))?.timezone || 'America/New_York' : 'America/New_York';
+      const issuer = e.issuerId ? (await tx.issuer.findUnique({ where: { id: e.issuerId } }))?.name : null;
+      const to = e.windows.find((w) => w.kind !== 'existingMeeting');
+      const title = `${issuer || 'The issuer'} wants to move ${investor?.name || 'the meeting'}${meeting ? ` from ${formatInTimeZone(meeting.start, zone, 'EEE MMM d, h:mm a')}` : ''}${to ? ` to ${formatInTimeZone(new Date(to.start), zone, 'EEE MMM d, h:mm a')}` : ''}`;
+      await tx.proposal.update({ where: { id: pr.id }, data: { status: 'Waiting on sales', reviewNote: `Asked ${sales.name} to check with ${investor?.name || 'the investor'}.${p.note ? ` ${p.note}` : ''}` } });
+      await tx.action.create({
+        data: {
+          type: 'Sales check',
+          title,
+          conferenceId: e.conferenceId,
+          issuerId: e.issuerId,
+          investorId,
+          proposalId: pr.id,
+          meetingId: meeting?.id || null,
+          assignedTo: sales.id,
+          priority: 'High',
+          recommendation: p.note || `Check with ${investor?.name || 'the investor'} and answer: does the new time work?`,
+        },
+      });
+      await tx.notification.create({ data: { userId: sales.id, actorId: user.id, kind: 'sales-check', text: `${title}. Does it work for ${investor?.name || 'your client'}?`, meetingId: meeting?.id || null } });
+      await audit(tx, user, 'Reschedule sent to sales', 'Proposal', pr.id, undefined, { salesId: sales.id, title });
+      return { ok: true, sales: sales.name };
+    });
+  }
+  if (type === 'salesAnswer') {
+    // The salesperson's answer goes back to the coordinators, who then reply to the issuer.
+    const p = z.object({ actionId: z.string(), accept: z.boolean(), note: z.string().max(400).default('') }).parse(input);
+    return db.$transaction(async (tx) => {
+      const a = await tx.action.findUniqueOrThrow({ where: { id: p.actionId } });
+      if (a.type !== 'Sales check' || a.assignedTo !== user.id) throw new Error('Forbidden');
+      if (a.status !== 'Open') throw new Error('Already answered.');
+      await tx.action.update({ where: { id: a.id }, data: { status: 'Resolved' } });
+      const answer = `${user.name} ${p.accept ? 'says the new time works' : 'says the new time does not work'}${p.note ? `: “${p.note}”` : '.'}`;
+      if (a.proposalId) await tx.proposal.update({ where: { id: a.proposalId }, data: { status: 'Pending', reviewNote: answer } });
+      const coordinators = await tx.user.findMany({ where: { OR: [{ role: 'MANAGER' }, { role: 'BANKER', coordinator: true }] } });
+      await tx.notification.createMany({ data: coordinators.map((c) => ({ userId: c.id, actorId: user.id, kind: 'sales-answer', text: `${a.title}: ${answer}`, meetingId: a.meetingId })) });
+      await audit(tx, user, p.accept ? 'Sales accepted reschedule' : 'Sales declined reschedule', 'Proposal', a.proposalId || a.id, undefined, { note: p.note });
+      return { ok: true };
+    });
+  }
   if (type === 'syndicateCompare') {
     // Read syndicate's room schedule (Excel or CSV) and list where it differs from ours.
     // Nothing is changed: the coordinator fixes each difference where it belongs.
@@ -2519,7 +2621,18 @@ export async function command(user: User, type: string, input: unknown): Promise
         : request
           ? `A request for ${names.investor(parsed.investorId!)} × ${names.issuer(issuerId)} is already open (${formatInTimeZone(request.start, zone, 'EEE h:mm a')}).`
           : null;
-      options.push({ issuerId, proposal, duplicate, searched: parsed.windowStart ? 'window' : parsed.date ? 'day' : 'event' });
+      // The exact time sales typed, checked on its own, with the nearest open times if it does not work.
+      const askedSlot = parsed.windowStart ? { start: winStart, end: addMinutes(winStart, parsed.duration) } : null;
+      const asked = askedSlot
+        ? (() => {
+            const ev = evaluate(askedSlot, windows, busy, parsed.duration, c.slotMinutes);
+            const inWindow = windows.some((w) => +new Date(w.start) <= +askedSlot.start && +new Date(w.end) >= +askedSlot.end);
+            const clash = busy.some((b) => +new Date(b.start) < +askedSlot.end && +new Date(b.end) > +askedSlot.start);
+            const reason = !windows.length ? 'has not sent availability yet' : !inWindow ? 'is not available then' : clash ? 'already has a meeting then' : '';
+            return { start: askedSlot.start.toISOString(), end: askedSlot.end.toISOString(), free: ev.status === 'Potential Match', reason, alternatives: ev.alternatives.slice(0, 3) };
+          })()
+        : null;
+      options.push({ issuerId, proposal, asked, duplicate, searched: parsed.windowStart ? 'window' : parsed.date ? 'day' : 'event' });
     }
     return { parsed, proposal: options[0]?.proposal || null, options };
   }
@@ -2804,7 +2917,9 @@ export async function getState(user: User) {
       include: { proposals: { orderBy: { askIndex: 'asc' } } },
       orderBy: { receivedAt: 'desc' },
     }),
-    isDesk(user.role) ? db.action.findMany({ orderBy: { createdAt: 'desc' } }) : [],
+    isDesk(user.role)
+      ? db.action.findMany({ orderBy: { createdAt: 'desc' } })
+      : db.action.findMany({ where: { assignedTo: user.id, type: 'Sales check' }, orderBy: { createdAt: 'desc' } }),
     db.draft.findMany({
       where: isDesk(user.role) ? {} : { createdBy: user.id },
       orderBy: { createdAt: 'desc' },
@@ -2833,7 +2948,7 @@ export async function getState(user: User) {
       if (list.length < 2) byDay.set(day, [...list, slot]);
     }
     const alternatives = [...byDay.values()].flat().sort((a, b) => +new Date(a.start) - +new Date(b.start)).slice(0, 6);
-    const status = ['Confirmed', 'Cancelled', 'Awaiting Banker Approval'].includes(r.status) ? r.status : result.status;
+    const status = ['Confirmed', 'Cancelled', 'Awaiting Banker Approval', 'Needs New Time'].includes(r.status) ? r.status : result.status;
     computed.push({
       ...r,
       status,
@@ -2878,10 +2993,10 @@ export async function getState(user: User) {
         : { id: i.id, name: i.name, sector: i.sector, color: i.color, ownerId: i.ownerId },
     ),
     // Desk roles get the contact domain (not the address) to label who an email is from.
-    investors: investors.map((i) => ({ id: i.id, name: i.name, coverageSalesId: i.coverageSalesId, ...(isDesk(user.role) ? { domain: domainOf(i.contactEmail) } : {}) })),
+    investors: investors.map((i) => ({ id: i.id, name: i.name, coverageSalesId: i.coverageSalesId, ...(isDesk(user.role) ? { domain: domainOf(i.contactEmail), extraContacts: i.extraContacts } : {}) })),
     clients,
     notifications,
-    users: users.map((u) => ({ id: u.id, name: u.name, role: u.role, email: u.email })),
+    users: users.map((u) => ({ id: u.id, name: u.name, role: u.role, email: u.email, coordinator: u.coordinator })),
     /** Recipient allowlist (registered issuer/investor domains + internal) for draft warnings. */
     allowedDomains:
       isDesk(user.role)

@@ -93,6 +93,7 @@ export function senderName(e: Email) {
 export function askBlocker(p: Email['proposals'][number], e: Email): string | null {
   const a = x(p);
   if (p.status === 'Clarification requested') return 'Waiting on a reply';
+  if (p.status === 'Waiting on sales') return 'Waiting on sales';
   if (!e.conferenceId) return 'Which event?';
   if (a?.conditional) return 'Depends on a condition';
   if (a?.missing?.includes('exactTime') || a?.missing?.includes('time')) return 'Needs a time';

@@ -12,7 +12,7 @@ export async function GET() {
       demo: process.env.DEMO_MODE === 'true',
       profiles:
         process.env.DEMO_MODE === 'true'
-          ? await db.user.findMany({ select: { id: true, name: true, role: true }, orderBy: [{ role: 'asc' }, { name: 'asc' }] })
+          ? await db.user.findMany({ select: { id: true, name: true, role: true, coordinator: true }, orderBy: [{ role: 'asc' }, { name: 'asc' }] })
           : [],
     });
   }

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppState } from '@/lib/types';
 import type { Extraction } from '@/lib/extraction-schema';
-import { isDesk } from '@/lib/roles';
+import { canOperate, isDesk } from '@/lib/roles';
 import { fmt, names } from './shared';
 
 type Meeting = AppState['meetings'][number];
@@ -130,7 +130,7 @@ export function DayGrid({
                           className={`block ${st.tone}`}
                           style={{ gridColumn: `${start + 2} / span ${span}` }}
                           title={`${i.name} × ${n.investor(m.investorId)} · ${fmt(m.start, zone, 'h:mm')}–${fmt(m.end, zone, 'h:mm a')} · ${st.text}`}
-                          onClick={() => (ask && onOpenEmail && desk ? onOpenEmail(ask.emailId) : onOpenMeeting(m.id))}
+                          onClick={() => (ask && onOpenEmail && desk && canOperate(data.user) ? onOpenEmail(ask.emailId) : onOpenMeeting(m.id))}
                         >
                           <strong>{n.investor(m.investorId)}</strong>
                           <span>{st.text}</span>

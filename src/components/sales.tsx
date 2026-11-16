@@ -249,6 +249,7 @@ export function SalesHome({
           {feed.length ? `Latest change: ${feed[0].text}` : 'No changes to their meetings yet.'}
         </p>
       </header>
+      <SalesAnswers data={data} conferenceId={conferenceId} run={run} />
       <section aria-label="Ask for meetings" className="v5-card v5-quick">
         <QuickRequest data={data} conferenceId={conferenceId} run={run} />
       </section>
@@ -347,5 +348,75 @@ export function SalesHome({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * What the desk is waiting on from this salesperson: a requested time that doesn't work (pick one
+ * of the open times), and reschedules to check with the investor before the desk answers the issuer.
+ */
+function SalesAnswers({ data, conferenceId, run }: { data: AppState; conferenceId: string; run: Run }) {
+  const n = names(data);
+  const c = data.conferences.find((x) => x.id === conferenceId)!;
+  const [busy, setBusy] = useState(false);
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const newTime = data.requests.filter((r) => r.conferenceId === conferenceId && r.status === 'Needs New Time' && r.salespersonId === data.user.id);
+  const checks = data.actions.filter((a) => a.type === 'Sales check' && a.status === 'Open' && a.assignedTo === data.user.id);
+  if (!newTime.length && !checks.length) return null;
+  const go = async (type: string, payload: unknown, msg: string) => {
+    setBusy(true);
+    await run(type, payload, msg);
+    setBusy(false);
+  };
+  return (
+    <section aria-label="Needs your answer" className="v5-stack v5-answers">
+      <div className="v5-section-head">
+        <h2>Needs your answer</h2>
+      </div>
+      {checks.map((a) => (
+        <div key={a.id} className="v5-card answer">
+          <span className="v5-kind k-reschedule">Reschedule</span>
+          <strong>{a.title}</strong>
+          <span className="muted">{a.recommendation}</span>
+          <input
+            aria-label="Note for the desk"
+            placeholder="Note for the desk (optional), e.g. client prefers the later time"
+            value={notes[a.id] || ''}
+            onChange={(e) => setNotes({ ...notes, [a.id]: e.target.value })}
+          />
+          <div className="row">
+            <button className="v5-btn primary" disabled={busy} onClick={() => go('salesAnswer', { actionId: a.id, accept: true, note: notes[a.id] || '' }, 'Told the desk the new time works.')}>
+              Works for {n.investor(a.investorId)}
+            </button>
+            <button className="v5-btn quiet" disabled={busy} onClick={() => go('salesAnswer', { actionId: a.id, accept: false, note: notes[a.id] || '' }, 'Told the desk the new time does not work.')}>
+              Doesn’t work
+            </button>
+          </div>
+        </div>
+      ))}
+      {newTime.map((r) => {
+        const why = (r.notes || '').split('\n').reverse().find((l) => /doesn't work/.test(l)) || '';
+        const alts = ((r as { alternativeDates?: string[] }).alternativeDates || []).filter(Boolean);
+        return (
+          <div key={r.id} className="v5-card answer">
+            <span className="v5-kind k-new">New request</span>
+            <strong>
+              {n.investor(r.investorId)} × {n.issuer(r.issuerId)}: {fmt(r.start, c.timezone, 'EEE MMM d, h:mm a')} doesn’t work
+            </strong>
+            {why && <span className="muted">{why}</span>}
+            <div className="row">
+              {alts.map((x) => (
+                <button key={x} className="v5-btn primary" disabled={busy} onClick={() => go('alternative', { id: r.id, start: x }, `Asked for ${fmt(x, c.timezone, 'EEE h:mm a')} instead.`)}>
+                  {fmt(x, c.timezone, 'EEE h:mm a')}
+                </button>
+              ))}
+              <button className="v5-btn quiet" disabled={busy} onClick={() => go('cancelRequest', { id: r.id }, 'Request withdrawn.')}>
+                Withdraw request
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </section>
   );
 }

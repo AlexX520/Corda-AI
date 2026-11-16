@@ -1,5 +1,5 @@
 'use client';
-import { isDesk } from '@/lib/roles';
+import { canOperate, isDesk } from '@/lib/roles';
 import { useEffect, useRef, useState } from 'react';
 import { formatInTimeZone } from 'date-fns-tz';
 import { eachDayOfInterval, parseISO, format } from 'date-fns';
@@ -64,6 +64,8 @@ export function requestStatus(r: RequestItem, role: string) {
       return { tone: 'green', text: 'Confirmed', hint: '' };
     case 'Cancelled':
       return { tone: '', text: 'Cancelled', hint: '' };
+    case 'Needs New Time':
+      return { tone: 'amber', text: 'Time doesn’t work', hint: sales ? 'Pick another time' : 'Waiting on sales' };
     default:
       return { tone: '', text: r.status, hint: '' };
   }
@@ -237,7 +239,14 @@ type Parsed = {
     missing: string[];
   };
   proposal: Proposal | null;
-  options: { issuerId: string; proposal: Proposal | null; duplicate: string | null; searched: 'window' | 'day' | 'event' }[];
+  options: {
+    issuerId: string;
+    proposal: Proposal | null;
+    /** The exact time typed, checked on its own; nearest open times when it does not work. */
+    asked: { start: string; end: string; free: boolean; reason: string; alternatives: { start: string; end: string }[] } | null;
+    duplicate: string | null;
+    searched: 'window' | 'day' | 'event';
+  }[];
 };
 /**
  * One-line request entry for sales: "Ford Credit / PIMCO 2-3pm Tue", or a wish list
@@ -273,7 +282,36 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
       setBusy(false);
     }
   }
-  const sendable = (result?.options || []).filter((o) => o.proposal && !sent.includes(o.issuerId));
+  const sendable = (result?.options || []).filter((o) => o.proposal && (!o.asked || o.asked.free) && !sent.includes(o.issuerId));
+  const [outsideFor, setOutsideFor] = useState<string | null>(null);
+  const when = (iso: string) => fmt(iso, c.timezone, 'EEE MMM d, h:mm a');
+  /** One request at a chosen time. The note says what was asked and why the time differs. */
+  async function sendAt(issuerId: string, slot: { start: string; end: string }, mode: 'asked' | 'alternative' | 'outside') {
+    if (!result?.parsed.investorId) return;
+    const o = result.options.find((x) => x.issuerId === issuerId)!;
+    const issuer = n.issuer(issuerId);
+    const notes =
+      mode === 'alternative' && o.asked
+        ? `Asked for ${when(o.asked.start)}; ${issuer} ${o.asked.reason || 'was not free'}. Sales picked ${when(slot.start)} instead.`
+        : mode === 'outside'
+          ? `${text}\nOutside ${issuer}'s availability (${issuer} ${o.asked?.reason || 'is not free'}): please ask ${issuer} whether they can make it.`
+          : text;
+    setBusy(true);
+    const ok = await run(
+      'request',
+      { conferenceId, issuerId, investorId: result.parsed.investorId, start: slot.start, end: slot.end, duration: result.parsed.duration, priority, notes },
+      mode === 'outside' ? `Sent to the coordinator, marked outside ${issuer}'s availability.` : `Request sent for ${when(slot.start)}.`,
+    );
+    setBusy(false);
+    setOutsideFor(null);
+    if (ok) {
+      setSent((s) => [...s, issuerId]);
+      if (result.options.length === 1) {
+        setText('');
+        setResult(null);
+      }
+    }
+  }
   async function send(issuerIds: string[]) {
     if (!result?.parsed.investorId) return;
     setBusy(true);
@@ -350,9 +388,40 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
               {result!.options.length > 0 && (
                 <ul className="wish-list">
                   {result!.options.map((o) => (
-                    <li key={o.issuerId}>
+                    <li key={o.issuerId} className={o.asked && !o.asked.free ? 'busy' : ''}>
                       <strong>{n.issuer(o.issuerId)}</strong>
-                      {o.proposal ? (
+                      {o.asked ? (
+                        o.asked.free ? (
+                          <span>
+                            {when(o.asked.start)} <small className="ok">· free</small>
+                          </span>
+                        ) : (
+                          <span className="asked">
+                            <span className="warn">
+                              {when(o.asked.start)}: {n.issuer(o.issuerId)} {o.asked.reason || 'is not free'}
+                            </span>
+                            {!sent.includes(o.issuerId) && (
+                              <span className="alts">
+                                {o.asked.alternatives.length > 0 && <small>Open instead:</small>}
+                                {o.asked.alternatives.map((alt) => (
+                                  <button key={alt.start} type="button" className="alt" disabled={busy} onClick={() => sendAt(o.issuerId, alt, 'alternative')}>
+                                    {fmt(alt.start, c.timezone, 'EEE h:mm a')}
+                                  </button>
+                                ))}
+                                {outsideFor === o.issuerId ? (
+                                  <button type="button" className="alt outside confirm" disabled={busy} onClick={() => sendAt(o.issuerId, { start: o.asked!.start, end: o.asked!.end }, 'outside')}>
+                                    Send {fmt(o.asked.start, c.timezone, 'h:mm a')} anyway — outside availability
+                                  </button>
+                                ) : (
+                                  <button type="button" className="alt outside" disabled={busy} onClick={() => setOutsideFor(o.issuerId)}>
+                                    Ask for {fmt(o.asked.start, c.timezone, 'h:mm a')} anyway…
+                                  </button>
+                                )}
+                              </span>
+                            )}
+                          </span>
+                        )
+                      ) : o.proposal ? (
                         <span>
                           {fmt(o.proposal.start, c.timezone, 'EEE h:mm')}–{fmt(o.proposal.end, c.timezone, 'h:mm a')}
                           {o.searched !== 'window' && <small> (first open time {o.searched === 'day' ? 'that day' : 'at the event'})</small>}
@@ -365,8 +434,10 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
                       {sent.includes(o.issuerId) ? (
                         <Badge tone="green">Sent</Badge>
                       ) : (
-                        o.proposal && result!.options.length > 1 && (
-                          <Button size="sm" variant="outline" disabled={busy} onClick={() => send([o.issuerId])}>
+                        o.proposal &&
+                        (!o.asked || o.asked.free) &&
+                        result!.options.length > 1 && (
+                          <Button size="sm" variant="outline" disabled={busy} onClick={() => sendAt(o.issuerId, o.asked || o.proposal!, 'asked')}>
                             Send
                           </Button>
                         )
@@ -477,7 +548,7 @@ export function RequestDetail({
             </div>
           </div>
         )}
-        {isDesk(data.user.role) && !['Confirmed', 'Cancelled'].includes(r.status) && (
+        {canOperate(data.user) && !['Confirmed', 'Cancelled'].includes(r.status) && (
           <>
             <Field label="Meeting location">
               <input
@@ -596,7 +667,7 @@ export function AvailabilityView({
           <select value={selected} onChange={(event) => setSelected(event.target.value)} aria-label="Select issuer">
             {issuers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
           </select>
-          {isDesk(data.user.role) && (
+          {canOperate(data.user) && (
             <Button onClick={() => setEditing(true)}><Plus size={16} />Manage</Button>
           )}
         </div>
@@ -652,7 +723,7 @@ export function AvailabilityView({
                       return m ? `${n.investor(m.investorId)}${m.location ? ` · ${m.location}` : ''}` : '';
                     }}
                   />
-                  {isDesk(data.user.role) && av.some((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date) && (
+                  {canOperate(data.user) && av.some((a) => fmt(a.start, c.timezone, 'yyyy-MM-dd') === date) && (
                     <details className="raw-windows">
                       <summary>Edit recorded windows</summary>
                   {av
@@ -669,7 +740,7 @@ export function AvailabilityView({
                           </strong>
                           <small>{a.kind === 'Available' ? 'Approved availability' : a.kind === 'Blocked' ? 'Not available (from email)' : a.kind}</small>
                         </div>
-                        {isDesk(data.user.role) && (
+                        {canOperate(data.user) && (
                           <button
                             title={a.kind === 'Hold' ? 'Release hold' : 'Remove window'}
                             aria-label={`Remove ${a.kind} ${fmt(a.start, c.timezone)}`}

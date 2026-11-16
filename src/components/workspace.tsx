@@ -1,5 +1,5 @@
 'use client';
-import { isDesk, roleLabel } from '@/lib/roles';
+import { canOperate, isDesk, roleLabel } from '@/lib/roles';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
 import {
@@ -56,6 +56,8 @@ import { AuditTrail } from './audit';
 import { SalesEmailsView, SalesHome } from './sales';
 import { ManagerHome, type Drill } from './manager';
 import { HoldsBar, MyDay } from './myday';
+import { MySchedule, MyPreferences } from './banker-portal';
+import { SenderContacts } from './sender-contacts';
 import { Inbox } from './inbox';
 import { DayGrid } from './schedule-grid';
 import { inboxItems, type InboxItem, type ItemKind } from './inbox-model';
@@ -431,6 +433,8 @@ export function Workspace() {
       </main>
     );
   const banker = isDesk(data.user.role),
+    // Coordinators and managers act; every other banker views the schedule and sets preferences.
+    viewer = data.user.role === 'BANKER' && !canOperate(data.user),
     manager = data.user.role === 'MANAGER',
     homeLabel = manager ? 'Team overview' : banker ? 'My day' : 'My clients',
     c = data.conferences.find((c) => c.id === conferenceId)!,
@@ -454,6 +458,12 @@ export function Workspace() {
           { id: 'queue', label: 'Inbox', icon: InboxIcon, count: inboxCount },
           { id: 'schedule', label: 'Events', icon: CalendarDays },
         ]
+      : viewer
+        ? [
+            { id: 'overview', label: 'My schedule', icon: Sun },
+            { id: 'schedule', label: 'All schedules', icon: CalendarDays },
+            { id: 'preferences', label: 'My preferences', icon: SlidersHorizontal },
+          ]
       : banker
         ? [
             { id: 'overview', label: 'Today', icon: Sun, count: inboxCount },
@@ -466,7 +476,7 @@ export function Workspace() {
             { id: 'schedule', label: 'Schedule', icon: CalendarDays },
           ]
   ).map((m) => ({ count: 0, ...m, active: m.id === 'schedule' ? inSchedule : page === m.id }));
-  const v5Page = page === 'overview' || (page === 'queue' && queueSection === 'tasks' && !classic && banker);
+  const v5Page = page === 'overview' || page === 'preferences' || (page === 'queue' && queueSection === 'tasks' && !classic && banker);
   const searchable = inSchedule || page === 'emails' || (page === 'queue' && (queueSection !== 'tasks' || classic));
   const inboxFilter = drill?.owner !== undefined && drill.owner !== ''
     ? { label: `Owner: ${n.user(drill.owner)}`, test: (a: AppState['actions'][number]) => a.assignedTo === drill.owner }
@@ -585,7 +595,7 @@ export function Workspace() {
           </span>
           <div>
             <strong>{data.user.name}</strong>
-            <span>{manager ? 'Head of desk' : banker ? 'Banker' : 'Sales'}{data.demo ? ' · demo' : ''}</span>
+            <span>{manager ? 'Head of desk' : viewer ? 'Banker · view only' : banker ? 'Coordinator' : 'Sales'}{data.demo ? ' · demo' : ''}</span>
           </div>
           {data.demo && (
             <select aria-label="Switch demo profile" value={data.user.id} onChange={(e) => switchUser(e.target.value)}>
@@ -699,7 +709,11 @@ export function Workspace() {
               }}
             />
           )}
-          {page === 'overview' && banker && !manager && (
+          {page === 'overview' && viewer && (
+            <MySchedule data={data} conferenceId={conferenceId} onOpenMeeting={setMeetingId} onPreferences={() => navigate('preferences')} />
+          )}
+          {page === 'preferences' && <MyPreferences data={data} conferenceId={conferenceId} run={run} />}
+          {page === 'overview' && banker && !manager && !viewer && (
             <MyDay
               data={data}
               conferenceId={conferenceId}
@@ -801,11 +815,11 @@ export function Workspace() {
               conferenceId={conferenceId}
               search={search}
               onOpenMeeting={setMeetingId}
-              onNewMeeting={banker ? () => setNewMeeting(true) : undefined}
+              onNewMeeting={banker && !viewer ? () => setNewMeeting(true) : undefined}
               run={run}
             />
           )}
-          {page === 'allocation' && banker && (
+          {page === 'allocation' && banker && !viewer && (
             <ResourceAllocationView
               key={conferenceId}
               data={data}
@@ -942,6 +956,7 @@ export function Workspace() {
             </>
           )}
           {page === 'settings' && banker && <AiModelPanel data={data} />}
+          {page === 'settings' && banker && !viewer && <SenderContacts data={data} run={run} />}
           {page === 'settings' && manager && data.demo && (
             <div className="panel settings-panel">
               <h3>Demo data</h3>
@@ -1881,16 +1896,18 @@ function LoginScreen({
   onPick,
   error,
 }: {
-  profiles: { id: string; name: string; role: string }[];
+  profiles: { id: string; name: string; role: string; coordinator?: boolean }[];
   onPick: (id: string) => void;
   error: string;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const roles = [
-    { role: 'BANKER', title: 'Banker', what: 'Today’s work, the inbox and the schedule for the issuers you own.' },
-    { role: 'MANAGER', title: 'Head of desk', what: 'How the desk is doing, what is stuck, and every inbox.' },
+    { role: 'COORDINATOR', title: 'Coordinator', what: 'Runs the conference: every request and change, rooms and coverage.' },
+    { role: 'BANKER', title: 'Banker', what: 'Your own schedule and your coverage preferences. View only.' },
+    { role: 'MANAGER', title: 'Head of desk', what: 'How the desk is doing, what is stuck, and every request.' },
     { role: 'SALES', title: 'Sales', what: 'Your clients’ meetings, and one-line meeting requests.' },
   ] as const;
+  const groupOf = (p: { role: string; coordinator?: boolean }) => (p.role === 'BANKER' && p.coordinator ? 'COORDINATOR' : p.role);
   const initials = (name: string) =>
     name
       .split(' ')
@@ -1907,7 +1924,7 @@ function LoginScreen({
       {profiles.length ? (
         <div className="roles">
           {roles.map((r) => {
-            const people = profiles.filter((p) => p.role === r.role);
+            const people = profiles.filter((p) => groupOf(p) === r.role);
             if (!people.length) return null;
             return (
               <section key={r.role} className="role">

@@ -50,6 +50,13 @@ export function senderTrust(
 ): SenderTrust {
   const domain = domainOf(sender);
   const base = { domain, issuerId: null, investorId: null, lookalikeOf: null };
+  // An exact address the desk registered for a company (e.g. a test mailbox) counts as that company.
+  const address = sender.trim().toLowerCase().replace(/^.*<|>.*$/g, '');
+  const listed = (p: Party) => ((p as { extraContacts?: string[] | null }).extraContacts || []).some((x) => x.toLowerCase() === address);
+  const exactIssuer = parties.issuers.find(listed);
+  const exactInvestor = exactIssuer ? undefined : parties.investors.find(listed);
+  if (exactIssuer || exactInvestor)
+    return { ...base, status: 'verified', issuerId: exactIssuer?.id || null, investorId: exactInvestor?.id || null };
   if (parties.internal.some((d) => sameOrSub(domain, d))) return { ...base, status: 'internal' };
   const issuer = parties.issuers.find((i) => sameOrSub(domain, domainOf(i.contactEmail)));
   const investor = parties.investors.find((i) => sameOrSub(domain, domainOf(i.contactEmail)));

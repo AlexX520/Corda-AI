@@ -1,5 +1,5 @@
 'use client';
-import { isDesk } from '@/lib/roles';
+import { canOperate, isDesk } from '@/lib/roles';
 import { useEffect, useMemo, useState } from 'react';
 import { eachDayOfInterval, format, parseISO } from 'date-fns';
 import { AlertTriangle, CalendarX2, Download, Pencil } from 'lucide-react';
@@ -54,7 +54,7 @@ export function MeetingDrawer({
       })
       .map((p) => ({ p, email: x })),
   );
-  const banker = isDesk(data.user.role);
+  const banker = canOperate(data.user);
   const coverage = data.coverageAssignments.filter((a) => a.meetingId === meeting.id);
   const room = data.cubeAssignments.find((a) => a.meetingId === meeting.id);
   const cube = data.meetingCubes.find((x) => x.id === room?.cubeId);

@@ -272,6 +272,7 @@ export function Inbox({
                       <span className="t">{i.whenText}</span>
                     </span>
                   )}
+                  {i.tone === 'amber' && i.sub && i.kind === 'email' && <span className="block">{i.sub}</span>}
                   <span className="foot">Received {receivedAgo(i.at, data.now, zone)}</span>
                 </button>
               ))}

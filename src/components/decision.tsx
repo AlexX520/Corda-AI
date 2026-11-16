@@ -4,7 +4,8 @@ import type { AppState, EmailItem, RequestItem } from '@/lib/types';
 import type { Extraction } from '@/lib/extraction-schema';
 import { duplicatesFor, findCandidates, isOpenMeeting, isOpenRequest, windowLabel } from '@/lib/review-rules';
 import { ExtractionForm } from './extraction-form';
-import { AlertTriangle, ArrowRight, Check, ChevronDown, Mail } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, Mail, Users } from 'lucide-react';
+import { canOperate } from '@/lib/roles';
 import { Button } from './ui/button';
 import { fmt, names, Run } from './shared';
 
@@ -111,6 +112,9 @@ export function EmailDecision({
   const [confirmNow, setConfirmNow] = useState(false);
   const dupes = isNew ? duplicatesFor(e, data.meetings, data.requests).filter((d) => d.item.id !== openReq?.id) : [];
   const waiting = proposal.status === 'Clarification requested';
+  const waitingSales = proposal.status === 'Waiting on sales';
+  /** The salesperson's answer on a reschedule they were asked to check. */
+  const salesAnswer = proposal.status === 'Pending' && /^.+ says the new time (?:works|does not work)/.test(proposal.reviewNote || '') ? proposal.reviewNote : null;
   const done = DONE.includes(proposal.status);
   const issuerRow = data.issuers.find((i) => i.id === e.issuerId) as (AppState['issuers'][number] & { holdChanges?: boolean; holdReason?: string }) | undefined;
   // Live check of what would stop this approval: real conflicts, staleness, holds.
@@ -362,6 +366,17 @@ export function EmailDecision({
           <p>Waiting on a reply from the sender. Nothing changes on the schedule until you approve.</p>
         </div>
       ) : null}
+      {waitingSales && (
+        <div className="dc-waiting">
+          <p>{proposal.reviewNote || 'Waiting on sales.'} Their answer comes back here; then reply to the issuer.</p>
+        </div>
+      )}
+      {salesAnswer && (
+        <div className={`dc-sales-answer ${/does not work/.test(salesAnswer) ? 'no' : 'yes'}`}>
+          <strong>Sales answered</strong>
+          <span>{salesAnswer}</span>
+        </div>
+      )}
 
       {escalation ? (
         <div className="dc-escalation">
@@ -682,7 +697,7 @@ export function EmailDecision({
         </div>
       )}
 
-      {!done && !escalation && (!suspicious || confirming) &&
+      {!done && !waitingSales && !escalation && (!suspicious || confirming) &&
         (confirming ? (
           <ConfirmStrip
             text={
@@ -749,6 +764,16 @@ export function EmailDecision({
               <Button variant="outline" disabled={busy} onClick={onReply}>
                 <Mail size={14} /> Reply to {asker}
               </Button>
+              {op === 'reschedule' && !salesAnswer && canOperate(data.user) && (
+                <Button
+                  variant="outline"
+                  disabled={busy}
+                  title="Before saying yes to the issuer, ask the salesperson to check with the investor"
+                  onClick={() => run('askSalesReschedule', { proposalId: proposal.id }, (r) => `Sent to ${(r as { sales?: string })?.sales || 'sales'} to check with the investor.`)}
+                >
+                  <Users size={14} /> Ask sales first
+                </Button>
+              )}
               <Button variant="ghost" disabled={busy} onClick={() => (rejectOpen ? decide('reject') : setRejectOpen(true))}>
                 Reject
               </Button>
@@ -809,6 +834,11 @@ export function RequestDecision({
     .filter((d) => d.requestId === r.id && d.status === 'Draft')
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const [openNewDraft, setOpenNewDraft] = useState(false);
+  // "This time doesn't work": a reason and up to three open times for sales to pick from.
+  const suggestions = [...r.alternatives].sort((x, y) => Math.abs(+new Date(x.start) - +new Date(r.start)) - Math.abs(+new Date(y.start) - +new Date(r.start))).slice(0, 5);
+  const [noOpen, setNoOpen] = useState(false);
+  const [noReason, setNoReason] = useState(conflict ? `${issuer} is not free then` : '');
+  const [noPick, setNoPick] = useState<string[]>(() => suggestions.slice(0, 3).map((x) => x.start));
   // Open the draft as soon as the one we just asked for shows up.
   useEffect(() => {
     if (openNewDraft && drafts[0]) {
@@ -886,7 +916,43 @@ export function RequestDecision({
           </div>
         </div>
       )}
+      {/Outside .+ availability/.test(r.notes || '') && (
+        <div className="dc-issue soft">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>Outside {issuer}’s availability</strong>
+            <p>Sales knows and asks whether {issuer} can make an exception. Email the issuer, or tell sales it does not work.</p>
+          </div>
+        </div>
+      )}
       {r.notes && <p className="dc-text">“{r.notes}”</p>}
+      {noOpen && (
+        <div className="dc-no">
+          <strong>Tell {n.user(r.salespersonId)} this time doesn’t work</strong>
+          <input aria-label="Why the time does not work" placeholder={`Why, e.g. ${issuer} already has a meeting then`} value={noReason} onChange={(ev) => setNoReason(ev.target.value)} />
+          {suggestions.length > 0 && (
+            <div className="opts">
+              <span>Offer these open times:</span>
+              {suggestions.map((sl) => (
+                <label key={sl.start} className={noPick.includes(sl.start) ? 'on' : ''}>
+                  <input
+                    type="checkbox"
+                    checked={noPick.includes(sl.start)}
+                    onChange={() => setNoPick(noPick.includes(sl.start) ? noPick.filter((x) => x !== sl.start) : [...noPick, sl.start].slice(-3))}
+                  />
+                  {fmt(sl.start, c.timezone, 'EEE h:mm a')}
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="dc-actions">
+            <Button disabled={busy || noReason.trim().length < 3} onClick={() => go('requestTimeNo', { id: r.id, reason: noReason, alternatives: noPick }, `${n.user(r.salespersonId)} was told, with ${noPick.length} open time${noPick.length === 1 ? '' : 's'} to pick from.`)}>
+              Send to sales
+            </Button>
+            <button className="text-button" onClick={() => setNoOpen(false)}>Cancel</button>
+          </div>
+        </div>
+      )}
       {!conflict && (
         <label className="dc-pick">
           <span>Room</span>
@@ -944,6 +1010,11 @@ export function RequestDecision({
           >
             <Mail size={14} /> {drafts[0] ? 'Open draft to issuer' : 'Email issuer'}
           </Button>
+          {!noOpen && (
+            <Button variant="outline" disabled={busy} onClick={() => setNoOpen(true)}>
+              Time doesn’t work
+            </Button>
+          )}
           <Button
             variant="ghost"
             disabled={busy}

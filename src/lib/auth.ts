@@ -1,4 +1,4 @@
-import { isDesk } from './roles';
+import { canOperate, isDesk } from './roles';
 import { cookies } from 'next/headers';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { db } from './db';
@@ -90,4 +90,8 @@ export function errorResponse(error: unknown) {
     { error: message },
     { status: message === 'Unauthorized' ? 401 : message === 'Forbidden' ? 403 : 400 },
   );
+}
+/** Acting on the schedule (sync, import, approve): managers and conference coordinators only. */
+export function operator(user: { role: string; coordinator?: boolean | null }) {
+  if (!canOperate(user)) throw new Error('Only the conference coordinators can do this.');
 }

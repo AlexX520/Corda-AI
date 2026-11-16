@@ -1,11 +1,11 @@
-import { banker, currentUser, errorResponse, sameSiteNavigation } from '@/lib/auth';
+import { operator, currentUser, errorResponse, sameSiteNavigation } from '@/lib/auth';
 import { authorizeUrl, newAuthRequest, outlookConfigured, rememberAuth } from '@/lib/graph';
 export const dynamic = 'force-dynamic';
 export async function GET(req: Request) {
   try {
     sameSiteNavigation(req);
     const user = await currentUser();
-    banker(user);
+    operator(user);
     if (!outlookConfigured()) throw new Error('Add MS_CLIENT_ID to .env, then restart the app.');
     // Behind a hosting proxy the request arrives as plain http; use the forwarded scheme/host.
     const proxied = process.env.TRUST_PROXY === 'true' || Boolean(process.env.VERCEL || process.env.RENDER);
