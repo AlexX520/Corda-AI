@@ -2435,3 +2435,75 @@ select {
 }
 .v5-login .people button .tag + svg { margin-left: 6px; }
 @media (max-width: 1100px) { .v5-login .roles { grid-template-columns: 1fr; } }
+
+/* Sidebar event switcher: a card; the list opens beside the sidebar so nothing is clipped. */
+.v5-evcard {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 11px 12px;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.v5-evcard:hover { border-color: #d4d4d8; }
+.v5-evcard.open { border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12); }
+.v5-evcard .lbl { grid-column: 1 / -1; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.v5-evcard .name { font-size: 14px; font-weight: 600; line-height: 1.3; }
+.v5-evcard .meta { grid-column: 1; font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.v5-evcard .pill { grid-column: 1; justify-self: start; margin-top: 4px; }
+.v5-evcard .chev { grid-column: 2; grid-row: 2; align-self: center; color: var(--muted); }
+.v5-evpanel {
+  position: fixed;
+  z-index: 80;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  max-height: min(480px, calc(100vh - 24px));
+  overflow-y: auto;
+  padding: 8px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.14), 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+.v5-evpanel .head { padding: 6px 10px 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
+.v5-evpanel ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.v5-evpanel li button {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+.v5-evpanel li button:hover { background: #f4f4f5; }
+.v5-evpanel li button.on { background: #f5f6ff; }
+.v5-evpanel .body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.v5-evpanel .name { font-size: 14.5px; font-weight: 600; }
+.v5-evpanel .meta { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.v5-evpanel .side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+.v5-evpanel .ok { color: #4f46e5; }
+.v5-evcard .pill, .v5-evpanel .pill {
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.pill.soon { background: #eef0ff; color: #4338ca; }
+.pill.live { background: #ecfdf3; color: #15803d; }
+.pill.past { background: #f4f4f5; color: #71717a; }

@@ -1,5 +1,6 @@
 'use client';
 import { SelectMenu } from './ui/select-menu';
+import { EventSwitcher } from './event-switcher';
 import { canOperate, isDesk, roleLabel } from '@/lib/roles';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
@@ -549,26 +550,14 @@ export function Workspace() {
           ))}
         </nav>
         <div className="v5-side-gap" />
-        <div className="v5-event">
-          <span>Event</span>
-          <SelectMenu
-            variant="quiet"
-            ariaLabel="Active event"
-            value={conferenceId}
-            onChange={(v) => {
-              setConferenceId(v);
-              setSearch('');
-            }}
-            options={data.conferences.map((x) => ({
-              value: x.id,
-              label: x.name,
-              hint: `${x.location} · ${fmt(`${x.startDate}T12:00:00Z`, 'UTC', 'MMM d')}–${fmt(`${x.endDate}T12:00:00Z`, 'UTC', 'MMM d')}`,
-            }))}
-          />
-          <small>
-            {c.location} · {fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'MMM d')}–{fmt(`${c.endDate}T12:00:00Z`, 'UTC', 'MMM d')}
-          </small>
-        </div>
+        <EventSwitcher
+          data={data}
+          value={conferenceId}
+          onChange={(v) => {
+            setConferenceId(v);
+            setSearch('');
+          }}
+        />
         <button className="v5-nav quiet" onClick={() => setAskOpen(true)}>
           <MessageCircleQuestion size={15} strokeWidth={1.8} />
           <span>Ask Corda</span>
