@@ -28,6 +28,8 @@ export type InboxItem = {
   tone: Tone;
   at: string;
   mine: boolean;
+  /** The one person who owns this item (assigned, else the issuer's coverage banker). */
+  owner: string | null;
 };
 
 const x = (p: { extraction: unknown }) => p.extraction as unknown as Extraction;
@@ -68,7 +70,9 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
   const me = data.user.id;
   const issuerName = (id: string | null) => data.issuers.find((i) => i.id === id)?.name || null;
   const investorName = (id: string | null) => data.investors.find((i) => i.id === id)?.name || null;
-  const owns = (a: Action) => a.assignedTo === me || data.issuers.find((i) => i.id === a.issuerId)?.ownerId === me;
+  // One owner per item: whoever it is assigned to, else the banker who owns the issuer.
+  const ownerOf = (a: Action) => a.assignedTo || data.issuers.find((i) => i.id === a.issuerId)?.ownerId || null;
+  const owns = (a: Action) => ownerOf(a) === me;
   const items: InboxItem[] = [];
   const byEmail = new Map<string, Action[]>();
   for (const a of actions) {
@@ -90,6 +94,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         tone: a.priority === 'Urgent' ? 'amber' : 'indigo',
         at: a.createdAt,
         mine: owns(a),
+        owner: ownerOf(a),
       });
     } else
       items.push({
@@ -104,6 +109,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         tone: 'indigo',
         at: a.createdAt,
         mine: owns(a),
+        owner: ownerOf(a),
       });
   }
   for (const [emailId, list] of byEmail) {
@@ -172,6 +178,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
       tone,
       at: e.receivedAt,
       mine: list.some(owns),
+      owner: ownerOf(list[0]),
     });
   }
   const rank = (i: InboxItem) => (i.tone === 'red' ? 0 : i.actions.some((a) => a.priority === 'Urgent') ? 1 : 2);

@@ -1873,53 +1873,56 @@ function LoginScreen({
   error: string;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
-  const groups = [
-    ['MANAGER', 'Management'],
-    ['BANKER', 'Bankers'],
-    ['SALES', 'Sales'],
+  const roles = [
+    { role: 'BANKER', title: 'Banker', what: 'Today’s work, the inbox and the schedule for the issuers you own.' },
+    { role: 'MANAGER', title: 'Head of desk', what: 'How the desk is doing, what is stuck, and every inbox.' },
+    { role: 'SALES', title: 'Sales', what: 'Your clients’ meetings, and one-line meeting requests.' },
   ] as const;
+  const initials = (name: string) =>
+    name
+      .split(' ')
+      .map((x) => x[0])
+      .slice(0, 2)
+      .join('');
   return (
-    <main className="loading-screen login-screen">
-      <span className="v5-mark">C</span>
-      <h1>Corda</h1>
+    <main className="v5-login">
+      <div className="head">
+        <span className="v5-mark">C</span>
+        <h1>Corda</h1>
+        <p>Pick someone to sign in as. This is a demo: every company, person and email is made up, and no password is needed.</p>
+      </div>
       {profiles.length ? (
-        <>
-          <p>
-            Pick a demo profile. Every company, person and email here is synthetic, and no password is needed. Live
-            deployments turn this picker off and require sign-in.
-          </p>
-          <div className="profile-picker">
-            {groups.map(([role, label]) => (
-              <section key={role}>
-                <h2>{label}</h2>
-                <div>
-                  {profiles
-                    .filter((p) => p.role === role)
-                    .map((p) => (
-                      <button
-                        key={p.id}
-                        disabled={Boolean(busy)}
-                        onClick={async () => {
-                          setBusy(p.id);
-                          await onPick(p.id);
-                          setBusy(null);
-                        }}
-                      >
-                        <Avatar name={p.name} color="#29292e" />
-                        <span>
-                          <strong>{p.name}</strong>
-                          <small>{roleLabel(role)}</small>
-                        </span>
-                        {busy === p.id ? <Loader2 size={15} className="spin" /> : <ChevronRight size={15} />}
-                      </button>
-                    ))}
+        <div className="roles">
+          {roles.map((r) => {
+            const people = profiles.filter((p) => p.role === r.role);
+            if (!people.length) return null;
+            return (
+              <section key={r.role} className="role">
+                <h2>{r.title}</h2>
+                <p>{r.what}</p>
+                <div className="people">
+                  {people.map((p) => (
+                    <button
+                      key={p.id}
+                      disabled={Boolean(busy)}
+                      onClick={async () => {
+                        setBusy(p.id);
+                        await onPick(p.id);
+                        setBusy(null);
+                      }}
+                    >
+                      <span className="av">{initials(p.name)}</span>
+                      <span className="nm">{p.name}</span>
+                      {busy === p.id ? <Loader2 size={14} className="spin" /> : <ChevronRight size={14} />}
+                    </button>
+                  ))}
                 </div>
               </section>
-            ))}
-          </div>
-        </>
+            );
+          })}
+        </div>
       ) : (
-        <p>Sign-in is required. Demo profiles are disabled on this server.</p>
+        <p className="off">Sign-in is required. Demo profiles are turned off on this server.</p>
       )}
       {error && <p className="error">{error}</p>}
     </main>

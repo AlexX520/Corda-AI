@@ -26,7 +26,8 @@ export function myMeetings(data: AppState, conferenceId: string, day: string, zo
 /** Items for me: assigned to me, or about an issuer I own. Escalations pinned, then urgent, then soonest. */
 export function myDecisions(data: AppState, open: Action[]) {
   const me = data.user.id;
-  const mine = open.filter((a) => a.assignedTo === me || data.issuers.find((i) => i.id === a.issuerId)?.ownerId === me);
+  // One owner per item: assigned person, else the issuer's coverage banker.
+  const mine = open.filter((a) => (a.assignedTo || data.issuers.find((i) => i.id === a.issuerId)?.ownerId) === me);
   const rank = (a: Action) =>
     (actionKind(a, data).id === 'escalation' || a.status === 'Acknowledged' ? 0 : 2) + (a.priority === 'Urgent' ? 0 : 1);
   return mine.sort((a, b) => rank(a) - rank(b) || a.createdAt.localeCompare(b.createdAt));

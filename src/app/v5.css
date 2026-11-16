@@ -1413,3 +1413,179 @@ button.v5-kpi:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ---------- demo sign-in ---------- */
+.v5-login {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 36px;
+  padding: 72px 24px 56px;
+  background: var(--background);
+}
+.v5-login .head {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  max-width: 520px;
+}
+.v5-login .head h1 {
+  margin: 4px 0 0;
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.v5-login .head p {
+  color: var(--ink2);
+  font-size: 15px;
+  line-height: 1.55;
+}
+.v5-login .roles {
+  width: 100%;
+  max-width: 1000px;
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.v5-login .role {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: var(--ring), 0 1px 2px rgba(0, 0, 0, 0.04);
+  padding: 20px 20px 12px;
+}
+.v5-login .role h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.v5-login .role > p {
+  margin: 4px 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 39px;
+}
+.v5-login .people {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #f4f4f5;
+}
+.v5-login .people button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 4px;
+  border: 0;
+  border-bottom: 1px solid #f4f4f5;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font-size: 14px;
+}
+.v5-login .people button:last-child {
+  border-bottom: 0;
+}
+.v5-login .people button:hover {
+  background: #fafafa;
+}
+.v5-login .people button svg {
+  color: #a1a1aa;
+}
+.v5-login .av {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  background: #f4f4f5;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink2);
+  flex: none;
+}
+.v5-login .nm {
+  flex: 1;
+  font-weight: 500;
+}
+.v5-login .off,
+.v5-login .error {
+  color: var(--ink2);
+}
+.v5-login .error {
+  color: var(--warn);
+}
+@media (max-width: 860px) {
+  .v5-login {
+    padding-top: 48px;
+  }
+  .v5-login .roles {
+    grid-template-columns: 1fr;
+  }
+  .v5-login .role > p {
+    min-height: 0;
+  }
+}
+
+/* One owner per item */
+.v5-inbox-detail {
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+}
+.v5-owner {
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.v5-owner select {
+  border: 0;
+  background: #f4f4f5;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--ink);
+}
+.v5-desk {
+  margin: 6px 12px 8px;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font-size: 13px;
+  color: var(--indigo);
+}
+/* Narrow windows: the decision pane must not overflow. */
+.v5-detail .decision-card,
+.v5-detail .decision-card * {
+  min-width: 0;
+  max-width: 100%;
+}
+.v5-detail .decision-card .dc-actions,
+.v5-detail .decision-card .flex {
+  flex-wrap: wrap;
+}
+.v5-detail .decision-card button {
+  white-space: normal;
+}
+@media (max-width: 1180px) {
+  .v5-inbox-list {
+    flex-basis: 280px;
+    width: 280px;
+  }
+  .v5-inbox-detail {
+    padding: 24px 24px 64px;
+  }
+  .v5-mail-head h2 {
+    font-size: 22px;
+  }
+}
