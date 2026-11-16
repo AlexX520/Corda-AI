@@ -1,13 +1,13 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, Plus, RefreshCw } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import type { AppState } from '@/lib/types';
 import { RequestDecision } from './decision';
 import { EmailReview } from './review';
 import { inboxItems, itemKindLabel, shortWhen, sortItems, urgentKind, type InboxItem, type ItemKind, type SortMode } from './inbox-model';
 import { kindOrder } from './queue-model';
 import { openWork } from './queue-model';
-import { type Run } from './shared';
+import { fmt, type Run } from './shared';
 
 type Action = AppState['actions'][number];
 
@@ -35,6 +35,7 @@ export function Inbox({
   onClearFilter,
   type = 'all',
   onType,
+  layout = 'split',
 }: {
   data: AppState;
   conferenceId: string;
@@ -56,7 +57,10 @@ export function Inbox({
   /** Alex's type filter: New request / Reschedule / Availability / Cancel (or urgent). */
   type?: ItemKind | 'urgent' | 'all';
   onType?: (t: ItemKind | 'urgent' | 'all') => void;
+  /** 'strip' = cards in a sideways row with the decision below (Today); 'split' = list + pane. */
+  layout?: 'split' | 'strip';
 }) {
+  const stripRef = useRef<HTMLDivElement>(null);
   const zone = data.conferences.find((c) => c.id === conferenceId)?.timezone || 'America/New_York';
   const work = openWork(data, conferenceId);
   const all = useMemo(() => {
@@ -134,13 +138,7 @@ export function Inbox({
   const drafts = data.drafts.filter((d) => d.status === 'Draft').length;
   const email = selected?.email || looseEmail || null;
 
-  return (
-    <div className={`v5-inbox ${email || selected ? 'has-detail' : ''}`}>
-      <section className="v5-inbox-list" aria-label="Inbox list">
-        <div className="head">
-          <h1>Inbox</h1>
-          <span>{items.length ? `${items.length} open` : 'Clear'}</span>
-        </div>
+  const chipsEl = (
         <div className="v5-kinds" role="group" aria-label="Filter by type">
           {chips.map((c) => (
             <button key={c.id} className={`${shownType === c.id ? 'active' : ''} ${c.id === 'urgent' ? 'urgent' : ''}`} aria-pressed={shownType === c.id} onClick={() => setType(c.id)}>
@@ -148,6 +146,8 @@ export function Inbox({
             </button>
           ))}
         </div>
+  );
+  const toolsEl = (
         <div className="tools">
           <label className="v5-sort">
             <span>Sort</span>
@@ -172,40 +172,16 @@ export function Inbox({
             <Plus size={16} />
           </button>
         </div>
-        <div className="rows">
-          {items.map((i) => (
-            <button key={i.id} className={`row ${selected?.id === i.id ? 'active' : ''}`} onClick={() => pick(i)} aria-current={selected?.id === i.id}>
-              <span className={`v5-dot ${i.tone}`} />
-              <span className="body">
-                <span className="top">
-                  <strong>{i.who}</strong>
-                  <time>{shortWhen(i.at, data.now, zone)}</time>
-                </span>
-                <span className="what">
-                  <span className={`v5-kind k-${i.type}`}>
-                    {itemKindLabel[i.type]}
-                    {i.more ? ` +${i.more}` : ''}
-                  </span>
-                  {i.what}
-                </span>
-              </span>
-            </button>
-          ))}
-          {!items.length && (
-            <div className="none">
-              <CheckCircle2 size={22} />
-              <strong>{shownType === 'all' ? 'Inbox clear' : `No open ${itemKindLabel[shownType as ItemKind]?.toLowerCase() || 'urgent'} items`}</strong>
-              <span>New conference emails and requests appear here as they arrive.</span>
-            </div>
-          )}
-        </div>
+  );
+  const footEl = (
         <div className="foot">
           <button onClick={onDrafts}>Drafts{drafts ? ` ${drafts}` : ''}</button>
           <button onClick={onAllEmail}>All email</button>
           <button onClick={onList}>List view</button>
         </div>
-      </section>
-      <main className="v5-inbox-detail">
+  );
+  const detailEl = (
+    <>
         {email ? (
           <EmailReview
             key={email.id}
@@ -245,6 +221,108 @@ export function Inbox({
             <span>Nothing changes on the schedule until you approve it.</span>
           </div>
         )}
+    </>
+  );
+
+  if (layout === 'strip') {
+    // Alex's layout: every open item as a card in one row you can scroll sideways, the decision below.
+    const scroll = (dir: number) => {
+      const el = stripRef.current;
+      el?.scrollBy({ left: dir * Math.max(300, el.clientWidth * 0.8), behavior: 'smooth' });
+    };
+    return (
+      <section className="v5-desk" aria-label="Needs your decision">
+        <div className="v5-section-head">
+          <h2>
+            Needs your decision <span className="count">{all.length}</span>
+          </h2>
+          <span className="grow" />
+          <button className="v5-link" onClick={onDrafts}>Drafts{drafts ? ` ${drafts}` : ''}</button>
+          <button className="v5-link" onClick={onAllEmail}>All email</button>
+        </div>
+        <div className="v5-desk-bar">
+          {chipsEl}
+          {toolsEl}
+        </div>
+        {items.length ? (
+          <div className="v5-strip">
+            <button className="arrow left" aria-label="Previous" onClick={() => scroll(-1)}>
+              <ChevronLeft size={16} />
+            </button>
+            <div className="track" ref={stripRef}>
+              {items.map((i) => (
+                <button key={i.id} className={`v5-card-item ${selected?.id === i.id ? 'active' : ''}`} onClick={() => pick(i)} aria-current={selected?.id === i.id}>
+                  <span className="tagline">
+                    <span className={`v5-kind k-${i.type}`}>
+                      {itemKindLabel[i.type]}
+                      {i.more ? ` +${i.more}` : ''}
+                    </span>
+                    <time>{i.meetingAt ? fmt(i.meetingAt, zone, 'EEE h:mm a') : shortWhen(i.at, data.now, zone)}</time>
+                  </span>
+                  <strong>{i.who}</strong>
+                  <span className="what">{i.what}</span>
+                  <span className="foot">Email {shortWhen(i.at, data.now, zone)}</span>
+                </button>
+              ))}
+            </div>
+            <button className="arrow right" aria-label="Next" onClick={() => scroll(1)}>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        ) : (
+          <div className="v5-need calm">
+            <span className="v5-dot ok" />
+            <div className="body">
+              <strong>{all.length ? 'Nothing of this type' : 'You are all caught up'}</strong>
+              <span>New conference emails and requests appear here as they arrive.</span>
+            </div>
+          </div>
+        )}
+        {(email || selected) && <div className="v5-desk-detail">{detailEl}</div>}
+      </section>
+    );
+  }
+
+  return (
+    <div className={`v5-inbox ${email || selected ? 'has-detail' : ''}`}>
+      <section className="v5-inbox-list" aria-label="Inbox list">
+        <div className="head">
+          <h1>Inbox</h1>
+          <span>{items.length ? `${items.length} open` : 'Clear'}</span>
+        </div>
+        {chipsEl}
+        {toolsEl}
+        <div className="rows">
+          {items.map((i) => (
+            <button key={i.id} className={`row ${selected?.id === i.id ? 'active' : ''}`} onClick={() => pick(i)} aria-current={selected?.id === i.id}>
+              <span className={`v5-dot ${i.tone}`} />
+              <span className="body">
+                <span className="top">
+                  <strong>{i.who}</strong>
+                  <time>{shortWhen(i.at, data.now, zone)}</time>
+                </span>
+                <span className="what">
+                  <span className={`v5-kind k-${i.type}`}>
+                    {itemKindLabel[i.type]}
+                    {i.more ? ` +${i.more}` : ''}
+                  </span>
+                  {i.what}
+                </span>
+              </span>
+            </button>
+          ))}
+          {!items.length && (
+            <div className="none">
+              <CheckCircle2 size={22} />
+              <strong>{shownType === 'all' ? 'Inbox clear' : `No open ${itemKindLabel[shownType as ItemKind]?.toLowerCase() || 'urgent'} items`}</strong>
+              <span>New conference emails and requests appear here as they arrive.</span>
+            </div>
+          )}
+        </div>
+        {footEl}
+      </section>
+      <main className="v5-inbox-detail">
+        {detailEl}
       </main>
     </div>
   );

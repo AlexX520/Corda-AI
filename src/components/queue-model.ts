@@ -4,13 +4,14 @@ type Action = AppState['actions'][number];
 type Email = AppState['emails'][number];
 
 /** Every action is one of these schedule changes (how bankers talk about them) or "other". */
-export type KindId = 'escalation' | 'new' | 'reschedule' | 'availability' | 'cancel' | 'other';
+export type KindId = 'escalation' | 'new' | 'reschedule' | 'availability' | 'cancel' | 'preference' | 'other';
 export const kindOrder: KindId[] = [
   'escalation',
   'new',
   'reschedule',
   'availability',
   'cancel',
+  'preference',
   'other',
 ];
 export const kindLabel: Record<KindId, string> = {
@@ -19,6 +20,7 @@ export const kindLabel: Record<KindId, string> = {
   reschedule: 'Reschedule',
   availability: 'Availability',
   cancel: 'Cancel',
+  preference: 'Preferences',
   other: 'Other',
 };
 
@@ -35,6 +37,7 @@ export function actionKind(a: Action, data?: AppState): { id: KindId; label: str
   const t = a.type;
   const x = data ? askOf(a, data).extraction : undefined;
   if (/escalation/i.test(t)) return { id: 'escalation', label: 'Escalation' };
+  if (/coverage preference/i.test(t)) return { id: 'preference', label: 'Preferences' };
   if (/inquiry/i.test(t) && x?.windows?.some((w) => w.kind === 'unavailable'))
     return { id: 'availability', label: 'Availability' };
   if (/reschedul/i.test(t)) return { id: 'reschedule', label: 'Reschedule' };

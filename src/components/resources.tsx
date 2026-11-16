@@ -6,6 +6,7 @@ import type { AppState } from '@/lib/types';
 import { Button } from './ui/button';
 import { Badge, Empty, Field, fmt, names, type Run } from './shared';
 import { Dialog } from './ui/dialog';
+import { SyndicateCompare } from './syndicate-compare';
 
 type AllocationDiff = {
   changes: { meetingId: string; meeting: string; add: string[]; remove: string[]; room: { from: string; to: string } | null; locked: string[]; keepsLocation: string | null }[];
@@ -16,7 +17,7 @@ type AllocationDiff = {
 const levels = ['Must Attend', 'High Priority', 'Medium Priority', 'Low Priority', 'No Preference', 'Cannot Attend'];
 
 export function ResourceAllocationView({ data, conferenceId, run }: { data: AppState; conferenceId: string; run: Run }) {
-  const [tab, setTab] = useState<'preferences' | 'allocation' | 'cubes'>('allocation');
+  const [tab, setTab] = useState<'preferences' | 'allocation' | 'cubes' | 'team' | 'syndicate'>('allocation');
   const conference = data.conferences.find((c) => c.id === conferenceId)!;
   const n = names(data);
   const meetings = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed');
@@ -38,6 +39,8 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
   const [meetingChoice, setMeetingChoice] = useState(meetings[0]?.id || '');
   const [meetingLevel, setMeetingLevel] = useState('High Priority');
   const [cubeName, setCubeName] = useState('');
+  const teamPrefs = [...new Set(data.bankerPreferences.filter((p) => p.conferenceId === conferenceId && !p.meetingId && p.preferenceLevel !== 'No Preference').map((p) => p.bankerId))]
+    .map((id) => [id, data.bankerPreferences.filter((p) => p.conferenceId === conferenceId && p.bankerId === id && !p.meetingId && p.preferenceLevel !== 'No Preference')] as const);
   const [cubeCapacity, setCubeCapacity] = useState(6);
 
   async function savePreferences(submit: boolean) {
@@ -83,7 +86,17 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
         <button className={tab === 'allocation' ? 'active' : ''} onClick={() => setTab('allocation')}>Allocation review <span>{proposals.length}</span></button>
         <button className={tab === 'preferences' ? 'active' : ''} onClick={() => setTab('preferences')}>My preferences</button>
         <button className={tab === 'cubes' ? 'active' : ''} onClick={() => setTab('cubes')}>Rooms <span>{cubes.length}</span></button>
+        <button className={tab === 'team' ? 'active' : ''} onClick={() => setTab('team')}>Team preferences <span>{teamPrefs.length}</span></button>
+        <button className={tab === 'syndicate' ? 'active' : ''} onClick={() => setTab('syndicate')}>Compare with syndicate</button>
       </div>{latestRun && <Badge>{latestRun.runStatus}</Badge>}</div>
+      {tab === 'syndicate' && <SyndicateCompare conferenceId={conferenceId} run={run} />}
+      {tab === 'team' && <div className="v5-team-prefs">
+        <p className="muted-line">What each banker asked for, from the app or by email to the conference mailbox. Allocation uses these.</p>
+        {teamPrefs.length ? teamPrefs.map(([bankerId, list]) => <div key={bankerId} className="row">
+          <strong>{n.user(bankerId)}</strong>
+          <div className="chips">{list.map((p) => <span key={p.id} className={`lvl ${p.preferenceLevel === 'Must Attend' ? 'must' : p.preferenceLevel === 'Cannot Attend' ? 'cannot' : ''}`}>{n.issuer(p.issuerId)} · {p.preferenceLevel}</span>)}</div>
+        </div>) : <Empty title="No preferences yet" description="Bankers can email the conference mailbox, e.g. “Ford must attend, prioritise Ally”." />}
+      </div>}
       {tab === 'allocation' && <AllocationReview data={data} conferenceId={conferenceId} proposals={proposals} latestRun={latestRun} run={run}/>} 
       {tab === 'preferences' && <div className="resource-split">
         <section><div className="resource-section-title"><div><h3>Issuer preferences</h3></div></div>

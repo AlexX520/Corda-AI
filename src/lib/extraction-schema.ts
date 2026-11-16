@@ -69,6 +69,16 @@ export const extractionSchema = z.object({
   fromEscalation: z.boolean().default(false),
   /** A request for "any time 10–12": the window is a range to place a shorter meeting in. */
   flexible: z.boolean().default(false),
+  /** A banker's coverage preferences sent by email ("Ford must attend, prioritise Ally"). */
+  preferences: z
+    .array(
+      z.object({
+        issuerId: z.string(),
+        level: z.enum(['Must Attend', 'High Priority', 'Medium Priority', 'Low Priority', 'Cannot Attend']),
+        evidence: z.string(),
+      }),
+    )
+    .default([]),
 });
 export type Extraction = z.infer<typeof extractionSchema>;
 export type ExtractionWindow = Extraction['windows'][number];

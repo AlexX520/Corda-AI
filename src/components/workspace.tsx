@@ -335,7 +335,7 @@ export function Workspace() {
         setQueueSection('tasks');
         setClassic(false);
       }
-      setPage(id);
+      setPage(id === 'queue' && data?.user.role === 'BANKER' ? 'overview' : id);
     }
     setSearch('');
     setMobile(false);
@@ -346,7 +346,7 @@ export function Workspace() {
     if (data && isDesk(data.user.role)) {
       setClassic(false);
       setQueueSection('tasks');
-      setPage('queue');
+      setPage(data.user.role === 'MANAGER' ? 'queue' : 'overview');
     }
   }
   async function switchUser(id: string) {
@@ -456,8 +456,7 @@ export function Workspace() {
         ]
       : banker
         ? [
-            { id: 'overview', label: 'Today', icon: Sun },
-            { id: 'queue', label: 'Inbox', icon: InboxIcon, count: inboxCount },
+            { id: 'overview', label: 'Today', icon: Sun, count: inboxCount },
             { id: 'schedule', label: 'Schedule', icon: CalendarDays },
             { id: 'allocation', label: 'Rooms & coverage', icon: SlidersHorizontal },
           ]
@@ -474,6 +473,35 @@ export function Workspace() {
     : drill?.focus === 'escalation'
       ? { label: 'Escalations', test: (a: AppState['actions'][number]) => actionKind(a, data).id === 'escalation' }
       : null;
+  // One coordinator: the to-do list lives on Today as a strip of cards; managers keep the Inbox page.
+  function inboxEl(layout: 'split' | 'strip') {
+    return (
+      <Inbox
+        layout={layout}
+        data={data!}
+        conferenceId={conferenceId}
+        run={run}
+        emailId={review?.emailId || null}
+        proposalId={review?.proposalId}
+        onSelectEmail={(id) => setReview(id ? { emailId: id } : null)}
+        onReply={openReply}
+        onOther={actionClick}
+        onOpenDraft={(id) => setDraftId(id)}
+        onAddEmail={() => setEmailOpen(true)}
+        onSync={outlook?.connected ? syncOutlook : undefined}
+        onAllEmail={() => {
+          setInboxTab('review');
+          setQueueSection('emails');
+        }}
+        onDrafts={() => setQueueSection('drafts')}
+        onList={() => setClassic(true)}
+        filter={inboxFilter}
+        onClearFilter={() => setDrill(null)}
+        type={inboxType}
+        onType={setInboxType}
+      />
+    );
+  }
   function openItem(item: InboxItem) {
     if (item.kind === 'email') openEmail(item.email!.id, item.actions[0]?.proposalId);
     else if (item.kind === 'request') setSheetRequestId(item.request!.id);
@@ -683,6 +711,7 @@ export function Workspace() {
               onOpenSchedule={() => navigate('planner')}
               onOpenAudit={() => navigate('audit')}
               onOpenType={(t) => { setDrill(null); setClassic(false); setInboxType(t); navigate('queue'); }}
+              desk={inboxEl('strip')}
             />
           )}
           {page === 'ask' && <AskCorda data={data} onOpenMeeting={setMeetingId} />}
@@ -711,29 +740,7 @@ export function Workspace() {
             />
           )}
           {page === 'queue' && queueSection === 'tasks' && !classic && banker && (
-            <Inbox
-              data={data}
-              conferenceId={conferenceId}
-              run={run}
-              emailId={review?.emailId || null}
-              proposalId={review?.proposalId}
-              onSelectEmail={(id) => setReview(id ? { emailId: id } : null)}
-              onReply={openReply}
-              onOther={actionClick}
-              onOpenDraft={(id) => setDraftId(id)}
-              onAddEmail={() => setEmailOpen(true)}
-              onSync={outlook?.connected ? syncOutlook : undefined}
-              onAllEmail={() => {
-                setInboxTab('review');
-                setQueueSection('emails');
-              }}
-              onDrafts={() => setQueueSection('drafts')}
-              onList={() => setClassic(true)}
-              filter={inboxFilter}
-              onClearFilter={() => setDrill(null)}
-              type={inboxType}
-              onType={setInboxType}
-            />
+            inboxEl('split')
           )}
           {page === 'queue' && queueSection === 'tasks' && classic && (
             <button className="v5-link back" onClick={() => setClassic(false)}>
@@ -984,7 +991,7 @@ export function Workspace() {
           run={run}
         />
       )}
-      {reviewEmail && !(page === 'queue' && queueSection === 'tasks' && !classic && banker) && (
+      {reviewEmail && !(page === 'queue' && queueSection === 'tasks' && !classic && banker) && !(page === 'overview' && banker && !manager) && (
         <EmailReview
           key={reviewEmail.id}
           email={reviewEmail}

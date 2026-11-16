@@ -10,6 +10,7 @@ import {
   type SenderTrust,
 } from './email-trust';
 import { findCandidates, isOpenMeeting, type MeetingLike, type Names } from './review-rules';
+import { looksLikePreferences, readPreferences, type EmailPreference } from './preferences';
 
 type Party = { id: string; name: string; contactEmail: string; ownerId?: string | null };
 export type AnalyseInput = {
@@ -34,6 +35,8 @@ export type AnalyseDeps = {
   now?: Date;
   /** Conferences where these companies already have meetings, requests or availability. */
   involvement: (issuerIds: string[], investorIds: string[]) => Promise<string[]> | string[];
+  /** Coverage-preference reader (tests inject the rule reader). */
+  readPreferences?: (body: string, issuers: { id: string; name: string }[]) => Promise<{ preferences: EmailPreference[]; parser: 'llm' | 'rules' }>;
   extract: (
     body: string,
     subject: string,
@@ -63,6 +66,68 @@ export async function analyse(p: AnalyseInput, deps: AnalyseDeps) {
   const parties = { issuers, investors, internal: deps.internal };
   const outer = senderTrust(p.sender, parties);
   const names = namesFrom(issuers, investors);
+  // A banker emailing the conference mailbox with coverage preferences (Alex's allocation flow).
+  const fromBanker = users.find((u) => u.email.toLowerCase() === p.sender.toLowerCase() && (u.role === 'BANKER' || u.role === 'MANAGER'));
+  if (fromBanker && outer.status === 'internal' && !/^\s*(?:fw|fwd)\s*:/i.test(p.subject) && looksLikePreferences(p.subject, p.body)) {
+    const content = newEmailContent(p.body);
+    const read = await (deps.readPreferences || readPreferences)(content, issuers);
+    if (read.preferences.length) {
+      const named = namedContext(content, p.subject, ctx);
+      const resolved = p.conferenceId || named.conferenceId
+        ? { conferenceId: p.conferenceId || named.conferenceId, note: '' }
+        : resolveConference({ conferences, involved: [], entityName: null, today: deps.today, text: `${p.subject}\n${content}` });
+      const label = (l: string) => (l === 'Must Attend' ? 'must attend' : l === 'Cannot Attend' ? 'cannot attend' : l.toLowerCase());
+      const summary = `Coverage preferences: ${read.preferences
+        .slice(0, 4)
+        .map((x) => `${names.issuer(x.issuerId)} ${label(x.level)}`)
+        .join(', ')}${read.preferences.length > 4 ? `, +${read.preferences.length - 4}` : ''}`;
+      const ask: Extraction = {
+        category: 'General Conference Inquiry',
+        conferenceId: resolved.conferenceId || null,
+        issuerId: null,
+        investorId: null,
+        operation: 'inquiry',
+        tentative: false,
+        windows: [],
+        uncertainties: [],
+        evidence: read.preferences.map((x) => x.evidence),
+        needsReview: true,
+        meetingId: null,
+        summary: summary.slice(0, 400),
+        referenceTime: null,
+        attendees: null,
+        durationMinutes: null,
+        missing: resolved.conferenceId ? [] : ['conference'],
+        vague: [],
+        conditional: false,
+        condition: '',
+        fromEscalation: false,
+        flexible: false,
+        preferences: read.preferences,
+      };
+      return {
+        asks: [ask],
+        trust: outer,
+        flags: [] as string[],
+        contextNote: resolved.note || '',
+        content,
+        issuers,
+        investorNames: Object.fromEntries(investors.map((i) => [i.id, i.name])) as Record<string, string>,
+        addressed: undefined as (typeof users)[number] | undefined,
+        parser: read.parser,
+        readNote: '',
+        suspicious: false,
+        escalation: false,
+        escalationReasons: [] as string[],
+        protectMeetingId: null as string | null,
+        protectQuote: null as string | null,
+        threat: false,
+        originalSender: null as string | null,
+        originalSenderName: null as string | null,
+        forwardedBy: null as string | null,
+      };
+    }
+  }
   // Forwards: a colleague's short note on top of a client's message. The client's message is the
   // source; its From is verified too, and the colleague is kept as "forwarded by".
   const { note, forwarded } = splitForward(p.body);

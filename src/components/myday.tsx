@@ -1,4 +1,5 @@
 'use client';
+import type React from 'react';
 import type { AppState } from '@/lib/types';
 import { actionKind } from './queue-model';
 import { inboxItems, itemKindLabel, urgentKind, type InboxItem, type ItemKind } from './inbox-model';
@@ -45,6 +46,7 @@ export function MyDay({
   onOpenSchedule,
   onOpenAudit,
   onOpenType,
+  desk,
 }: {
   data: AppState;
   conferenceId: string;
@@ -57,6 +59,8 @@ export function MyDay({
   onOpenAudit: () => void;
   /** Open the inbox filtered to one of Alex's change types. */
   onOpenType?: (t: ItemKind | 'urgent') => void;
+  /** The to-do strip (all open items with the decision below); replaces the separate Inbox page. */
+  desk?: React.ReactNode;
 }) {
   const n = names(data);
   const c = data.conferences.find((x) => x.id === conferenceId)!;
@@ -152,24 +156,8 @@ export function MyDay({
 
       <HoldsBar data={data} run={run} />
 
-      {next && (
-        <section aria-label="Next meeting" className="v5-card v5-next">
-          <div className="when">
-            <strong>{live ? 'NOW' : 'NEXT'} · {fmt(next.m.start, zone, 'h:mm a')}</strong>
-            <span>{live ? `until ${fmt(next.m.end, zone, 'h:mm a')}` : inText(mins)}</span>
-          </div>
-          <div className="what">
-            <strong>{pair(next.m)}</strong>
-            <span>
-              {detail(next.m)} · {next.m.expectedAttendees} attendees{next.pending ? ' · seat not approved yet' : ''}
-            </span>
-          </div>
-          <button className="v5-btn quiet" onClick={() => onOpenMeeting(next.m.id)}>
-            Open meeting
-          </button>
-        </section>
-      )}
-
+      {desk ?? (
+        <>
       <section aria-label="Needs you" className="v5-stack">
         <div className="v5-section-head">
           <h2>Needs you</h2>
@@ -219,6 +207,9 @@ export function MyDay({
           </button>
         )}
       </section>
+
+        </>
+      )}
 
       {/* Alex: no agenda list here; the day's meetings live on Schedule. */}
       {changes.length > 0 && (

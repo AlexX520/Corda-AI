@@ -54,6 +54,8 @@ import { mockExtractAsks } from './rule-parser';
 import { now } from './clock';
 import { seedDemo } from './demo-seed';
 import { getResourceState, handleResourceCommand } from './resource-service';
+import { prefWeight } from './preferences';
+import { compareSchedules, parseCsv, readTable } from './syndicate';
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 async function audit(
@@ -637,6 +639,23 @@ async function writeAsks(tx: Tx, user: User, emailId: string, a: Analysis) {
     const issuer = a.issuers.find((i) => i.id === e.issuerId);
     const escalation = e.category === 'Escalation / complaint';
     const owner = escalation ? a.addressed?.id || issuer?.ownerId : issuer?.ownerId;
+    if (e.preferences?.length) {
+      // A banker's coverage preferences: the coordinator checks them, then they feed allocation.
+      const from = await tx.email.findUniqueOrThrow({ where: { id: emailId }, select: { sender: true } });
+      const fromUser = await tx.user.findFirst({ where: { email: { equals: from.sender, mode: 'insensitive' } } });
+      await tx.action.create({
+        data: {
+          type: 'Coverage preference',
+          title: `${fromUser?.name || from.sender} · ${e.summary}`,
+          conferenceId: e.conferenceId,
+          emailId,
+          proposalId: proposal.id,
+          priority: 'Normal',
+          recommendation: 'Check what Corda read, then save it to the banker\'s preferences for allocation.',
+        },
+      });
+      continue;
+    }
     const doubts = e.uncertainties.filter((u) => !u.startsWith(SELECT_UNCERTAINTY));
     const trusted = !a.suspicious;
     await tx.action.create({
@@ -2300,6 +2319,114 @@ export async function command(user: User, type: string, input: unknown): Promise
     } catch (e) {
       return { ok: false, model, ms: Date.now() - t0, reason: e instanceof LlmUnavailable ? `The model did not answer (${e.message}). Emails fall back to the built-in rules.` : 'Unexpected answer from the model.' };
     }
+  }
+  if (type === 'applyPreferenceEmail') {
+    // Save the preferences read from a banker's email (as checked by the coordinator) to that
+    // banker's coverage preferences for the event. Other issuers they already ranked are kept.
+    banker(user);
+    const levels = ['Must Attend', 'High Priority', 'Medium Priority', 'Low Priority', 'Cannot Attend'] as const;
+    const p = z
+      .object({
+        proposalId: z.string(),
+        items: z.array(z.object({ issuerId: z.string(), level: z.enum(levels) })).min(1).max(60),
+      })
+      .parse(input);
+    return db.$transaction(async (tx) => {
+      const proposal = await tx.proposal.findUniqueOrThrow({ where: { id: p.proposalId }, include: { email: true } });
+      if (proposal.status !== 'Pending') throw new Error('These preferences were already handled.');
+      const e = proposal.extraction as unknown as Extraction;
+      if (!e.conferenceId) throw new Error('Pick the event first.');
+      const owner = await tx.user.findFirst({ where: { email: { equals: proposal.email.sender, mode: 'insensitive' } } });
+      if (!owner || !isDesk(owner.role)) throw new Error('This email is not from a banker on the team.');
+      const before = await tx.bankerPreference.findMany({ where: { conferenceId: e.conferenceId, bankerId: owner.id, meetingId: null } });
+      const ids = p.items.map((x) => x.issuerId);
+      await tx.bankerPreference.deleteMany({ where: { conferenceId: e.conferenceId, bankerId: owner.id, meetingId: null, issuerId: { in: ids } } });
+      await tx.bankerPreference.createMany({
+        data: p.items.map((x) => ({
+          conferenceId: e.conferenceId!,
+          bankerId: owner.id,
+          issuerId: x.issuerId,
+          preferenceLevel: x.level,
+          preferenceWeight: prefWeight(x.level),
+          isMandatory: x.level === 'Must Attend',
+          submissionStatus: 'Submitted',
+        })),
+      });
+      await tx.proposal.update({ where: { id: proposal.id }, data: { status: 'Approved', reviewerId: user.id, reviewNote: `Saved ${p.items.length} preferences for ${owner.name}.` } });
+      await tx.action.updateMany({ where: { proposalId: proposal.id, status: 'Open' }, data: { status: 'Resolved' } });
+      await tx.email.update({ where: { id: proposal.emailId }, data: { status: 'Approved' } });
+      await audit(tx, user, 'Coverage preferences saved from email', 'Email', proposal.emailId, { preferences: before }, { bankerId: owner.id, items: p.items });
+      return { ok: true, banker: owner.name, saved: p.items.length };
+    });
+  }
+  if (type === 'syndicateCompare') {
+    // Read syndicate's room schedule (Excel or CSV) and list where it differs from ours.
+    // Nothing is changed: the coordinator fixes each difference where it belongs.
+    banker(user);
+    const p = z
+      .object({ conferenceId: z.string(), fileName: z.string().max(300).default(''), base64: z.string().max(14_000_000).optional(), sample: z.boolean().default(false) })
+      .parse(input);
+    const conference = await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } });
+    const [meetings, cubes, cubeLinks, issuers, investors] = await Promise.all([
+      db.meeting.findMany({ where: { conferenceId: p.conferenceId, status: 'Confirmed' }, orderBy: { start: 'asc' } }),
+      db.meetingCube.findMany({ where: { conferenceId: p.conferenceId } }),
+      db.meetingCubeAssignment.findMany({ select: { meetingId: true, cubeId: true } }),
+      db.issuer.findMany({ select: { id: true, name: true } }),
+      db.investor.findMany({ select: { id: true, name: true } }),
+    ]);
+    const roomOf = (m: { id: string; location: string | null }) =>
+      cubes.find((c) => c.id === cubeLinks.find((l) => l.meetingId === m.id)?.cubeId)?.name || (m.location || '').split('·')[0].trim();
+    const ours = meetings.map((m) => ({ id: m.id, issuerId: m.issuerId, investorId: m.investorId, start: m.start.toISOString(), room: roomOf(m) }));
+    const zone = conference.timezone;
+    let table: (string | number | Date | null)[][] = [];
+    let sampleCsv = '';
+    if (p.sample) {
+      // Demo: syndicate's copy of our schedule with a few realistic drifts.
+      const name = (list: { id: string; name: string }[], id: string) => list.find((x) => x.id === id)?.name || id;
+      const rows = ours.map((m, i) => {
+        let start = new Date(m.start);
+        let room = m.room;
+        if (i === 2 || i === 9) start = new Date(+start + 30 * 60000);
+        if (i === 4 || i === 12) room = room === 'Room 1' ? 'Room 3' : 'Room 1';
+        return [formatInTimeZone(start, zone, 'yyyy-MM-dd'), formatInTimeZone(start, zone, 'h:mm a'), name(issuers, m.issuerId), name(investors, m.investorId), room];
+      });
+      rows.splice(6, 1);
+      const extra = ours[0];
+      if (extra) rows.push([formatInTimeZone(new Date(+new Date(extra.start) + 26 * 3600000), zone, 'yyyy-MM-dd'), '4:00 PM', name(issuers, extra.issuerId), 'Fidelity', 'Room 2']);
+      table = [['Date', 'Time', 'Issuer', 'Investor', 'Room'], ...rows];
+      sampleCsv = table.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    } else {
+      if (!p.base64) throw new Error('Choose a file first.');
+      const buf = Buffer.from(p.base64, 'base64');
+      if (/\.(csv|txt|tsv)$/i.test(p.fileName)) table = parseCsv(buf.toString('utf8'));
+      else {
+        const ExcelJS = (await import('exceljs')).default;
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(buf as unknown as ArrayBuffer);
+        const ws = wb.worksheets[0];
+        if (!ws) throw new Error('The file has no sheet.');
+        ws.eachRow({ includeEmpty: false }, (row) => {
+          const vals = (row.values as unknown[]).slice(1).map((v) => {
+            if (v && typeof v === 'object' && !(v instanceof Date)) {
+              const o = v as { result?: unknown; text?: string; richText?: { text: string }[] };
+              return (o.result ?? o.text ?? o.richText?.map((t) => t.text).join('') ?? '') as string | number | Date;
+            }
+            return (v ?? null) as string | number | Date | null;
+          });
+          table.push(vals);
+        });
+      }
+    }
+    const read = readTable(table, zone, conference.startDate);
+    if (!read.rows.length) throw new Error(`Could not read the file: it needs ${read.missing.join(' and ') || 'meeting rows'}.`);
+    const result = compareSchedules(read.rows, ours, issuers, investors, zone);
+    await audit(db, user, 'Syndicate schedule compared', 'Conference', p.conferenceId, undefined, {
+      file: p.sample ? 'sample' : p.fileName,
+      rows: read.rows.length,
+      matched: result.matched,
+      differences: result.differences.length,
+    });
+    return { ...result, rows: read.rows.length, ours: ours.length, missing: read.missing, sampleCsv, fileName: p.sample ? 'Sample syndicate schedule' : p.fileName };
   }
   if (type === 'markSeen') {
     // "What changed since my last visit" starts again from now.

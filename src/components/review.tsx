@@ -6,6 +6,7 @@ import { Button } from './ui/button';
 import { Dialog } from './ui/dialog';
 import { Sheet } from './ui/sheet';
 import { EmailDecision, type Outcome } from './decision';
+import { PreferenceDecision } from './preference-decision';
 import { unhandledSentences } from '@/lib/review-rules';
 import type { Extraction } from '@/lib/extraction-schema';
 import { EventSelect } from './extraction-form';
@@ -436,7 +437,9 @@ export function EmailReview({
           ))}
         </div>
       )}
-      {inline && asks.length > 1 && !openAsks.length ? null : proposal ? (
+      {inline && asks.length > 1 && !openAsks.length ? null : proposal && (proposal.extraction as unknown as Extraction)?.preferences?.length ? (
+        <PreferenceDecision key={proposal.id + proposal.updatedAt} email={email} proposal={proposal} data={data} run={run} onDone={next} />
+      ) : proposal ? (
         <EmailDecision
           key={proposal.id + proposal.updatedAt}
           email={email}

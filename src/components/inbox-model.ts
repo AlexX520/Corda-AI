@@ -18,6 +18,7 @@ export const itemKindLabel: Record<ItemKind, string> = {
   reschedule: 'Reschedule',
   availability: 'Availability',
   cancel: 'Cancel',
+  preference: 'Preferences',
   other: 'Other',
 };
 export const urgentKind = (k: ItemKind) => k === 'escalation' || k === 'phishing';
@@ -146,13 +147,15 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
     const escalation = e.escalation ? e.proposals.find((p) => x(p)?.category === 'Escalation / complaint') : undefined;
     const company = senderCompany(e, data) || issuerName(e.issuerId) || investorName(e.investorId);
     const suspicious = e.suspicious || e.senderStatus === 'unverified';
-    const who = suspicious ? 'Unverified sender' : company || senderName(e);
+    const colleague = data.users.find((u) => u.email.toLowerCase() === (e.originalSender || e.sender).toLowerCase())?.name;
+    const who = suspicious ? 'Unverified sender' : company || colleague || senderName(e);
     const blockers = changes.map((p) => askBlocker(p, e)).filter(Boolean) as string[];
     const first = changes[0] || open[0];
     // Short wording: "move Wellington to Sun 11:30 AM" (the sender's own name is in the row already).
     const short = (p: (typeof changes)[number]) => {
       const a = x(p);
       if (!a) return p.summary;
+      if (a.preferences?.length) return p.summary.replace(/^Coverage preferences:\s*/i, '');
       const other = (a.issuerId && senderCompany(e, data) === issuerName(a.issuerId) ? investorName(a.investorId) : issuerName(a.issuerId) || investorName(a.investorId)) || '';
       const w = a.windows?.find((v) => v.kind === 'availability');
       const at = w ? fmt(w.start, zone, 'EEE h:mm a') : '';

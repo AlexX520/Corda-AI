@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { formatInTimeZone } from 'date-fns-tz';
+import { readPreferencesByRules } from './preferences';
 import { mockExtractAsks, newEmailContent } from './extraction';
 import { conferenceTime, evaluate, mergeWindows, overlaps } from './scheduling';
 import { now } from './clock';
@@ -300,6 +301,18 @@ export async function seedDemo(db: Prisma.TransactionClient, opts: DemoSeedOptio
         const proposal = await db.proposal.create({ data: { emailId: mail.id, askIndex, summary: e.summary, extraction: e, createdAt: ago(1.5) } });
         await db.action.create({ data: { type: e.category, title: `${issuer.name} · ${e.summary}`, conferenceId: 'abs-east', issuerId: s.issuerId, investorId: e.investorId, emailId: mail.id, proposalId: proposal.id, assignedTo: issuer.ownerId, priority: 'Normal', recommendation: e.uncertainties[0] || 'Review the extracted request and its evidence.', createdAt: ago(1.5) } });
       }
+    }
+    // A banker emails their coverage preferences to the conference mailbox (read by the rule reader here).
+    {
+      const body = `Hi Alex,\n\nFor ABS East: I must attend the Ford Credit meetings, and please prioritise Ally. Happy to cover GM Financial if there's room. I can't do Santander this year.\n\nThanks,\nMaya`;
+      const prefs = readPreferencesByRules(body, issuers);
+      const label = (l: string) => (l === 'Must Attend' ? 'must attend' : l === 'Cannot Attend' ? 'cannot attend' : l.toLowerCase());
+      const summary = `Coverage preferences: ${prefs.map((x) => `${issuers.find((i) => i.id === x.issuerId)?.name} ${label(x.level)}`).join(', ')}`;
+      const mail = await db.email.create({ data: { messageId: 'seed-preferences-maya', threadId: 'seed-preferences-maya', sender: 'maya.patel@conferenceos.demo', to: ['alex.morgan@conferenceos.demo'], cc: [], subject: 'My preferences for ABS East', body, newContent: newEmailContent(body), conferenceId: 'abs-east', category: 'General Conference Inquiry', senderStatus: 'internal', receivedAt: ago(0.5) } });
+      const base = mockExtractAsks('Question about ABS East 2026', 'ABS East 2026', { conferences, issuers, investors }, { conferenceId: 'abs-east' }).asks[0];
+      const extraction = { ...base, category: 'General Conference Inquiry', operation: 'inquiry', issuerId: null, investorId: null, windows: [], uncertainties: [], missing: [], summary, evidence: prefs.map((x) => x.evidence), preferences: prefs, needsReview: true };
+      const proposal = await db.proposal.create({ data: { emailId: mail.id, askIndex: 0, summary, extraction, createdAt: ago(0.5) } });
+      await db.action.create({ data: { type: 'Coverage preference', title: `Maya Patel · ${summary}`, conferenceId: 'abs-east', emailId: mail.id, proposalId: proposal.id, priority: 'Normal', recommendation: "Check what Corda read, then save it to the banker's preferences for allocation.", createdAt: ago(0.5) } });
     }
     // An escalation about an upcoming meeting; the meeting is protected.
     const target = await db.meeting.findFirst({ where: { conferenceId: 'abs-east', issuerId: 'santander', investorId: 'apollo' } });
