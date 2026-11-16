@@ -284,7 +284,7 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
   }
   const sendable = (result?.options || []).filter((o) => o.proposal && (!o.asked || o.asked.free) && !sent.includes(o.issuerId));
   const [outsideFor, setOutsideFor] = useState<string | null>(null);
-  const when = (iso: string) => fmt(iso, c.timezone, 'EEE MMM d, h:mm a');
+  const when = (iso: string) => fmt(iso, c.timezone, 'MMM d · h:mm a');
   /** One request at a chosen time. The note says what was asked and why the time differs. */
   async function sendAt(issuerId: string, slot: { start: string; end: string }, mode: 'asked' | 'alternative' | 'outside') {
     if (!result?.parsed.investorId) return;
@@ -405,7 +405,7 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
                                 {o.asked.alternatives.length > 0 && <small>Open instead:</small>}
                                 {o.asked.alternatives.map((alt) => (
                                   <button key={alt.start} type="button" className="alt" disabled={busy} onClick={() => sendAt(o.issuerId, alt, 'alternative')}>
-                                    {fmt(alt.start, c.timezone, 'EEE h:mm a')}
+                                    {fmt(alt.start, c.timezone, 'MMM d · h:mm a')}
                                   </button>
                                 ))}
                                 {outsideFor === o.issuerId ? (

@@ -4,8 +4,9 @@ import type { AppState, EmailItem, RequestItem } from '@/lib/types';
 import type { Extraction } from '@/lib/extraction-schema';
 import { duplicatesFor, findCandidates, isOpenMeeting, isOpenRequest, windowLabel } from '@/lib/review-rules';
 import { ExtractionForm } from './extraction-form';
-import { AlertTriangle, ArrowRight, Check, ChevronDown, Mail, Users } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, Mail, Sparkles, Users } from 'lucide-react';
 import { canOperate } from '@/lib/roles';
+import { SelectMenu } from './ui/select-menu';
 import { Button } from './ui/button';
 import { fmt, names, Run } from './shared';
 
@@ -70,6 +71,7 @@ export function EmailDecision({
   const [protectedOverride, setProtectedOverride] = useState('');
   const [holdReason, setHoldReason] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pickOpen, setPickOpen] = useState(false);
   const [check, setCheck] = useState<Check | null>(null);
   const action = data.actions.find((a) => a.proposalId === proposal.id);
   // One coordinator runs the inbox: whoever acknowledges an escalation owns it.
@@ -279,11 +281,62 @@ export function EmailDecision({
     if (ok && !['edit', 'refresh'].includes(decision)) onDone(decision === 'approve' ? outcomeRef.current : null);
   }
 
+  // One plain sentence for the change and one line for its time(s): "Move Ford Credit × Wellington",
+  // "Dec 8 · 10:00 AM → 11:30 AM". Weekdays are left out; the date says it.
+  const D = (iso: string | Date) => fmt(typeof iso === 'string' ? iso : iso.toISOString(), zone, 'MMM d · h:mm a');
+  const T = (iso: string | Date) => fmt(typeof iso === 'string' ? iso : iso.toISOString(), zone, 'h:mm a');
+  const sameDay = (a: string | Date, b: string | Date) => fmt(String(typeof a === 'string' ? a : a.toISOString()), zone, 'yyyy-MM-dd') === fmt(String(typeof b === 'string' ? b : b.toISOString()), zone, 'yyyy-MM-dd');
+  const range = (w: { start: string; end: string }) => `${fmt(w.start, zone, 'MMM d · h:mm')}–${T(w.end)}`;
+  const pairName = meeting
+    ? `${n.issuer(meeting.issuerId)} × ${n.investor(meeting.investorId)}`
+    : req
+      ? `${n.issuer(req.issuerId)} × ${n.investor(req.investorId)}`
+      : [e.issuerId ? issuer : null, investor || null].filter(Boolean).join(' × ') || 'the meeting';
+  const firstNew = newWindows[0];
+  const change: { what: string; when: string; sub: string } = (() => {
+    if (op === 'reschedule')
+      return {
+        what: `Move ${pairName}`,
+        when: meeting && firstNew ? `${D(meeting.start)} → ${sameDay(meeting.start, firstNew.start) ? T(firstNew.start) : D(firstNew.start)}` : firstNew ? `New time ${D(firstNew.start)}` : 'The email gives no exact new time',
+        sub: '',
+      };
+    if (op === 'cancel') return { what: cancelRequest ? `Withdraw the request ${pairName}` : `Cancel ${pairName}`, when: meeting ? D(meeting.start) : req ? D(req.start) : '', sub: 'The slot opens up again' };
+    if (op === 'update') return { what: `Update ${pairName}`, when: meeting ? D(meeting.start) : '', sub: e.attendees ? `${e.attendees} attendees${meeting ? ` (now ${meeting.expectedAttendees})` : ''} · room re-checked` : '' };
+    if (op === 'confirm') return { what: `Confirm ${pairName}`, when: req ? D(req.start) : firstNew ? D(firstNew.start) : '', sub: '' };
+    if (e.category === 'New Meeting Request')
+      return {
+        what: `Add ${pairName}`,
+        when: firstNew ? (e.flexible ? `Any time ${range(firstNew)}` : D(firstNew.start)) : 'The email gives no exact time',
+        sub: [
+          firstNew ? `${e.durationMinutes || Math.round((+new Date(firstNew.end) - +new Date(firstNew.start)) / 60000)} min` : '',
+          e.attendees ? `${e.attendees} attendees` : '',
+          `asked by ${asker}`,
+          dupes.length ? `already ${dupes[0].kind === 'meeting' ? 'meets' : 'requested'} ${D(dupes[0].item.start)}` : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      };
+    if (e.category === 'Issuer Availability Update')
+      return {
+        what: `${issuer} ${blockedWindows.length && !newWindows.length ? 'is not available' : op === 'remove' ? 'removes times' : op === 'replace' ? 'replaces its availability' : 'is available'}`,
+        when: [...newWindows, ...blockedWindows].map(range).join(', ') || 'No exact times',
+        sub: current.length ? `Now: ${current.slice(0, 3).map((a) => range({ start: new Date(a.start).toISOString(), end: new Date(a.end).toISOString() })).join(', ')}` : 'No availability on file yet',
+      };
+    return { what: e.summary || headline, when: firstNew ? D(firstNew.start) : '', sub: '' };
+  })();
+  const clean = Boolean(check && !check.hard.length && !check.soft.length);
+  const roomName = meeting?.location?.split('·')[0].trim();
+  const okChips = done
+    ? []
+    : [
+        ...(clean && firstNew && ['reschedule', 'add', 'confirm'].includes(op) ? ['Free for both sides', `Inside ${issuer}’s availability`] : []),
+        ...(clean && op === 'reschedule' && roomName ? [`${roomName} stays`] : []),
+      ];
   const offered = (w: Extraction['windows'][number]) =>
     `${op === 'remove' ? 'Removes ' : op === 'reschedule' ? 'Moves to ' : op === 'replace' ? 'Only ' : e.category === 'New Meeting Request' ? (e.flexible ? 'Any time ' : 'Requested ') : 'Adds '}${windowLabel(w, zone)}`;
 
   return (
-    <section className="decision-card" aria-label="Decision">
+    <section className="decision-card email-dc" aria-label="Decision">
       <span className="dc-meta">
         {escalation ? <span className="dc-urgent">Urgent</span> : null}
         {e.fromEscalation && <span className="mini-flag red">From an escalation</span>}
@@ -392,89 +445,24 @@ export function EmailDecision({
           </div>
         </div>
       ) : (
-        <div className="dc-diff">
-          <div className="dc-before">
-            <span className="dc-label">Now</span>
-            {needsMeeting && !cancelRequest ? (
-              meeting ? (
-                <>
-                  <s>{fmt(meeting.start, zone, 'EEE, MMM d · h:mm a')}</s>
-                  <span>
-                    {n.issuer(meeting.issuerId)} × {n.investor(meeting.investorId)} · {meeting.location || 'Location TBC'}
-                    {op === 'update' ? ` · ${meeting.expectedAttendees} attendees` : ''}
-                  </span>
-                </>
-              ) : (
-                <span>Pick the meeting below</span>
-              )
-            ) : needsRequest || cancelRequest ? (
-              req ? (
-                <>
-                  <span>{fmt(req.start, zone, 'EEE, MMM d · h:mm a')}</span>
-                  <span>Request · {req.status}</span>
-                </>
-              ) : (
-                <span>Pick the request below</span>
-              )
-            ) : e.category === 'New Meeting Request' ? (
-              dupes.length ? (
-                dupes.map((d) => (
-                  <span key={d.item.id}>
-                    {d.kind === 'meeting' ? 'Meeting' : 'Request'} · {fmt(d.item.start, zone, 'EEE h:mm a')}
-                  </span>
-                ))
-              ) : (
-                <span>No meeting yet</span>
-              )
-            ) : current.length ? (
-              current.slice(0, 3).map((a) => (
-                <span key={a.id}>
-                  {fmt(a.start, zone, 'EEE h:mm a')} – {fmt(a.end, zone, 'h:mm a')}
+        <div className="dc-suggest">
+          <div className="dc-suggest-head">
+            <Sparkles size={14} /> Corda suggests
+          </div>
+          <div className="dc-change">
+            <span className="what">{change.what}</span>
+            {change.when && <span className="when">{change.when}</span>}
+            {change.sub && <span className="sub">{change.sub}</span>}
+          </div>
+          {okChips.length > 0 && (
+            <div className="dc-checks">
+              {okChips.map((c) => (
+                <span key={c}>
+                  <Check size={13} strokeWidth={2.6} /> {c}
                 </span>
-              ))
-            ) : (
-              <span>No availability yet</span>
-            )}
-          </div>
-          <ArrowRight className="dc-arrow" size={18} aria-hidden="true" />
-          <div className="dc-after">
-            <span className="dc-label">After you approve</span>
-            {op === 'cancel' ? (
-              <>
-                <strong>{cancelRequest ? 'Request withdrawn' : 'Meeting cancelled'}</strong>
-                <span>The slot opens up again</span>
-              </>
-            ) : op === 'update' ? (
-              <>
-                <strong>{e.attendees} attendees</strong>
-                <span>Room re-checked for the new headcount</span>
-              </>
-            ) : op === 'confirm' ? (
-              <>
-                <strong>Confirmed meeting</strong>
-                <span>{req ? fmt(req.start, zone, 'EEE, MMM d · h:mm a') : '—'}</span>
-              </>
-            ) : newWindows.length ? (
-              newWindows.map((w, i) => <strong key={i}>{offered(w)}</strong>)
-            ) : blockedWindows.length ? null : (
-              <span>No exact time in the email</span>
-            )}
-            {e.category === 'New Meeting Request' && newWindows.length > 0 && (
-              <span>
-                {e.flexible
-                  ? `${e.durationMinutes || 30} min, placed in the first open slot`
-                  : e.durationMinutes
-                    ? `${e.durationMinutes} min`
-                    : `${Math.round((+new Date(newWindows[0].end) - +new Date(newWindows[0].start)) / 60000)} min${newWindows[0].source === 'email' && !/\d\s*[-–]\s*\d/.test(newWindows[0].evidence) ? ' (default slot)' : ''}`}
-                {e.attendees ? ` · ${e.attendees} attendees` : ''} · requested by {asker}
-              </span>
-            )}
-            {blockedWindows.map((w, i) => (
-              <strong key={`b${i}`} className="dc-blocked">
-                Not available {windowLabel(w, zone)}
-              </strong>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -514,9 +502,6 @@ export function EmailDecision({
           ))}
         </div>
       )}
-      {!escalation && !done && check && !check.hard.length && !check.soft.length && op === 'reschedule' && newWindows.length > 0 && (
-        <p className="dc-why ok">The new time is free for both sides and inside {issuer}’s availability.</p>
-      )}
 
       {e.vague.length > 0 && !escalation && (
         <div className="dc-note">
@@ -529,23 +514,39 @@ export function EmailDecision({
 
       {(needsMeeting && !cancelRequest) && !escalation && (
         <div className="dc-pick-block">
-          <label className="dc-pick">
-            <span>Meeting</span>
-            <select value={meetingId} onChange={(ev) => setMeetingId(ev.target.value)} disabled={done}>
-              <option value="">{meetingPick.candidates.length ? 'Choose the meeting…' : 'No matching meeting'}</option>
-              {meetingPick.candidates.map((c) => (
-                <option key={c.item.id} value={c.item.id}>
-                  {n.issuer(c.item.issuerId)} × {n.investor(c.item.investorId)} · {fmt(c.item.start, zone)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <p className={`dc-why ${meetingPick.preselectId ? 'ok' : ''}`}>{meetingPick.why}</p>
-          {meetingId && (
-            <ul className="dc-reasons">
-              {meetingPick.candidates.find((c) => c.item.id === meetingId)?.reasons.map((r) => <li key={r}>{r}</li>)}
-            </ul>
+          {meeting && !pickOpen && meetingPick.candidates.length <= 1 ? null : meeting && !pickOpen ? (
+            <div className="dc-matched">
+              <span className="dc-label">Meeting</span>
+              <span title={meetingPick.candidates.find((c) => c.item.id === meetingId)?.reasons.join(' · ')}>
+                {n.issuer(meeting.issuerId)} × {n.investor(meeting.investorId)} · {D(meeting.start)}
+              </span>
+              {!done && meetingPick.candidates.length > 1 && (
+                <button className="text-button" onClick={() => setPickOpen(true)}>
+                  Change
+                </button>
+              )}
+            </div>
+          ) : (
+            <label className="dc-pick">
+              <span>Meeting</span>
+              <SelectMenu
+                ariaLabel="Meeting"
+                value={meetingId}
+                disabled={done}
+                placeholder={meetingPick.candidates.length ? 'Choose the meeting' : 'No matching meeting'}
+                onChange={(v) => {
+                  setMeetingId(v);
+                  setPickOpen(false);
+                }}
+                options={meetingPick.candidates.map((c) => ({
+                  value: c.item.id,
+                  label: `${n.issuer(c.item.issuerId)} × ${n.investor(c.item.investorId)} · ${D(c.item.start)}`,
+                  hint: c.reasons.join(' · '),
+                }))}
+              />
+            </label>
           )}
+          {!meeting && <p className="dc-why">{meetingPick.why}</p>}
           {check?.protected && ['cancel', 'reschedule'].includes(op) && (
             <div className="hold-banner">
               <strong>Protected meeting</strong>
@@ -559,16 +560,16 @@ export function EmailDecision({
         <div className="dc-pick-block">
           <label className="dc-pick">
             <span>Request</span>
-            <select value={requestId} onChange={(ev) => setRequestId(ev.target.value)} disabled={done}>
-              <option value="">{requestPick.candidates.length ? 'Choose the request…' : 'No matching request'}</option>
-              {requestPick.candidates.map((c) => (
-                <option key={c.item.id} value={c.item.id}>
-                  {n.investor(c.item.investorId)} · {fmt(c.item.start, zone)}
-                </option>
-              ))}
-            </select>
+            <SelectMenu
+              ariaLabel="Request"
+              value={requestId}
+              disabled={done}
+              placeholder={requestPick.candidates.length ? 'Choose the request' : 'No matching request'}
+              onChange={setRequestId}
+              options={requestPick.candidates.map((c) => ({ value: c.item.id, label: `${n.investor(c.item.investorId)} · ${D(c.item.start)}` }))}
+            />
           </label>
-          <p className={`dc-why ${requestPick.preselectId ? 'ok' : ''}`}>{requestPick.why}</p>
+          {!req && <p className="dc-why">{requestPick.why}</p>}
         </div>
       )}
 
@@ -624,6 +625,7 @@ export function EmailDecision({
       )}
 
       <div className="dc-quote">
+        <span className="dc-label">From the email</span>
         <p>“{quote.length > 220 ? `${quote.slice(0, 220)}…` : quote}”</p>
         <button className="dc-link" onClick={() => setShowEmail(!showEmail)}>
           {showEmail ? 'Hide original email' : 'Show original email'} <ChevronDown size={13} />
@@ -856,39 +858,34 @@ export function RequestDecision({
   }
 
   return (
-    <section className="decision-card" aria-label="Decision">
+    <section className="decision-card email-dc" aria-label="Decision">
       <span className="dc-meta">
         Meeting request · from {n.user(r.salespersonId)} · {c.name}
       </span>
       <h2>
         {investor} wants to meet {issuer}
       </h2>
-      <div className="dc-diff">
-        <div className="dc-before">
-          <span className="dc-label">Requested</span>
-          {conflict ? (
-            <s>{fmt(r.start, c.timezone, 'EEE, MMM d · h:mm a')}</s>
-          ) : (
-            <span>{fmt(r.start, c.timezone, 'EEE, MMM d · h:mm a')}</span>
-          )}
-          <span>
-            {r.duration} min · {conflict ? 'that time is taken' : 'open on both calendars'}
+      <div className="dc-suggest">
+        <div className="dc-suggest-head">
+          <Sparkles size={14} /> {conflict ? 'That time does not work' : 'Corda suggests'}
+        </div>
+        <div className="dc-change">
+          <span className="what">
+            {conflict ? `${investor} × ${issuer}` : `Confirm ${investor} × ${issuer}`}
+          </span>
+          <span className="when">{conflict ? <s>{fmt(r.start, c.timezone, 'MMM d · h:mm a')}</s> : fmt(r.start, c.timezone, 'MMM d · h:mm a')}</span>
+          <span className="sub">
+            {r.duration} min · asked by {n.user(r.salespersonId)}
+            {conflict ? ' · pick an open time below, or tell sales it does not work' : ''}
           </span>
         </div>
-        <ArrowRight className="dc-arrow" size={18} aria-hidden="true" />
-        <div className="dc-after">
-          <span className="dc-label">After you confirm</span>
-          {conflict ? (
-            <span>Pick an open time below</span>
-          ) : (
-            <>
-              <strong>Confirmed meeting</strong>
-              <span>
-                {fmt(r.start, c.timezone, 'EEE h:mm a')} – {fmt(r.end, c.timezone, 'h:mm a')}
-              </span>
-            </>
-          )}
-        </div>
+        {!conflict && (
+          <div className="dc-checks">
+            <span>
+              <Check size={13} strokeWidth={2.6} /> Open on both calendars
+            </span>
+          </div>
+        )}
       </div>
       {conflict && r.alternatives.length > 0 && (
         <div className="dc-slots">
@@ -910,7 +907,7 @@ export function RequestDecision({
                     )
                   }
                 >
-                  {fmt(s.start, c.timezone, 'EEE h:mm a')}
+                  {fmt(s.start, c.timezone, 'MMM d · h:mm a')}
                 </button>
               ))}
           </div>
@@ -940,7 +937,7 @@ export function RequestDecision({
                     checked={noPick.includes(sl.start)}
                     onChange={() => setNoPick(noPick.includes(sl.start) ? noPick.filter((x) => x !== sl.start) : [...noPick, sl.start].slice(-3))}
                   />
-                  {fmt(sl.start, c.timezone, 'EEE h:mm a')}
+                  {fmt(sl.start, c.timezone, 'MMM d · h:mm a')}
                 </label>
               ))}
             </div>

@@ -474,7 +474,7 @@ export function EmailReview({
             <>
               <span className={`v5-kind k-${item.type} big`}>{item.typeLabel}</span>
               <h2>{item.who}</h2>
-              <p className="what">{item.what}</p>
+              {item.what && <p className="what">{item.what}</p>}
             </>
           ) : (
             <h2>{headline || (asks.length > 1 ? `${company || 'The sender'} sent ${asks.length} changes` : asks[0]?.summary || email.subject)}</h2>
@@ -499,12 +499,8 @@ export function EmailReview({
     <Sheet
       open
       onOpenChange={(v) => !v && close()}
-      title={issuerName === 'Unassociated' ? 'Email review' : `${issuerName} · email review`}
-      description={
-        asks.length > 1
-          ? `${asks.length} asks in this email. Nothing updates until you approve each one.`
-          : 'Corda prepared the change. Nothing updates until you approve.'
-      }
+      title={issuerName === 'Unassociated' ? company || 'Email' : issuerName}
+      description={asks.length > 1 ? `${asks.length} changes in this email` : undefined}
     >
       {content}
     </Sheet>

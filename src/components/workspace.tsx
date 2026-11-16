@@ -1,4 +1,5 @@
 'use client';
+import { SelectMenu } from './ui/select-menu';
 import { canOperate, isDesk, roleLabel } from '@/lib/roles';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import type { AppState, EmailItem } from '@/lib/types';
@@ -548,26 +549,26 @@ export function Workspace() {
           ))}
         </nav>
         <div className="v5-side-gap" />
-        <label className="v5-event">
+        <div className="v5-event">
           <span>Event</span>
-          <select
-            aria-label="Active event"
+          <SelectMenu
+            variant="quiet"
+            ariaLabel="Active event"
             value={conferenceId}
-            onChange={(e) => {
-              setConferenceId(e.target.value);
+            onChange={(v) => {
+              setConferenceId(v);
               setSearch('');
             }}
-          >
-            {data.conferences.map((x) => (
-              <option value={x.id} key={x.id}>
-                {x.name}
-              </option>
-            ))}
-          </select>
+            options={data.conferences.map((x) => ({
+              value: x.id,
+              label: x.name,
+              hint: `${x.location} · ${fmt(`${x.startDate}T12:00:00Z`, 'UTC', 'MMM d')}–${fmt(`${x.endDate}T12:00:00Z`, 'UTC', 'MMM d')}`,
+            }))}
+          />
           <small>
             {c.location} · {fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'MMM d')}–{fmt(`${c.endDate}T12:00:00Z`, 'UTC', 'MMM d')}
           </small>
-        </label>
+        </div>
         <button className="v5-nav quiet" onClick={() => setAskOpen(true)}>
           <MessageCircleQuestion size={15} strokeWidth={1.8} />
           <span>Ask Corda</span>
@@ -1902,12 +1903,12 @@ function LoginScreen({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const roles = [
-    { role: 'COORDINATOR', title: 'Coordinator', what: 'Runs the conference: every request and change, rooms and coverage.' },
-    { role: 'BANKER', title: 'Banker', what: 'Your own schedule and your coverage preferences. View only.' },
+    { role: 'BANKER', title: 'Banker', what: 'Coordinators run every request, change, room and coverage. Other bankers see their schedule and set preferences.' },
     { role: 'MANAGER', title: 'Head of desk', what: 'How the desk is doing, what is stuck, and every request.' },
     { role: 'SALES', title: 'Sales', what: 'Your clients’ meetings, and one-line meeting requests.' },
   ] as const;
-  const groupOf = (p: { role: string; coordinator?: boolean }) => (p.role === 'BANKER' && p.coordinator ? 'COORDINATOR' : p.role);
+  // Coordinators are bankers: listed first in the Banker card, with a tag.
+  const groupOf = (p: { role: string }) => p.role;
   const initials = (name: string) =>
     name
       .split(' ')
@@ -1924,7 +1925,7 @@ function LoginScreen({
       {profiles.length ? (
         <div className="roles">
           {roles.map((r) => {
-            const people = profiles.filter((p) => groupOf(p) === r.role);
+            const people = profiles.filter((p) => groupOf(p) === r.role).sort((a, b) => Number(Boolean(b.coordinator)) - Number(Boolean(a.coordinator)));
             if (!people.length) return null;
             return (
               <section key={r.role} className="role">
@@ -1943,6 +1944,7 @@ function LoginScreen({
                     >
                       <span className="av">{initials(p.name)}</span>
                       <span className="nm">{p.name}</span>
+                      {p.coordinator && <span className="tag">Coordinator</span>}
                       {busy === p.id ? <Loader2 size={14} className="spin" /> : <ChevronRight size={14} />}
                     </button>
                   ))}

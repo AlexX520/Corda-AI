@@ -24,7 +24,7 @@ export const itemKindLabel: Record<ItemKind, string> = {
 export const urgentKind = (k: ItemKind) => k === 'escalation' || k === 'phishing';
 export type SortMode = 'meeting' | 'received' | 'type';
 /** One format for meeting times everywhere on the to-do list: "Mon Dec 7, 11:30 AM". */
-export const WHEN = 'EEE MMM d, h:mm a';
+export const WHEN = 'MMM d · h:mm a';
 export const meetingWhen = (iso: string, zone: string) => fmt(iso, zone, WHEN);
 /** Email times are always relative and labelled "Received …", so they never look like a meeting time. */
 export function receivedAgo(iso: string, now: string, zone: string) {
@@ -180,7 +180,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
       const other = (a.issuerId && senderCompany(e, data) === issuerName(a.issuerId) ? investorName(a.investorId) : issuerName(a.issuerId) || investorName(a.investorId)) || '';
       const w = a.windows?.find((v) => v.kind === 'availability');
       const at = w && withTime ? fmt(w.start, zone, WHEN) : '';
-      const span = w && withTime ? `${fmt(w.start, zone, 'EEE MMM d, h:mm')}–${fmt(w.end, zone, 'h:mm a')}` : '';
+      const span = w && withTime ? `${fmt(w.start, zone, 'MMM d · h:mm')}–${fmt(w.end, zone, 'h:mm a')}` : '';
       if (a.operation === 'reschedule') return `move ${other}${at ? ` to ${at}` : ''}`;
       if (a.operation === 'cancel') return `cancel ${other || 'a meeting'}`;
       if (a.operation === 'confirm') return `confirm ${other}${at ? ` at ${at}` : ''}`;
@@ -254,8 +254,8 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         whenText = `${fmt(booked, zone, WHEN)} → ${sameDay(booked, win.start) ? fmt(win.start, zone, 'h:mm a') : fmt(win.start, zone, WHEN)}`;
       else if (kind === 'availability' && win) {
         whenLabel = a0.operation === 'remove' || win.kind === 'unavailable' ? 'Not available' : 'Available';
-        whenText = `${fmt(win.start, zone, 'EEE MMM d, h:mm')}–${fmt(win.end, zone, 'h:mm a')}`;
-      } else if (!booked && win && a0.flexible) whenText = `${fmt(win.start, zone, 'EEE MMM d, h:mm')}–${fmt(win.end, zone, 'h:mm a')}`;
+        whenText = `${fmt(win.start, zone, 'MMM d · h:mm')}–${fmt(win.end, zone, 'h:mm a')}`;
+      } else if (!booked && win && a0.flexible) whenText = `${fmt(win.start, zone, 'MMM d · h:mm')}–${fmt(win.end, zone, 'h:mm a')}`;
     }
     items.push({
       id: `email:${e.id}`,

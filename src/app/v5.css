@@ -2244,3 +2244,194 @@ button.v5-kpi:hover {
   border-radius: 6px;
   padding: 2px 7px;
 }
+
+/* Styled dropdown (replaces native selects in the main screens). */
+.v5-select { position: relative; display: inline-block; min-width: 0; }
+.v5-select.field { display: block; width: 100%; }
+.v5-select .trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.v5-select.field .trigger:hover { border-color: #d4d4d8; }
+.v5-select.open .trigger { border-color: #a5b4fc; box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12); }
+.v5-select .trigger svg { color: var(--muted); flex: none; transition: transform 0.15s; }
+.v5-select.open .trigger svg { transform: rotate(180deg); }
+.v5-select .val { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v5-select .val.placeholder { color: var(--muted); }
+.v5-select.quiet .trigger { border: 0; background: transparent; padding: 4px 2px; font-weight: 600; font-size: 13.5px; }
+.v5-select.quiet.open .trigger { box-shadow: none; }
+.v5-select.disabled .trigger { opacity: 0.6; cursor: default; }
+.v5-select .menu {
+  position: absolute;
+  z-index: 60;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  max-width: min(460px, 92vw);
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06);
+}
+.v5-select.quiet .menu { left: auto; right: 0; min-width: 180px; }
+.v5-select .menu .group {
+  display: block;
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.v5-select .menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+.v5-select .menu button.act { background: #f4f4f5; }
+.v5-select .menu button.sel { font-weight: 600; }
+.v5-select .menu button svg { color: #4f46e5; flex: none; }
+.v5-select .menu button:disabled { color: var(--muted); cursor: default; }
+.v5-select .menu .txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.v5-select .menu .txt small { color: var(--muted); font-size: 12px; font-weight: 400; }
+
+/* Any native select left on a page: same font and a calmer look. */
+select {
+  font-family: inherit;
+}
+.v5-shell select:not([multiple]) {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2371717a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 32px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+/* Wider pages (Tao, Nov 16). */
+.v5-page { max-width: 1180px; padding-left: 40px; padding-right: 40px; }
+.v5-event .v5-select { display: block; width: 100%; }
+.v5-event .v5-select .trigger { padding: 2px 0; font-size: 13.5px; }
+.v5-event .v5-select .menu { left: 0; right: auto; bottom: calc(100% + 6px); top: auto; min-width: 240px; }
+
+/* To-do cards: one time line, no label words. */
+.v5-card-item .when {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.v5-card-item .when svg { color: var(--muted); flex: none; }
+.v5-card-item .when .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v5-card-item { flex-basis: 260px; }
+
+/* Decision: what Corda suggests in one box, the email below it, then the people who agreed. */
+.decision-card.email-dc > .dc-meta,
+.decision-card.email-dc > h2 { display: none; }
+.dc-suggest {
+  border: 1px solid #dfe3ff;
+  background: linear-gradient(180deg, #f7f8ff 0%, #ffffff 100%);
+  border-radius: 14px;
+  padding: 14px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dc-suggest-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #4f46e5;
+}
+.dc-change { display: flex; flex-direction: column; gap: 4px; }
+.dc-change .what { font-size: 17px; font-weight: 600; color: var(--ink); }
+.dc-change .when { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); font-variant-numeric: tabular-nums; }
+.dc-change .sub { font-size: 13.5px; color: var(--muted); }
+.dc-checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.dc-checks span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #166534;
+  background: #ecfdf3;
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.dc-matched {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 14px;
+  color: var(--ink);
+}
+.dc-matched .dc-label { min-width: 64px; }
+.dc-quote .dc-label { display: block; margin-bottom: 4px; }
+.consent-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.consent-row > span { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-right: 4px; }
+.consent-row label.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 12px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13.5px;
+}
+.consent-row label.check:has(input:checked) { border-color: #a5b4fc; background: #eef0ff; color: #3730a3; font-weight: 600; }
+.consent-row label.check input { accent-color: #4f46e5; }
+.v5-login .roles { grid-template-columns: 1.25fr 1fr 1fr; max-width: 1080px; }
+.v5-login .people button .tag {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #4338ca;
+  background: #eef0ff;
+  border-radius: 6px;
+  padding: 2px 7px;
+}
+.v5-login .people button .tag + svg { margin-left: 6px; }
+@media (max-width: 1100px) { .v5-login .roles { grid-template-columns: 1fr; } }

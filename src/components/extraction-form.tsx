@@ -1,4 +1,5 @@
 'use client';
+import { SelectMenu } from './ui/select-menu';
 import { useState } from 'react';
 import { eachDayOfInterval, format, parseISO } from 'date-fns';
 import { Plus, Trash2 } from 'lucide-react';
@@ -122,31 +123,29 @@ export function ExtractionForm({
       <div className="xf-grid">
         <label>
           <span>Kind of change</span>
-          <select
+          <SelectMenu
+            ariaLabel="Kind of change"
             value={value.category}
-            onChange={(e) => {
-              const category = e.target.value as Extraction['category'];
+            onChange={(v) => {
+              const category = v as Extraction['category'];
               set({ category, operation: operationFor(category, value.operation) });
             }}
-          >
-            {categories.map((c) => (
-              <option key={c} value={c}>
-                {categoryLabel[c]}
-              </option>
-            ))}
-          </select>
+            options={categories.map((c) => ({ value: c, label: categoryLabel[c] }))}
+          />
         </label>
         {value.category === 'Issuer Availability Update' ? (
           <label>
             <span>Operation</span>
-            <select
+            <SelectMenu
+              ariaLabel="Operation"
               value={value.operation}
-              onChange={(e) => set({ operation: e.target.value as Extraction['operation'] })}
-            >
-              <option value="add">Add these times</option>
-              <option value="replace">Replace all availability with these</option>
-              <option value="remove">Remove these times</option>
-            </select>
+              onChange={(v) => set({ operation: v as Extraction['operation'] })}
+              options={[
+                { value: 'add', label: 'Add these times' },
+                { value: 'replace', label: 'Replace all availability with these' },
+                { value: 'remove', label: 'Remove these times' },
+              ]}
+            />
           </label>
         ) : (
           <label>
@@ -170,35 +169,23 @@ export function ExtractionForm({
         )}
         <label>
           <span>Issuer</span>
-          <select
+          <SelectMenu
+            ariaLabel="Issuer"
             value={value.issuerId || ''}
-            onChange={(e) => set({ issuerId: e.target.value || null, meetingId: null })}
-          >
-            <option value="">— Pick the issuer —</option>
-            {[...data.issuers]
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-          </select>
+            placeholder="Pick the issuer"
+            onChange={(v) => set({ issuerId: v || null, meetingId: null })}
+            options={[...data.issuers].sort((a, b) => a.name.localeCompare(b.name)).map((i) => ({ value: i.id, label: i.name }))}
+          />
         </label>
         <label>
           <span>Investor</span>
-          <select
+          <SelectMenu
+            ariaLabel="Investor"
             value={value.investorId || ''}
-            onChange={(e) => set({ investorId: e.target.value || null, meetingId: null })}
-          >
-            <option value="">— None named —</option>
-            {[...data.investors]
-              .sort((a, b) => a.name.localeCompare(b.name))
-              .map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.name}
-                </option>
-              ))}
-          </select>
+            placeholder="None named"
+            onChange={(v) => set({ investorId: v || null, meetingId: null })}
+            options={[{ value: '', label: 'None named' }, ...[...data.investors].sort((a, b) => a.name.localeCompare(b.name)).map((i) => ({ value: i.id, label: i.name }))]}
+          />
         </label>
         {(value.category === 'New Meeting Request' ||
           value.category === 'Meeting Confirmation' ||
@@ -365,14 +352,16 @@ export function EventSelect({
   onChange: (id: string | null) => void;
 }) {
   return (
-    <select value={value || ''} onChange={(e) => onChange(e.target.value || null)}>
-      <option value="">— Which event? —</option>
-      {data.conferences.map((c) => (
-        <option key={c.id} value={c.id}>
-          {c.name} · {fmt(`${c.startDate}T12:00:00Z`, c.timezone, 'MMM d')}–
-          {fmt(`${c.endDate}T12:00:00Z`, c.timezone, 'MMM d')}
-        </option>
-      ))}
-    </select>
+    <SelectMenu
+      ariaLabel="Event"
+      value={value || ''}
+      placeholder="Which event?"
+      onChange={(v) => onChange(v || null)}
+      options={data.conferences.map((c) => ({
+        value: c.id,
+        label: c.name,
+        hint: `${fmt(`${c.startDate}T12:00:00Z`, c.timezone, 'MMM d')}–${fmt(`${c.endDate}T12:00:00Z`, c.timezone, 'MMM d')}`,
+      }))}
+    />
   );
 }

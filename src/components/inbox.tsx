@@ -1,4 +1,5 @@
 'use client';
+import { SelectMenu } from './ui/select-menu';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import type { AppState } from '@/lib/types';
@@ -149,14 +150,20 @@ export function Inbox({
   );
   const toolsEl = (
         <div className="tools">
-          <label className="v5-sort">
+          <div className="v5-sort">
             <span>Sort</span>
-            <select value={sort} onChange={(ev) => setSort(ev.target.value as SortMode)} aria-label="Sort the inbox">
-              <option value="meeting">Meeting time</option>
-              <option value="received">Newest email</option>
-              <option value="type">Type</option>
-            </select>
-          </label>
+            <SelectMenu
+              variant="quiet"
+              ariaLabel="Sort"
+              value={sort}
+              onChange={(v) => setSort(v as SortMode)}
+              options={[
+                { value: 'meeting', label: 'Meeting time' },
+                { value: 'received', label: 'Newest email' },
+                { value: 'type', label: 'Type' },
+              ]}
+            />
+          </div>
           {filter && (
             <button className="v5-chip" onClick={onClearFilter}>
               {filter.label} ✕
@@ -187,7 +194,19 @@ export function Inbox({
             key={email.id}
             inline
             headline={selected?.headline}
-            item={selected ? { who: selected.who, what: selected.kind === 'email' && selected.actions.length > 1 ? selected.sub || selected.what : selected.what, type: selected.type, typeLabel: `${itemKindLabel[selected.type]}${selected.more ? ` +${selected.more}` : ''}`, when: selected.whenText ? `${selected.whenLabel}: ${selected.whenText}` : '' } : undefined}
+            item={
+              selected
+                ? {
+                    who: selected.who,
+                    // A single change is spelled out in the "Corda suggests" box below, so the header
+                    // only names it for escalations, look-alike senders and multi-change emails.
+                    what: urgentKind(selected.type) ? selected.what : selected.actions.length > 1 ? selected.sub || selected.what : '',
+                    type: selected.type,
+                    typeLabel: `${itemKindLabel[selected.type]}${selected.more ? ` +${selected.more}` : ''}`,
+                    when: urgentKind(selected.type) ? selected.whenText : '',
+                  }
+                : undefined
+            }
             email={email}
             proposalId={proposalId}
             data={data}
@@ -203,9 +222,7 @@ export function Inbox({
               <div className="trust ok">Request from {data.users.find((u) => u.id === selected.request!.salespersonId)?.name || 'sales'}</div>
               <span className={`v5-kind k-${selected.type} big`}>{itemKindLabel[selected.type]}</span>
               <h2>{selected.who}</h2>
-              <p className="what">{selected.what}</p>
               <div className="meta">
-                {selected.whenText && <strong className="when">{selected.whenLabel}: {selected.whenText}</strong>}
                 <span>Received {receivedAgo(selected.at, data.now, zone)}</span>
               </div>
             </header>
@@ -266,10 +283,7 @@ export function Inbox({
                   <span className="what">{i.what}</span>
                   {i.whenText && (
                     <span className="when">
-                      <span className="lbl">
-                        <CalendarDays size={12} /> {i.whenLabel}
-                      </span>
-                      <span className="t">{i.whenText}</span>
+                      <CalendarDays size={13} /> <span className="t">{i.whenText}</span>
                     </span>
                   )}
                   {i.tone === 'amber' && i.sub && i.kind === 'email' && <span className="block">{i.sub}</span>}

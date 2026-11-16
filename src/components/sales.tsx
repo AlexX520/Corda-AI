@@ -401,13 +401,13 @@ function SalesAnswers({ data, conferenceId, run }: { data: AppState; conferenceI
           <div key={r.id} className="v5-card answer">
             <span className="v5-kind k-new">New request</span>
             <strong>
-              {n.investor(r.investorId)} × {n.issuer(r.issuerId)}: {fmt(r.start, c.timezone, 'EEE MMM d, h:mm a')} doesn’t work
+              {n.investor(r.investorId)} × {n.issuer(r.issuerId)}: {fmt(r.start, c.timezone, 'MMM d · h:mm a')} doesn’t work
             </strong>
             {why && <span className="muted">{why}</span>}
             <div className="row">
               {alts.map((x) => (
-                <button key={x} className="v5-btn primary" disabled={busy} onClick={() => go('alternative', { id: r.id, start: x }, `Asked for ${fmt(x, c.timezone, 'EEE h:mm a')} instead.`)}>
-                  {fmt(x, c.timezone, 'EEE h:mm a')}
+                <button key={x} className="v5-btn primary" disabled={busy} onClick={() => go('alternative', { id: r.id, start: x }, `Asked for ${fmt(x, c.timezone, 'MMM d · h:mm a')} instead.`)}>
+                  {fmt(x, c.timezone, 'MMM d · h:mm a')}
                 </button>
               ))}
               <button className="v5-btn quiet" disabled={busy} onClick={() => go('cancelRequest', { id: r.id }, 'Request withdrawn.')}>
