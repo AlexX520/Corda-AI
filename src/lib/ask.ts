@@ -9,7 +9,7 @@ import { llmChat } from './llm';
  * records it came from. It never changes anything; questions asking it to act get a pointer to
  * the normal flow instead.
  */
-export type AskSource = { kind: 'meeting' | 'history' | 'availability' | 'email'; id: string; label: string };
+export type AskSource = { kind: 'meeting' | 'history' | 'availability' | 'email' | 'request'; id: string; label: string };
 export type AskAnswer = { pattern: string; answer: string[]; sources: AskSource[]; llm?: boolean };
 
 type Meeting = {
@@ -36,8 +36,12 @@ export type AskSnapshot = {
   coverage: { meetingId: string; bankerId: string }[];
   rooms: { meetingId: string; cubeId: string }[];
   cubes: { id: string; name: string; capacity?: number }[];
-  emails: { id: string; subject: string; issuerId: string | null; investorId: string | null; status: string; receivedAt: Date }[];
+  emails: { id: string; subject: string; issuerId: string | null; investorId: string | null; status: string; receivedAt: Date; conferenceId?: string | null }[];
+  /** The event selected in the app; used when the question names none. */
+  conferenceId?: string;
   availability: { issuerId: string; conferenceId: string; start: Date; end: Date; kind: string }[];
+  /** Meeting requests from sales (desk: all; sales: their own). */
+  requests?: { id: string; conferenceId: string; issuerId: string; investorId: string; salespersonId: string; status: string; createdAt: Date }[];
   /** Sales: meetings they may see (their clients or their requests). Bankers: undefined (all). */
   visibleMeetingIds?: Set<string>;
 };
@@ -51,6 +55,8 @@ function conferenceFor(q: string, s: AskSnapshot) {
   const lower = q.toLowerCase();
   const named = s.conferences.find((c) => lower.includes(c.name.toLowerCase()) || lower.includes(c.name.toLowerCase().replace(/\s*\d{4}$/, '')));
   if (named) return named;
+  const selected = s.conferenceId && s.conferences.find((c) => c.id === s.conferenceId);
+  if (selected) return selected;
   const today = formatInTimeZone(s.now, s.conferences[0]?.timezone || 'America/New_York', 'yyyy-MM-dd');
   const sorted = [...s.conferences].sort((a, b) => a.startDate.localeCompare(b.startDate));
   return sorted.find((c) => c.startDate <= today && c.endDate >= today) || sorted.find((c) => c.endDate >= today) || sorted[sorted.length - 1];
@@ -129,7 +135,7 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
     );
   const cant = (view: string): AskAnswer => ({
     pattern: 'unsupported',
-    answer: ["I can't answer that yet.", `Try ${view}.`],
+    answer: ['Not covered by Ask Corda yet.', `Try ${view}.`],
     sources: [],
   });
 
@@ -173,6 +179,37 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
       pattern: 'emails',
       answer: list.length ? [`${list.length} ${openOnly ? 'open ' : ''}email${list.length === 1 ? '' : 's'} about ${who}:`, ...list.slice(0, 10).map((e) => `${formatInTimeZone(e.receivedAt, zone, 'EEE h:mm a')} — ${e.subject} (${e.status.toLowerCase()})`)] : [`No ${openOnly ? 'open ' : ''}emails about ${who}.`],
       sources: list.slice(0, 10).map((e) => ({ kind: 'email' as const, id: e.id, label: e.subject })),
+    };
+  }
+
+  // Open work: "how many requests today", "what's waiting for review", "any new requests?".
+  if (/\b(requests?|to[- ]?review|to[- ]?dos?|inbox|waiting (for|on) (me|review)|needs? (my )?review)\b/.test(lower) && !/\b(who|why)\b/.test(lower)) {
+    const today = dayOf(s.now);
+    const onlyNew = Boolean(day) || /\bnew\b/.test(lower);
+    const since = day || today;
+    const reqs = (s.requests || [])
+      .filter((r) => r.conferenceId === conf?.id && !['Confirmed', 'Cancelled'].includes(r.status))
+      .filter((r) => desk || r.salespersonId === s.user.id)
+      .filter((r) => (!named.issuerIds.length || named.issuerIds.includes(r.issuerId)) && (!named.investorIds.length || named.investorIds.includes(r.investorId)))
+      .sort((a, b) => +b.createdAt - +a.createdAt);
+    const mail = desk ? s.emails.filter((e) => ['Pending review', 'Clarification requested'].includes(e.status) && (!e.conferenceId || e.conferenceId === conf?.id)) : [];
+    const fresh = <T extends { createdAt?: Date; receivedAt?: Date }>(x: T) => dayOf((x.createdAt || x.receivedAt)!) === since;
+    const newReqs = reqs.filter(fresh), newMail = mail.filter(fresh);
+    const when = since === today ? 'today' : `on ${dayLabel(since)}`;
+    const answer: string[] = [];
+    if (onlyNew) answer.push(`${newReqs.length} new meeting request${newReqs.length === 1 ? '' : 's'} ${when}${desk ? `, ${newMail.length} new email${newMail.length === 1 ? '' : 's'} to review` : ''}.`);
+    answer.push(`${reqs.length} meeting request${reqs.length === 1 ? '' : 's'} open at ${conf?.name}${desk ? ` · ${mail.length} email${mail.length === 1 ? '' : 's'} waiting for review` : ''}.`);
+    const shownReqs = (onlyNew && newReqs.length ? newReqs : reqs).slice(0, 8);
+    for (const r of shownReqs)
+      answer.push(`${name(s.issuers, r.issuerId)} × ${name(s.investors, r.investorId)} · ${r.status.toLowerCase()} · from ${name(s.users, r.salespersonId)}, ${formatInTimeZone(r.createdAt, zone, 'MMM d')}`);
+    if (desk && mail.length) answer.push('Emails and requests to review are on Today.');
+    return {
+      pattern: 'open-work',
+      answer,
+      sources: [
+        ...shownReqs.map((r) => ({ kind: 'request' as const, id: r.id, label: `${name(s.issuers, r.issuerId)} × ${name(s.investors, r.investorId)} request` })),
+        ...(onlyNew ? newMail : mail).slice(0, 3).map((e) => ({ kind: 'email' as const, id: e.id, label: e.subject })),
+      ],
     };
   }
 
@@ -328,12 +365,21 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
       .filter((m) => dayOf(m.start) === target && (!mineOnly || isMine(m)) && inWindow(m))
       .filter((m) => (!named.issuerIds.length || named.issuerIds.includes(m.issuerId)) && (!named.investorIds.length || named.investorIds.includes(m.investorId)))
       .sort((a, b) => +a.start - +b.start);
+    // An empty day still points at the next meeting (e.g. the event is weeks away).
+    const next = list.length
+      ? undefined
+      : live
+          .filter((m) => m.conferenceId === conf?.id && +m.start > +s.now && (!mineOnly || isMine(m)))
+          .sort((a, b) => +a.start - +b.start)[0];
     return {
       pattern: 'my-day',
       answer: list.length
         ? [`${list.length} ${mineOnly ? '' : 'confirmed '}meeting${list.length === 1 ? '' : 's'} on ${dayLabel(target)}${mineOnly ? '' : ` at ${conf?.name}`}:`, ...list.map((m) => `${formatInTimeZone(m.start, zone, 'h:mm a')} ${name(s.issuers, m.issuerId)} × ${name(s.investors, m.investorId)}${roomOf(m) ? ` · ${roomOf(m)}` : ''}${bankersOf(m).length ? ` · ${bankersOf(m).map((b) => name(s.users, b)).join(', ')}` : ''}${+m.end <= +s.now ? ' (done)' : ''}`)]
-        : [`Nothing on ${mineOnly ? 'your schedule' : 'the schedule'} on ${dayLabel(target)}.`],
-      sources: list.map((m) => ({ kind: 'meeting', id: m.id, label: label(m) })),
+        : [
+            `Nothing on ${mineOnly ? 'your schedule' : 'the schedule'} on ${dayLabel(target)}.`,
+            ...(next ? [`Next${mineOnly ? ' for you' : ''}: ${label(next)}${roomOf(next) ? ` · ${roomOf(next)}` : ''}.`] : []),
+          ],
+      sources: (list.length ? list : next ? [next] : []).map((m) => ({ kind: 'meeting' as const, id: m.id, label: label(m) })),
     };
   }
 
@@ -343,8 +389,9 @@ export async function answerQuestion(question: string, s: AskSnapshot, deps: Ask
   return {
     pattern: 'help',
     answer: [
-      "I can't answer that yet. I can answer from the schedule and its history, for example:",
-      '“What’s my day tomorrow?” · “Is Maya covering anything tomorrow before noon?”',
+      'Not covered yet. Questions that work:',
+      '“How many requests came in today?” · “What’s my day tomorrow?”',
+      '“Is Maya covering anything tomorrow before noon?”',
       '“When was Ford Credit × PIMCO moved?” · “Who approved Ford Credit × BlackRock?”',
       '“What changed in the last 2 hours?” · “Which open emails are about Ford Credit?”',
       '“Free slots for Ally Financial and Vanguard on Tuesday” · “Which meetings tomorrow lack a banker or room?”',

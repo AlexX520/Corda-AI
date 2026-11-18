@@ -49,8 +49,8 @@ export function MySchedule({
         </span>
         <h1>My schedule</h1>
         <p>
-          {total ? `You cover ${total} meeting${total === 1 ? '' : 's'} at ${c.name}.` : 'No meetings assigned to you yet.'} The coordinators assign
-          meetings and rooms; this page updates when they do.
+          {total ? `You cover ${total} meeting${total === 1 ? '' : 's'} at ${c.name}.` : 'No meetings assigned to you yet.'} The manager assigns
+          coverage and rooms; this page updates when allocation is approved.
         </p>
       </header>
 
@@ -58,7 +58,7 @@ export function MySchedule({
         <button className="v5-card v5-prompt" onClick={onPreferences}>
           <Users size={18} />
           <span>
-            <strong>Tell the coordinators which meetings you want</strong>
+            <strong>Set the meetings you want to cover</strong>
             <span>Pick the issuers you must attend or want to prioritise. Allocation uses it.</span>
           </span>
           <span className="v5-btn primary">Set my preferences</span>
@@ -126,7 +126,7 @@ export function MyPreferences({ data, conferenceId, run }: { data: AppState; con
           .filter(([, l]) => l !== 'No Preference')
           .map(([issuerId, preferenceLevel]) => ({ issuerId, preferenceLevel, preferenceWeight: weight(preferenceLevel), isMandatory: preferenceLevel === 'Must Attend' })),
       },
-      submit ? 'Preferences sent to the coordinators.' : 'Saved as a draft.',
+      submit ? 'Preferences sent. Allocation will use them.' : 'Saved as a draft.',
     );
     setBusy(false);
   };
@@ -139,7 +139,7 @@ export function MyPreferences({ data, conferenceId, run }: { data: AppState; con
           {submitted ? ' · sent' : ''}
         </span>
         <h1>My preferences</h1>
-        <p>Which issuers you must attend, want to prioritise, or cannot cover. The coordinators run allocation with these.</p>
+        <p>Which issuers you must attend, want to prioritise, or cannot cover. The manager runs allocation with these.</p>
       </header>
       <div className="v5-card v5-prefs-form">
         {issuers.map((i) => {
@@ -170,7 +170,7 @@ export function MyPreferences({ data, conferenceId, run }: { data: AppState; con
           Save draft
         </Button>
         <Button disabled={busy || !chosen.length} onClick={() => save(true)}>
-          Send to coordinators
+          Submit preferences
         </Button>
       </div>
       <p className="v5-hint">

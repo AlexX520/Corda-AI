@@ -20,3 +20,18 @@ export const SELF_SERVICE_COMMANDS = new Set([
   'ping',
   'llmCheck',
 ]);
+/**
+ * Allocation (run it, approve it, edit its results, rooms, locks, coverage needs) is the manager's job
+ * (Tao, Nov 17, from the Stonefield review): bankers, coordinators included, view the result and set
+ * their own preferences.
+ */
+export const ALLOCATION_COMMANDS = new Set([
+  'optimizeConference',
+  'approveAllocationRun',
+  'updateAllocationProposal',
+  'saveMeetingCube',
+  'saveCoverageRequirement',
+  'toggleCoverageLock',
+  'toggleRoomLock',
+]);
+export const canAllocate = (user: { role: string } | null | undefined) => user?.role === 'MANAGER';

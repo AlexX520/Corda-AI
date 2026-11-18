@@ -16,7 +16,11 @@ type AllocationDiff = {
 
 const levels = ['Must Attend', 'High Priority', 'Medium Priority', 'Low Priority', 'No Preference', 'Cannot Attend'];
 
-export function ResourceAllocationView({ data, conferenceId, run }: { data: AppState; conferenceId: string; run: Run }) {
+/**
+ * Rooms and coverage. Only the manager runs, approves and edits allocation; every banker (coordinators
+ * included) sees the result, the rooms and the team's preferences, and sets their own preferences.
+ */
+export function ResourceAllocationView({ data, conferenceId, run, canAllocate = false }: { data: AppState; conferenceId: string; run: Run; canAllocate?: boolean }) {
   const [tab, setTab] = useState<'preferences' | 'allocation' | 'cubes' | 'team' | 'syndicate'>('allocation');
   const conference = data.conferences.find((c) => c.id === conferenceId)!;
   const n = names(data);
@@ -74,7 +78,9 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
   return <>
     <div className="page-heading">
       <div><h1>Rooms and coverage</h1><p>Who covers each meeting and which room it is in · {unresolved} items need review</p></div>
-      <Button onClick={() => run('optimizeConference', { conferenceId }, 'New allocation proposal generated.')}><Play size={16}/>Run allocation</Button>
+      {canAllocate
+        ? <Button onClick={() => run('optimizeConference', { conferenceId }, 'New allocation proposal generated.')}><Play size={16}/>Run allocation</Button>
+        : <span className="v5-viewonly">View only · allocation is run by the manager</span>}
     </div>
     <div className="stats-grid resource-stats">
       <ResourceStat label="Fully allocated" value={complete} icon={<CheckCircle2 size={17}/>} />
@@ -97,7 +103,7 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
           <div className="chips">{list.map((p) => <span key={p.id} className={`lvl ${p.preferenceLevel === 'Must Attend' ? 'must' : p.preferenceLevel === 'Cannot Attend' ? 'cannot' : ''}`}>{n.issuer(p.issuerId)} · {p.preferenceLevel}</span>)}</div>
         </div>) : <Empty title="No preferences yet" description="Bankers can email the conference mailbox, e.g. “Ford must attend, prioritise Ally”." />}
       </div>}
-      {tab === 'allocation' && <AllocationReview data={data} conferenceId={conferenceId} proposals={proposals} latestRun={latestRun} run={run}/>} 
+      {tab === 'allocation' && <AllocationReview data={data} conferenceId={conferenceId} proposals={proposals} latestRun={latestRun} run={run} canAllocate={canAllocate}/>} 
       {tab === 'preferences' && <div className="resource-split">
         <section><div className="resource-section-title"><div><h3>Issuer preferences</h3></div></div>
           <div className="preference-list">{data.issuers.map((issuer) => <div key={issuer.id}><span className="issuer-dot" style={{background: issuer.color}}/><strong>{issuer.name}</strong><select value={prefs[issuer.id] || 'No Preference'} onChange={(e) => setPrefs({...prefs, [issuer.id]: e.target.value})}>{levels.map((level) => <option key={level}>{level}</option>)}</select></div>)}</div>
@@ -113,9 +119,9 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
         <section><div className="resource-section-title"><div><h3>Rooms</h3></div></div>
           <div className="cube-grid">{cubes.map((cube) => { const used = data.cubeAssignments.filter((a) => a.cubeId === cube.id).length; return <div className="cube-card" key={cube.id}><div><Boxes size={18}/><Badge>{cube.status}</Badge></div><strong>{cube.name}</strong><span>{cube.location}</span><small>Capacity {cube.capacity} · {used} approved meetings</small></div>})}</div>
         </section>
-        <section><div className="resource-section-title"><div><h3>Add room</h3></div></div>
+        {canAllocate && <section><div className="resource-section-title"><div><h3>Add room</h3></div></div>
           <div className="form-grid"><Field label="Room name"><input value={cubeName} onChange={(e) => setCubeName(e.target.value)} placeholder="Room 6"/></Field><Field label="Capacity"><input type="number" min={1} value={cubeCapacity} onChange={(e) => setCubeCapacity(Number(e.target.value))}/></Field><Button onClick={addCube}>Add a room</Button></div>
-        </section>
+        </section>}
       </div>}
     </div>
   </>;
@@ -123,7 +129,7 @@ export function ResourceAllocationView({ data, conferenceId, run }: { data: AppS
 
 function ResourceStat({label, value, icon}: {label: string; value: number; icon: React.ReactNode}) { return <div className="stat-card resource-stat"><div><span>{label}</span>{icon}</div><strong>{value}</strong></div> }
 
-function AllocationReview({data, conferenceId, proposals, latestRun, run}: {data: AppState; conferenceId: string; proposals: AppState['allocationProposals']; latestRun: AppState['allocationRuns'][number] | undefined; run: Run}) {
+function AllocationReview({data, conferenceId, proposals, latestRun, run, canAllocate}: {data: AppState; conferenceId: string; proposals: AppState['allocationProposals']; latestRun: AppState['allocationRuns'][number] | undefined; run: Run; canAllocate: boolean}) {
   const n = names(data); const c = data.conferences.find((x) => x.id === conferenceId)!;
   const meetings = useMemo(() => new Map(data.meetings.map((m) => [m.id, m])), [data.meetings]);
   const [diff, setDiff] = useState<AllocationDiff | null>(null);
@@ -142,9 +148,9 @@ function AllocationReview({data, conferenceId, proposals, latestRun, run}: {data
     if (!latestRun) return;
     if (await run('approveAllocationRun', {id: latestRun.id}, 'Valid allocations approved; unresolved meetings remain in the action queue.')) setDiff(null);
   }
-  if (!latestRun) return <Empty title="No allocation proposal yet" description="Run allocation to match confirmed meetings with authorized bankers and available cubes."/>;
+  if (!latestRun) return <Empty title="No allocation yet" description={canAllocate ? 'Run allocation to match confirmed meetings with authorized bankers and available rooms.' : 'The manager runs allocation 2–3 days before the event, using everyone’s preferences.'}/>;
   return <>
-    <div className="allocation-banner"><div><strong>Proposal · {fmt(latestRun.runTimestamp, c.timezone)}</strong></div>{latestRun.runStatus === 'Proposed' && <Button onClick={openDiff}>Approve valid…</Button>}</div>
+    <div className="allocation-banner"><div><strong>Proposal · {fmt(latestRun.runTimestamp, c.timezone)}</strong></div>{canAllocate && latestRun.runStatus === 'Proposed' && <Button onClick={openDiff}>Approve valid…</Button>}</div>
     {diffError && <p className="error">{diffError}</p>}
     <Dialog open={Boolean(diff)} onOpenChange={(o) => { if (!o) setDiff(null); }} title="Approve valid allocations" description="These changes will be written to the master schedule. Locked assignments and manually set locations are kept.">
       {diff && <div className="alloc-diff">
@@ -159,17 +165,17 @@ function AllocationReview({data, conferenceId, proposals, latestRun, run}: {data
         <div className="resource-actions"><Button variant="outline" onClick={() => setDiff(null)}>Cancel</Button><Button onClick={approve}>Approve {diff.changes.length} change{diff.changes.length === 1 ? '' : 's'}</Button></div>
       </div>}
     </Dialog>
-    <div className="table-scroll"><table><thead><tr><th>Meeting</th><th>Time</th><th>Coverage</th><th>Room</th><th>Validation</th></tr></thead><tbody>{proposals.map((proposal) => { const meeting = meetings.get(proposal.meetingId); if (!meeting) return null; return <ProposalRow key={proposal.id} proposal={proposal} meeting={meeting} data={data} conferenceId={conferenceId} run={run}/>; })}</tbody></table></div>
-    <div className="table-footer"><span><Lock size={12}/> Approval writes the reviewed proposal to the master schedule.</span><span>Algorithm: deterministic constraints + weighted preferences</span></div>
+    <div className="table-scroll"><table><thead><tr><th>Meeting</th><th>Time</th><th>Coverage</th><th>Room</th><th>Validation</th></tr></thead><tbody>{proposals.map((proposal) => { const meeting = meetings.get(proposal.meetingId); if (!meeting) return null; return <ProposalRow key={proposal.id} proposal={proposal} meeting={meeting} data={data} conferenceId={conferenceId} run={run} canAllocate={canAllocate}/>; })}</tbody></table></div>
+    <div className="table-footer"><span><Lock size={12}/> {canAllocate ? 'Approval writes the reviewed proposal to the master schedule.' : 'The manager approves allocation; approved rooms and coverage show on Schedule.'}</span><span>Algorithm: deterministic constraints + weighted preferences</span></div>
   </>;
 }
 
-function ProposalRow({proposal, meeting, data, conferenceId, run}: {proposal: AppState['allocationProposals'][number]; meeting: AppState['meetings'][number]; data: AppState; conferenceId: string; run: Run}) {
+function ProposalRow({proposal, meeting, data, conferenceId, run, canAllocate}: {proposal: AppState['allocationProposals'][number]; meeting: AppState['meetings'][number]; data: AppState; conferenceId: string; run: Run; canAllocate: boolean}) {
   const n = names(data), c = data.conferences.find((x) => x.id === conferenceId)!;
   const [editing, setEditing] = useState(false), [bankerIds, setBankerIds] = useState<string[]>(proposal.proposedBankerIds), [cubeId, setCubeId] = useState(proposal.proposedCubeId || '');
   const authorized = data.coverageAuthorizations.filter((a) => a.conferenceId === conferenceId && a.issuerId === meeting.issuerId && a.isActive).map((a) => a.bankerId);
   const bankers = data.users.filter((u) => u.role === 'BANKER' && (authorized.includes(u.id) || data.issuers.find((i) => i.id === meeting.issuerId)?.ownerId === u.id));
   const cube = data.meetingCubes.find((x) => x.id === proposal.proposedCubeId);
   async function save() { if (await run('updateAllocationProposal', {id: proposal.id, bankerIds, cubeId: cubeId || null}, 'Allocation proposal updated.')) setEditing(false); }
-  return <tr><td><strong>{n.issuer(meeting.issuerId)}</strong><small>{n.investor(meeting.investorId)}</small></td><td>{fmt(meeting.start, c.timezone)}<small>to {fmt(meeting.end, c.timezone, 'h:mm a')}</small></td><td>{editing ? <select multiple className="allocation-multi" value={bankerIds} onChange={(e) => setBankerIds(Array.from(e.currentTarget.selectedOptions, (o) => o.value))}>{bankers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select> : <><strong>{proposal.proposedBankerIds.slice(0,2).map(n.user).join(' · ') || 'Unassigned'}</strong><small>{proposal.proposedBankerIds.length > 2 ? `+${proposal.proposedBankerIds.length - 2} additional` : proposal.manualOverride ? 'Manual override' : 'Optimized proposal'}</small></>}</td><td>{editing ? <select className="compact-select" value={cubeId} onChange={(e) => setCubeId(e.target.value)}><option value="">Unassigned</option>{data.meetingCubes.filter((x) => x.conferenceId === conferenceId).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.capacity}</option>)}</select> : <>{cube?.name || 'Unassigned'}<small>{cube?.capacity ? `Capacity ${cube.capacity}` : 'Needs resolution'}</small></>}</td><td>{proposal.stale ? <><Badge tone="amber">Stale</Badge><small className="allocation-explanation">The meeting changed after this run. Run allocation again.</small></> : <><Badge>{proposal.validationStatus}</Badge>{proposal.validationStatus !== 'Valid' && <small className="allocation-explanation">{proposal.explanation}</small>}</>}{proposal.validationStatus !== 'Valid' || editing ? <button className="text-button allocation-edit" onClick={editing ? save : () => setEditing(true)}>{editing ? 'Save assignment' : 'Edit manually'}</button> : null}</td></tr>;
+  return <tr><td><strong>{n.issuer(meeting.issuerId)}</strong><small>{n.investor(meeting.investorId)}</small></td><td>{fmt(meeting.start, c.timezone)}<small>to {fmt(meeting.end, c.timezone, 'h:mm a')}</small></td><td>{editing ? <select multiple className="allocation-multi" value={bankerIds} onChange={(e) => setBankerIds(Array.from(e.currentTarget.selectedOptions, (o) => o.value))}>{bankers.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select> : <><strong>{proposal.proposedBankerIds.slice(0,2).map(n.user).join(' · ') || 'Unassigned'}</strong><small>{proposal.proposedBankerIds.length > 2 ? `+${proposal.proposedBankerIds.length - 2} additional` : proposal.manualOverride ? 'Manual override' : 'Optimized proposal'}</small></>}</td><td>{editing ? <select className="compact-select" value={cubeId} onChange={(e) => setCubeId(e.target.value)}><option value="">Unassigned</option>{data.meetingCubes.filter((x) => x.conferenceId === conferenceId).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.capacity}</option>)}</select> : <>{cube?.name || 'Unassigned'}<small>{cube?.capacity ? `Capacity ${cube.capacity}` : 'Needs resolution'}</small></>}</td><td>{proposal.stale ? <><Badge tone="amber">Stale</Badge><small className="allocation-explanation">The meeting changed after this run. Run allocation again.</small></> : <><Badge>{proposal.validationStatus}</Badge>{proposal.validationStatus !== 'Valid' && <small className="allocation-explanation">{proposal.explanation}</small>}</>}{canAllocate && (proposal.validationStatus !== 'Valid' || editing) ? <button className="text-button allocation-edit" onClick={editing ? save : () => setEditing(true)}>{editing ? 'Save assignment' : 'Edit manually'}</button> : null}</td></tr>;
 }

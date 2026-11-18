@@ -93,7 +93,25 @@ test('round 3: scoped questions — emails, recent changes, person, double-booki
   assert.equal(d.pattern, 'double-booked');
   const u = await answerQuestion('Which investors have been moved more than twice this week?', base, deps);
   assert.equal(u.pattern, 'unsupported');
-  assert.match(u.answer[0], /can't answer that yet/);
+  assert.match(u.answer[0], /Not covered by Ask Corda yet/);
   const mine = await answerQuestion('What are my meetings today?', base, deps);
   assert.equal(mine.sources.length, 1, 'my = only meetings I cover or own');
+});
+
+test('open work: "how many requests today" counts open requests and emails waiting, never other data', async () => {
+  const withReqs = {
+    ...base,
+    requests: [
+      { id: 'r1', conferenceId: base.conferences[0].id, issuerId: 'ford', investorId: 'pimco', salespersonId: base.users[0].id, status: 'Pending review', createdAt: base.now },
+      { id: 'r2', conferenceId: base.conferences[0].id, issuerId: 'ford', investorId: 'pimco', salespersonId: base.users[0].id, status: 'Confirmed', createdAt: base.now },
+    ],
+  };
+  const deps = { history, historySince };
+  const a = await answerQuestion('how many request today', withReqs, deps);
+  assert.equal(a.pattern, 'open-work');
+  assert.equal(a.answer[0], '1 new meeting request today, 1 new email to review.');
+  assert.match(a.answer[1], /^1 meeting request open at /);
+  const w = await answerQuestion('What is waiting for review?', withReqs, deps);
+  assert.equal(w.pattern, 'open-work');
+  assert.match(w.answer[0], /1 email waiting for review/);
 });

@@ -718,7 +718,7 @@ export function Workspace() {
               desk={inboxEl('strip')}
             />
           )}
-          {page === 'ask' && <AskCorda data={data} onOpenMeeting={setMeetingId} />}
+          {page === 'ask' && <AskCorda data={data} conferenceId={conferenceId} onOpenMeeting={setMeetingId} />}
           {page === 'overview' && !banker && (
             <SalesHome
               data={data}
@@ -815,6 +815,7 @@ export function Workspace() {
               data={data}
               conferenceId={conferenceId}
               run={run}
+              canAllocate={manager}
             />
           )}
           {page === 'queue' && queueSection === 'drafts' && (
@@ -1067,7 +1068,7 @@ export function Workspace() {
       </Dialog>
       {askOpen && (
         <Sheet open onOpenChange={(v) => !v && setAskOpen(false)} title="Ask Corda" description="Read-only answers from the schedule and its history, with sources.">
-          <AskPanel data={data} compact onOpenMeeting={(id) => { setAskOpen(false); setMeetingId(id); }} />
+          <AskPanel data={data} compact conferenceId={conferenceId} onOpenMeeting={(id) => { setAskOpen(false); setMeetingId(id); }} />
         </Sheet>
       )}
       {drawerMeeting && (

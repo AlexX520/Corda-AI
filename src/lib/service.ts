@@ -1,4 +1,4 @@
-import { canOperate, isDesk, SELF_SERVICE_COMMANDS } from './roles';
+import { ALLOCATION_COMMANDS, canAllocate, canOperate, isDesk, SELF_SERVICE_COMMANDS } from './roles';
 import { Prisma, User } from '@prisma/client';
 import { z } from 'zod';
 import { addMinutes } from 'date-fns';
@@ -1092,6 +1092,8 @@ async function meetingCommand(user: User, type: string, input: unknown): Promise
 }
 export async function command(user: User, type: string, input: unknown): Promise<unknown> {
   // Bankers who are not coordinators only view the schedule and keep their own preferences.
+  if (ALLOCATION_COMMANDS.has(type) && !canAllocate(user))
+    throw new Error('Only the manager runs allocation. You can view the result and set your preferences.');
   if (user.role === 'BANKER' && !canOperate(user) && !SELF_SERVICE_COMMANDS.has(type))
     throw new Error('Only the conference coordinators can change the schedule. You can view it and set your preferences.');
   if (type === 'ingest') return ingestEmail(user, input);
@@ -2163,9 +2165,9 @@ export async function command(user: User, type: string, input: unknown): Promise
     }, { timeout: 30000, maxWait: 10000 });
   }
   if (type === 'ask') {
-    const p = z.object({ question: z.string().trim().min(2).max(500) }).parse(input);
+    const p = z.object({ question: z.string().trim().min(2).max(500), conferenceId: z.string().optional() }).parse(input);
     const clients = isDesk(user.role) ? [] : await clientIds(user);
-    const [conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, emailRows] = await Promise.all([
+    const [conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, emailRows, requestRows] = await Promise.all([
       db.conference.findMany(),
       db.issuer.findMany({ select: { id: true, name: true, ownerId: true } }),
       db.investor.findMany({ select: { id: true, name: true, coverageSalesId: true } }),
@@ -2177,9 +2179,13 @@ export async function command(user: User, type: string, input: unknown): Promise
       db.availability.findMany(),
       db.email.findMany({
         where: isDesk(user.role) ? { status: { not: 'Quarantined' } } : { OR: [{ sender: { equals: user.email, mode: 'insensitive' } }, { forwardedBy: { equals: user.email, mode: 'insensitive' } }, { cc: { has: user.email } }] },
-        select: { id: true, subject: true, issuerId: true, investorId: true, status: true, receivedAt: true },
+        select: { id: true, subject: true, issuerId: true, investorId: true, status: true, receivedAt: true, conferenceId: true },
         orderBy: { receivedAt: 'desc' },
         take: 300,
+      }),
+      db.meetingRequest.findMany({
+        where: isDesk(user.role) ? {} : { salespersonId: user.id },
+        select: { id: true, conferenceId: true, issuerId: true, investorId: true, salespersonId: true, status: true, createdAt: true },
       }),
     ]);
     const visibleMeetingIds =
@@ -2188,7 +2194,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         : new Set(meetings.filter((m) => clients.includes(m.investorId) || m.request?.salespersonId === user.id).map((m) => m.id));
     const base = await answerQuestion(
       p.question,
-      { now: now(), user, conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, emails: emailRows, visibleMeetingIds },
+      { now: now(), user, conferences, issuers, investors, users, meetings, coverage, rooms, cubes, availability, emails: emailRows, requests: requestRows, conferenceId: p.conferenceId, visibleMeetingIds },
       {
         historySince: async (since) => {
           const rows = await db.auditLog.findMany({
