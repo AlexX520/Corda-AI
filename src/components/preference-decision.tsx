@@ -1,4 +1,5 @@
 'use client';
+import { Select } from './ui/select-menu';
 import { useState } from 'react';
 import { Check, X } from 'lucide-react';
 import type { AppState } from '@/lib/types';
@@ -56,7 +57,7 @@ export function PreferenceDecision({
         {rows.map((r, i) => (
           <div key={r.issuerId} className="row">
             <strong>{issuerName(r.issuerId)}</strong>
-            <select
+            <Select
               value={r.level}
               disabled={done}
               aria-label={`Preference for ${issuerName(r.issuerId)}`}
@@ -65,7 +66,7 @@ export function PreferenceDecision({
               {LEVELS.map((l) => (
                 <option key={l}>{l}</option>
               ))}
-            </select>
+            </Select>
             <q>{r.evidence}</q>
             {!done && (
               <button className="v5-icon" aria-label={`Remove ${issuerName(r.issuerId)}`} onClick={() => setRows(rows.filter((_, j) => j !== i))}>

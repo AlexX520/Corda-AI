@@ -1,4 +1,5 @@
 'use client';
+import { Select, TimeSelect } from './ui/select-menu';
 import { canOperate, isDesk } from '@/lib/roles';
 import { useEffect, useMemo, useState } from 'react';
 import { eachDayOfInterval, format, parseISO } from 'date-fns';
@@ -429,7 +430,7 @@ export function MeetingForm({
       {!meeting && (
         <div className="two-cols">
           <Field label="Issuer">
-            <select value={issuerId} onChange={(e) => setIssuerId(e.target.value)}>
+            <Select value={issuerId} onChange={(e) => setIssuerId(e.target.value)}>
               <option value="">— Pick —</option>
               {[...data.issuers]
                 .sort((a, b) => a.name.localeCompare(b.name))
@@ -438,10 +439,10 @@ export function MeetingForm({
                     {i.name}
                   </option>
                 ))}
-            </select>
+            </Select>
           </Field>
           <Field label="Investor">
-            <select value={investorId} onChange={(e) => setInvestorId(e.target.value)}>
+            <Select value={investorId} onChange={(e) => setInvestorId(e.target.value)}>
               <option value="">— Pick —</option>
               {[...data.investors]
                 .sort((a, b) => a.name.localeCompare(b.name))
@@ -450,43 +451,43 @@ export function MeetingForm({
                     {i.name}
                   </option>
                 ))}
-            </select>
+            </Select>
           </Field>
         </div>
       )}
       <div className="three-cols">
         <Field label="Day">
-          <select value={date} onChange={(e) => setDate(e.target.value)}>
+          <Select value={date} onChange={(e) => setDate(e.target.value)}>
             {days.map((d) => (
               <option key={d} value={d}>
                 {format(parseISO(d), 'EEE, MMM d')}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label="Start" hint={zone.replace('_', ' ')}>
-          <input type="time" step={300} value={time} onChange={(e) => setTime(e.target.value)} />
+          <TimeSelect step={5} value={time} onChange={setTime} ariaLabel="Start" />
         </Field>
         <Field label="Length">
-          <select value={duration} onChange={(e) => setDuration(+e.target.value)}>
+          <Select value={duration} onChange={(e) => setDuration(+e.target.value)}>
             {[15, 30, 45, 60, 90, 120].map((d) => (
               <option key={d} value={d}>
                 {d} min
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
       </div>
       <div className="two-cols">
         <Field label="Meeting room">
-          <select value={cubeId} onChange={(e) => setCubeId(e.target.value)}>
+          <Select value={cubeId} onChange={(e) => setCubeId(e.target.value)}>
             <option value="">No cube</option>
             {cubes.map((x) => (
               <option key={x.id} value={x.id}>
                 {x.name} · seats {x.capacity}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label="Attendees">
           <input

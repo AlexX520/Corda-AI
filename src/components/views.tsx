@@ -1,4 +1,5 @@
 'use client';
+import { Select } from './ui/select-menu';
 import { canOperate, isDesk } from '@/lib/roles';
 import { useEffect, useRef, useState } from 'react';
 import { formatInTimeZone } from 'date-fns-tz';
@@ -365,10 +366,10 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
             setResult(null);
           }}
         />
-        <select aria-label="Priority" className="compact-select" value={priority} onChange={(e) => setPriority(e.target.value as 'Normal' | 'High')}>
+        <Select aria-label="Priority" className="compact-select" value={priority} onChange={(e) => setPriority(e.target.value as 'Normal' | 'High')}>
           <option>Normal</option>
           <option>High</option>
-        </select>
+        </Select>
         <Button size="sm" disabled={busy || text.trim().length < 3} type="submit">
           {sendable.length === 1 && result?.options.length === 1 ? (
             <>
@@ -588,7 +589,7 @@ export function RequestDetail({
         )}
         <div className="divider-label">communication</div>
         <Field label="Draft purpose">
-          <select value={purpose} onChange={(e) => setPurpose(e.target.value)}>
+          <Select value={purpose} onChange={(e) => setPurpose(e.target.value)}>
             {[
               'Availability inquiry',
               'Alternative time proposal',
@@ -598,7 +599,7 @@ export function RequestDetail({
             ].map((p) => (
               <option key={p}>{p}</option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Button
           disabled={busy}
@@ -670,9 +671,9 @@ export function AvailabilityView({
           <p>{issuers.length} issuers</p>
         </div>
         <div className="availability-heading-actions">
-          <select value={selected} onChange={(event) => setSelected(event.target.value)} aria-label="Select issuer">
+          <Select value={selected} onChange={(event) => setSelected(event.target.value)} aria-label="Select issuer">
             {issuers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
-          </select>
+          </Select>
           {canOperate(data.user) && (
             <Button onClick={() => setEditing(true)}><Plus size={16} />Manage</Button>
           )}
@@ -931,7 +932,7 @@ export function PlannerView({
               ))}
             </div>
             {scope !== 'master' && (
-              <select
+              <Select
                 className="compact-select"
                 aria-label="Show schedule for"
                 value={audience}
@@ -942,7 +943,7 @@ export function PlannerView({
                     {i.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             )}
           </div>
           <div className="view-toggle">

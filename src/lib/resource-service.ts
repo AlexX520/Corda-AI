@@ -15,6 +15,7 @@ import {
 import { overlaps } from './scheduling';
 import { formatInTimeZone } from 'date-fns-tz';
 import { now } from './clock';
+import { preferenceLimitError } from './preference-limits';
 
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -163,6 +164,8 @@ export async function handleResourceCommand(user: User, type: string, input: unk
         ),
       })
       .parse(input);
+    const capError = preferenceLimitError(p.items.filter((x) => !x.meetingId).map((x) => x.preferenceLevel));
+    if (capError) throw new Error(capError);
     const conference = await db.conference.findUniqueOrThrow({ where: { id: p.conferenceId } });
     if (p.submit && conference.preferenceDeadline && conference.preferenceDeadline < new Date())
       throw new Error('The preference submission deadline has passed. Contact the conference lead.');

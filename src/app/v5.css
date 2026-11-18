@@ -2666,3 +2666,27 @@ html { scroll-behavior: smooth; }
 .ask-examples button { background: #fff; border-color: var(--line); color: var(--ink); }
 .ask-examples button:hover { border-color: #c4c4bf; }
 .dc-trail { list-style: none; margin: 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+/* Native <select>s replaced by the styled menu (Select wrapper). */
+.v5-select-wrap { position: relative; display: block; min-width: 0; }
+.v5-select-wrap.compact, .v5-select-wrap.inline { display: inline-block; width: auto; flex: none; }
+.v5-select-wrap.compact .v5-select.field { width: auto; }
+.v5-select.compact .trigger { padding: 6px 10px; font-size: 13px; min-height: 34px; }
+.v5-select-required { position: absolute; left: 50%; bottom: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; border: 0; padding: 0; }
+.v5-select.open .trigger { border-color: #111111; box-shadow: 0 0 0 1px #111111; }
+.allocation-multi { display: flex; flex-wrap: wrap; gap: 6px; max-width: 320px; }
+.allocation-multi button { font-size: 12.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink); }
+.allocation-multi button.on { background: #111111; border-color: #111111; color: #fff; }
+.resource-actions .warn, .v5-portal-actions .warn { color: #b3410a; font-size: 13px; margin-right: auto; }
+.resource-actions .muted { color: var(--muted); font-size: 13px; margin-right: auto; }
+.v5-prefs-form .levels button:disabled { opacity: 0.35; cursor: not-allowed; }
+.allocation-multi { min-width: 0; min-height: 0; border: 0; padding: 0; background: none; }
+
+/* Quick request: the priority menu must not be clipped by the rounded card. */
+.v5-quick:has(.v5-select.open) { overflow: visible; }
+/* Sidebar profile: the whole name block opens the profile menu (demo), menu opens upwards. */
+.v5-profile .v5-select-wrap { position: absolute; inset: 0 40px 0 0; }
+.v5-profile .v5-select, .v5-profile .v5-select .trigger { width: 100%; height: 100%; }
+.v5-profile .v5-select .trigger { opacity: 0; }
+.v5-profile .v5-select .menu { top: auto; bottom: calc(100% + 6px); left: 0; min-width: 240px; }
+.v5-profile { position: relative; }
+.v5-profile .v5-select .menu { min-width: 0; width: calc(100% + 40px); max-width: none; }

@@ -1,4 +1,5 @@
 'use client';
+import { DaySelect, Select, TimeSelect } from './ui/select-menu';
 import { isDesk } from '@/lib/roles';
 import { useState } from 'react';
 import { addMinutes } from 'date-fns';
@@ -87,7 +88,7 @@ export function RequestForm({
         }}
       >
         <Field label="Conference">
-          <select
+          <Select
             value={conference}
             onChange={(e) => {
               setConference(e.target.value);
@@ -99,61 +100,54 @@ export function RequestForm({
                 {c.name}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <div className="two-cols">
           <Field label="Issuer (company presenting)">
-            <select required value={issuer} onChange={(e) => setIssuer(e.target.value)}>
+            <Select required value={issuer} onChange={(e) => setIssuer(e.target.value)}>
               <option value="">— Pick the issuer —</option>
               {issuers.map((i) => (
                 <option key={i.id} value={i.id}>
                   {i.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
           <Field label="Investor (account asking to meet)">
-            <select required value={investor} onChange={(e) => setInvestor(e.target.value)}>
+            <Select required value={investor} onChange={(e) => setInvestor(e.target.value)}>
               <option value="">— Pick the investor —</option>
               {investors.map((i) => (
                 <option key={i.id} value={i.id}>
                   {investorLabel(i.name)}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
         </div>
         <div className="two-cols">
           <Field label="Preferred date">
-            <input
-              type="date"
-              required
-              min={c.startDate}
-              max={c.endDate}
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-            />
+            <DaySelect required startDate={c.startDate} endDate={c.endDate} value={date} onChange={setDate} ariaLabel="Preferred date" />
           </Field>
           <Field label="Start time" hint={c.timezone}>
-            <input type="time" required value={time} onChange={(e) => setTime(e.target.value)} />
+            <TimeSelect required value={time} onChange={setTime} ariaLabel="Start time" />
           </Field>
         </div>
         <div className="two-cols">
           <Field label="Duration">
-            <select value={duration} onChange={(e) => setDuration(+e.target.value)}>
+            <Select value={duration} onChange={(e) => setDuration(+e.target.value)}>
               {[15, 30, 45, 60, 90].map((d) => (
                 <option key={d} value={d}>
                   {d} minutes
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>
           <Field label="Priority">
-            <select value={priority} onChange={(e) => setPriority(e.target.value)}>
+            <Select value={priority} onChange={(e) => setPriority(e.target.value)}>
               {['Normal', 'High', 'Urgent'].map((x) => (
                 <option key={x}>{x}</option>
               ))}
-            </select>
+            </Select>
           </Field>
         </div>
         <Field label="Attendees (investor side)" hint="Optional · used to pick a room that fits">
@@ -176,7 +170,7 @@ export function RequestForm({
         </Field>
         {isBanker ? (
           <Field label="Requested by" hint="The salesperson who owns the client relationship, or you.">
-            <select value={requester} onChange={(e) => setRequester(e.target.value)}>
+            <Select value={requester} onChange={(e) => setRequester(e.target.value)}>
               <option value={data.user.id}>{data.user.name} (banker)</option>
               {data.users
                 .filter((u) => u.role === 'SALES')
@@ -185,7 +179,7 @@ export function RequestForm({
                     {u.name} (sales)
                   </option>
                 ))}
-            </select>
+            </Select>
           </Field>
         ) : null}
         <div className="notice">
@@ -442,47 +436,40 @@ export function AvailabilityForm({
         }}
       >
         <Field label="Issuer">
-          <select value={issuer} onChange={(e) => setIssuer(e.target.value)}>
+          <Select value={issuer} onChange={(e) => setIssuer(e.target.value)}>
             {data.issuers.map((i) => (
               <option key={i.id} value={i.id}>
                 {i.name}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <div className="two-cols">
           <Field label="Operation">
-            <select value={operation} onChange={(e) => setOperation(e.target.value)}>
+            <Select value={operation} onChange={(e) => setOperation(e.target.value)}>
               <option value="add">Add (extends overlapping windows)</option>
               <option value="narrow">Narrow this day to this window</option>
               <option value="remove">Remove availability in interval</option>
               <option value="replace">Replace all approved availability</option>
-            </select>
+            </Select>
           </Field>
           <Field label="Type">
-            <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            <Select value={kind} onChange={(e) => setKind(e.target.value)}>
               {['Available', 'Blocked', 'Hold'].map((x) => (
                 <option key={x}>{x}</option>
               ))}
-            </select>
+            </Select>
           </Field>
         </div>
         <Field label="Date">
-          <input
-            type="date"
-            required
-            min={c.startDate}
-            max={c.endDate}
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
+          <DaySelect required startDate={c.startDate} endDate={c.endDate} value={date} onChange={setDate} ariaLabel="Date" />
         </Field>
         <div className="two-cols">
           <Field label="From">
-            <input type="time" required value={start} onChange={(e) => setStart(e.target.value)} />
+            <TimeSelect required value={start} onChange={setStart} ariaLabel="From" />
           </Field>
           <Field label="Until">
-            <input type="time" required value={end} onChange={(e) => setEnd(e.target.value)} />
+            <TimeSelect required value={end} onChange={setEnd} ariaLabel="Until" />
           </Field>
         </div>
         {operation === 'replace' && (

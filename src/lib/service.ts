@@ -54,6 +54,7 @@ import { mockExtractAsks } from './rule-parser';
 import { now } from './clock';
 import { seedDemo } from './demo-seed';
 import { getResourceState, handleResourceCommand } from './resource-service';
+import { preferenceLimitError } from './preference-limits';
 import { prefWeight } from './preferences';
 import { compareSchedules, parseCsv, readTable } from './syndicate';
 type Tx = Prisma.TransactionClient;
@@ -2384,6 +2385,9 @@ export async function command(user: User, type: string, input: unknown): Promise
       if (!owner || !isDesk(owner.role)) throw new Error('This email is not from a banker on the team.');
       const before = await tx.bankerPreference.findMany({ where: { conferenceId: e.conferenceId, bankerId: owner.id, meetingId: null } });
       const ids = p.items.map((x) => x.issuerId);
+      // Same caps as the form: the levels kept from before plus the ones from this email.
+      const capError = preferenceLimitError([...before.filter((b) => !ids.includes(b.issuerId)).map((b) => b.preferenceLevel), ...p.items.map((x) => x.level)]);
+      if (capError) throw new Error(`${owner.name}: ${capError}`);
       await tx.bankerPreference.deleteMany({ where: { conferenceId: e.conferenceId, bankerId: owner.id, meetingId: null, issuerId: { in: ids } } });
       await tx.bankerPreference.createMany({
         data: p.items.map((x) => ({

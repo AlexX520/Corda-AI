@@ -1,4 +1,5 @@
 'use client';
+import { Select } from './ui/select-menu';
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import type { AppState } from '@/lib/types';
@@ -46,7 +47,7 @@ export function SenderContacts({ data, run }: { data: AppState; run: Run }) {
       )}
       <div className="add">
         <input aria-label="Sender address" placeholder="name@school.edu" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <select aria-label="Company" value={pick} onChange={(e) => setPick(e.target.value)}>
+        <Select aria-label="Company" value={pick} onChange={(e) => setPick(e.target.value)}>
           <optgroup label="Issuers">
             {companies.filter((c) => c.kind === 'issuer').map((c) => (
               <option key={c.id} value={`issuer:${c.id}`}>{c.name}</option>
@@ -57,7 +58,7 @@ export function SenderContacts({ data, run }: { data: AppState; run: Run }) {
               <option key={c.id} value={`investor:${c.id}`}>{c.name}</option>
             ))}
           </optgroup>
-        </select>
+        </Select>
         <Button disabled={busy || !/.+@.+\..+/.test(email)} onClick={() => save(pick.split(':')[0], pick.split(':')[1], email.trim())}>
           Add
         </Button>

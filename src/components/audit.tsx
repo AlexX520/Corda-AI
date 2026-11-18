@@ -1,4 +1,5 @@
 'use client';
+import { Select } from './ui/select-menu';
 import { useEffect, useMemo, useState } from 'react';
 import { Download, Search } from 'lucide-react';
 import type { AppState } from '@/lib/types';
@@ -96,18 +97,18 @@ export function AuditTrail({
             <Search size={14} />
             <input aria-label="Search audit trail" placeholder="Search actions, reasons, issuers, investors, subjects…" value={q} onChange={(e) => setQ(e.target.value)} />
           </label>
-          <select aria-label="Actor" value={actor} onChange={(e) => setActor(e.target.value)}>
+          <Select aria-label="Actor" value={actor} onChange={(e) => setActor(e.target.value)}>
             <option value="">All people</option>
             {result?.actors.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-          <select aria-label="Action" value={action} onChange={(e) => setAction(e.target.value)}>
+          </Select>
+          <Select aria-label="Action" value={action} onChange={(e) => setAction(e.target.value)}>
             <option value="">All actions</option>
             {result?.actions.map((a) => <option key={a} value={a}>{a}</option>)}
-          </select>
-          <select aria-label="Issuer" value={issuer} onChange={(e) => setIssuer(e.target.value)}>
+          </Select>
+          <Select aria-label="Issuer" value={issuer} onChange={(e) => setIssuer(e.target.value)}>
             <option value="">All issuers</option>
             {[...data.issuers].sort((a, b) => a.name.localeCompare(b.name)).map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
-          </select>
+          </Select>
           <label className="audit-date">From <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /></label>
           <label className="audit-date">To <input type="date" value={to} onChange={(e) => setTo(e.target.value)} /></label>
           {filtered && (

@@ -1,5 +1,5 @@
 'use client';
-import { SelectMenu } from './ui/select-menu';
+import { Select, SelectMenu } from './ui/select-menu';
 import { EventSwitcher } from './event-switcher';
 import { canOperate, isDesk, roleLabel } from '@/lib/roles';
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
@@ -588,13 +588,13 @@ export function Workspace() {
             <span>{manager ? 'Head of desk' : viewer ? 'Banker · view only' : banker ? 'Coordinator' : 'Sales'}{data.demo ? ' · demo' : ''}</span>
           </div>
           {data.demo && (
-            <select aria-label="Switch demo profile" value={data.user.id} onChange={(e) => switchUser(e.target.value)}>
+            <Select aria-label="Switch demo profile" value={data.user.id} onChange={(e) => switchUser(e.target.value)}>
               {data.users.map((u) => (
                 <option key={u.id} value={u.id}>
                   {u.name} · {u.role === 'MANAGER' ? 'Manager' : u.role === 'BANKER' ? 'Banker' : 'Sales'}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
           <button className="out" onClick={signOut} title="Sign out" aria-label="Sign out">
             <LogOut size={15} />
@@ -1383,7 +1383,7 @@ function InboxView({
               {shortCategory[c]} <small>{count}</small>
             </button>
           ))}
-          <select
+          <Select
             className="compact-select"
             aria-label="Filter by issuer"
             value={issuer}
@@ -1395,7 +1395,7 @@ function InboxView({
                 {i.name}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         {filtered.length ? (
           <div className="inbox-list">
@@ -1713,7 +1713,7 @@ function QueueView({
         {expanded === a.id && (
           <div className="decision-details">
             <span>Owner</span>
-            <select
+            <Select
               aria-label={`Assign ${a.title}`}
               value={a.assignedTo || ''}
               onChange={(e) => run('action', { id: a.id, assignedTo: e.target.value || null }, 'Coverage assignment updated')}
@@ -1722,7 +1722,7 @@ function QueueView({
               {data.users.filter((u) => u.role === 'BANKER').map((u) => (
                 <option key={u.id} value={u.id}>{u.name}</option>
               ))}
-            </select>
+            </Select>
             <div />
             {['Rejected', 'Expired', 'Resolved'].includes(a.status) && (
               <Button size="sm" variant="outline" onClick={() => run('reopen', { actionId: a.id }, 'Reopened: back in the queue.')}>Reopen</Button>
@@ -1812,9 +1812,9 @@ function QueueView({
             )}
             <button className={`chip ${dense ? 'active' : ''}`} aria-pressed={dense} onClick={() => setDense(!dense)}>Dense</button>
             <SortToggle value={sort} onChange={setSort} />
-            <select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>
+            <Select aria-label="Filter by status" value={status} onChange={(e) => setStatus(e.target.value)}>
               {['Open', 'Resolved', 'Rejected', 'Expired', 'All'].map((s) => <option key={s}>{s}</option>)}
-            </select>
+            </Select>
           </div>
         </div>
         {(selected.size > 0 || cleanVisible.length > 0) && (

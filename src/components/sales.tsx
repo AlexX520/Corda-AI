@@ -1,4 +1,5 @@
 'use client';
+import { Select } from './ui/select-menu';
 import { useState } from 'react';
 import { Mail } from 'lucide-react';
 import type { AppState } from '@/lib/types';
@@ -327,9 +328,9 @@ export function SalesHome({
           <section className="panel itinerary">
             <div className="panel-heading">
               <h3>Client itinerary</h3>
-              <select aria-label="Itinerary client" className="compact-select" value={itineraryFor || ''} onChange={(e) => setClient(e.target.value)}>
+              <Select aria-label="Itinerary client" className="compact-select" value={itineraryFor || ''} onChange={(e) => setClient(e.target.value)}>
                 {clients.map((cl) => <option key={cl.id} value={cl.id}>{cl.name}</option>)}
-              </select>
+              </Select>
             </div>
             {itineraryFor ? (
               <div className="pad">

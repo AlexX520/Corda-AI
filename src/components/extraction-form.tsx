@@ -1,5 +1,5 @@
 'use client';
-import { SelectMenu } from './ui/select-menu';
+import { Select, SelectMenu, TimeSelect } from './ui/select-menu';
 import { useState } from 'react';
 import { eachDayOfInterval, format, parseISO } from 'date-fns';
 import { Plus, Trash2 } from 'lucide-react';
@@ -220,7 +220,7 @@ export function ExtractionForm({
           const bad = +new Date(w.end) <= +new Date(w.start);
           return (
             <div className="xf-window" key={i}>
-              <select
+              <Select
                 aria-label="Day"
                 value={l.date}
                 disabled={!conference}
@@ -234,25 +234,11 @@ export function ExtractionForm({
                     {format(parseISO(d), 'EEE, MMM d')}
                   </option>
                 ))}
-              </select>
-              <input
-                aria-label="Start time"
-                type="time"
-                step={300}
-                value={l.from}
-                disabled={!conference}
-                onChange={(e) => update(i, { from: e.target.value })}
-              />
+              </Select>
+              <TimeSelect ariaLabel="Start time" step={5} value={l.from} disabled={!conference} onChange={(v) => update(i, { from: v })} />
               <span>–</span>
-              <input
-                aria-label="End time"
-                type="time"
-                step={300}
-                value={l.to}
-                disabled={!conference}
-                onChange={(e) => update(i, { to: e.target.value })}
-              />
-              <select
+              <TimeSelect ariaLabel="End time" step={5} value={l.to} disabled={!conference} onChange={(v) => update(i, { to: v })} />
+              <Select
                 aria-label="Kind"
                 value={w.kind}
                 onChange={(e) => update(i, { kind: e.target.value as ExtractionWindow['kind'] })}
@@ -262,7 +248,7 @@ export function ExtractionForm({
                     {kindLabel(k)}
                   </option>
                 ))}
-              </select>
+              </Select>
               <button
                 aria-label="Remove time"
                 className="xf-remove"

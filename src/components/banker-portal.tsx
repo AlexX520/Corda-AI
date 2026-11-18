@@ -1,5 +1,6 @@
 'use client';
 import { useMemo, useState } from 'react';
+import { PREFERENCE_LIMITS, preferenceLimitError, preferenceUsage } from '@/lib/preference-limits';
 import { CalendarDays, Download, FileSpreadsheet, Mail, Users } from 'lucide-react';
 import type { AppState } from '@/lib/types';
 import { Button } from './ui/button';
@@ -113,6 +114,7 @@ export function MyPreferences({ data, conferenceId, run }: { data: AppState; con
   const [busy, setBusy] = useState(false);
   const issuers = useMemo(() => [...data.issuers].sort((a, b) => a.name.localeCompare(b.name)), [data.issuers]);
   const chosen = Object.values(levels).filter((l) => l !== 'No Preference');
+  const capError = preferenceLimitError(chosen);
   const submitted = current.some((p) => p.submissionStatus === 'Submitted');
   const deadline = (c as { preferenceDeadline?: string | null }).preferenceDeadline;
   const save = async (submit: boolean) => {
@@ -149,27 +151,35 @@ export function MyPreferences({ data, conferenceId, run }: { data: AppState; con
               <span className="issuer-dot" style={{ background: i.color }} />
               <strong>{i.name}</strong>
               <div className="levels" role="group" aria-label={`Preference for ${i.name}`}>
-                {LEVELS.filter((l) => l !== 'No Preference').map((l) => (
+                {LEVELS.filter((l) => l !== 'No Preference').map((l) => {
+                  // Capped levels (Must, High) stop accepting more once full.
+                  const full = level !== l && PREFERENCE_LIMITS[l] !== undefined && chosen.filter((x) => x === l).length >= PREFERENCE_LIMITS[l];
+                  return (
                   <button
                     key={l}
+                    disabled={full}
+                    title={full ? `At most ${PREFERENCE_LIMITS[l]} per event` : undefined}
                     className={`${level === l ? 'on' : ''} ${l === 'Must Attend' ? 'must' : l === 'Cannot Attend' ? 'cannot' : ''}`}
                     aria-pressed={level === l}
                     onClick={() => setLevels({ ...levels, [i.id]: level === l ? 'No Preference' : l })}
                   >
                     {l.replace(' Priority', '').replace(' Attend', '')}
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );
         })}
       </div>
       <div className="v5-portal-actions sticky">
-        <span className="muted">{chosen.length ? `${chosen.length} issuer${chosen.length === 1 ? '' : 's'} chosen` : 'Nothing chosen yet'}</span>
+        <span className={capError ? 'warn' : 'muted'}>
+          {capError || [chosen.length ? `${chosen.length} chosen` : 'Nothing chosen yet', preferenceUsage(chosen)].join(' · ')}
+        </span>
         <Button variant="outline" disabled={busy} onClick={() => save(false)}>
           Save draft
         </Button>
-        <Button disabled={busy || !chosen.length} onClick={() => save(true)}>
+        <Button disabled={busy || !chosen.length || Boolean(capError)} onClick={() => save(true)}>
           Submit preferences
         </Button>
       </div>

@@ -1,4 +1,5 @@
 'use client';
+import { Select } from './ui/select-menu';
 import { useEffect, useState } from 'react';
 import type { AppState } from '@/lib/types';
 import { Empty, fmt } from './shared';
@@ -60,10 +61,10 @@ export function ManagerHome({
     <div className="v5-page wide">
       <header className="v5-hero">
         <span className="eyebrow">
-          <select aria-label="Event" className="v5-inline-select" value={eventId} onChange={(e) => setEventId(e.target.value)}>
+          <Select aria-label="Event" className="v5-inline-select" value={eventId} onChange={(e) => setEventId(e.target.value)}>
             <option value="">All events</option>
             {data.conferences.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          </Select>
           {' · '}updated {fmt(m.generatedAt, data.conferences[0]?.timezone, 'MMM d, h:mm a')}
         </span>
         <h1>{verdict}</h1>
