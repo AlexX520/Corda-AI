@@ -4,7 +4,9 @@ import type { AppState, EmailItem, RequestItem } from '@/lib/types';
 import type { Extraction } from '@/lib/extraction-schema';
 import { duplicatesFor, findCandidates, isOpenMeeting, isOpenRequest, windowLabel } from '@/lib/review-rules';
 import { ExtractionForm } from './extraction-form';
-import { AlertTriangle, ArrowRight, Check, ChevronDown, Mail, Sparkles, Users } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, Mail, Users } from 'lucide-react';
+import { CordaMark } from './ui/corda-mark';
+import { DraftPreview } from './draft-preview';
 import { canOperate } from '@/lib/roles';
 import { SelectMenu } from './ui/select-menu';
 import { Button } from './ui/button';
@@ -447,7 +449,7 @@ export function EmailDecision({
       ) : (
         <div className="dc-suggest">
           <div className="dc-suggest-head">
-            <Sparkles size={14} /> Corda suggests
+            <CordaMark size={18} /> Suggested
           </div>
           <div className="dc-change">
             <span className="what">{change.what}</span>
@@ -640,6 +642,10 @@ export function EmailDecision({
           </div>
         )}
       </div>
+
+      {!suspicious && (
+        <DraftPreview emailId={email.id} version={email.proposals.map((p) => p.status).join(',')} onEdit={onReply} />
+      )}
 
       {!done && escalation && (
         <div className="dc-confirm">
@@ -867,7 +873,7 @@ export function RequestDecision({
       </h2>
       <div className="dc-suggest">
         <div className="dc-suggest-head">
-          <Sparkles size={14} /> {conflict ? 'That time does not work' : 'Corda suggests'}
+          <CordaMark size={18} /> {conflict ? 'That time does not work' : 'Suggested'}
         </div>
         <div className="dc-change">
           <span className="what">

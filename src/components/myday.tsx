@@ -1,6 +1,8 @@
 'use client';
 import type React from 'react';
 import type { AppState } from '@/lib/types';
+import { Check } from 'lucide-react';
+import { CordaMark } from './ui/corda-mark';
 import { actionKind } from './queue-model';
 import { inboxItems, itemKindLabel, urgentKind, type InboxItem, type ItemKind } from './inbox-model';
 import { kindOrder } from './queue-model';
@@ -91,68 +93,87 @@ export function MyDay({
   const inEvent = today >= c.startDate && today <= c.endDate;
   const dayNo = Math.round((+new Date(`${today}T12:00:00Z`) - +new Date(`${c.startDate}T12:00:00Z`)) / 86400000) + 1;
   const dayCount = Math.round((+new Date(`${c.endDate}T12:00:00Z`) - +new Date(`${c.startDate}T12:00:00Z`)) / 86400000) + 1;
-  const todayList = myMeetings(data, conferenceId, today, zone);
-  const tomorrowList = myMeetings(data, conferenceId, tomorrow, zone);
-  const done = todayList.filter((x) => +new Date(x.m.end) <= +now);
-  const live = todayList.find((x) => +new Date(x.m.start) <= +now && +new Date(x.m.end) > +now);
-  const upcoming = todayList.filter((x) => +new Date(x.m.start) > +now);
-  const next = live || upcoming[0];
-  const later = upcoming.filter((x) => x !== next);
-  const mins = next ? Math.round((+new Date(next.m.start) - +now) / 60000) : 0;
-  const inText = (m: number) => (m < 60 ? `in ${m} min` : `in ${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`);
-  const hour = Number(fmt(now.toISOString(), zone, 'H'));
-  const first = data.user.name.split(' ')[0];
-  const needLine = items.length ? `${items.length} thing${items.length === 1 ? '' : 's'} need${items.length === 1 ? 's' : ''} you.` : 'Nothing is waiting on you.';
-  const nextLine = live
-    ? `You are in ${pair(live.m)} until ${fmt(live.m.end, zone, 'h:mm a')}.`
-    : next
-      ? `Your next meeting starts ${inText(mins)}.`
-      : todayList.length
-        ? 'Your meetings for today are done.'
-        : tomorrowList.length
-          ? `No meetings today. ${tomorrowList.length} tomorrow.`
-          : 'No meetings today.';
   const shown = items.slice(0, 5);
-  // Alex's first three questions: what's new since I last looked, what is still unscheduled, what is confirmed.
-  const newSince = items.filter((i) => i.type === 'new' && (!lastSeen || i.at > lastSeen)).length;
-  const unscheduled = items.filter((i) => i.type === 'new').length;
-  const confirmedCount = data.meetings.filter((m) => m.conferenceId === conferenceId && m.status === 'Confirmed').length;
   const typeCounts = [
     ['urgent', items.filter((i) => urgentKind(i.type)).length] as const,
     ...kindOrder.filter((k) => k !== 'escalation').map((k) => [k, items.filter((i) => i.type === k).length] as const),
   ].filter(([, n]) => n > 0);
 
+  const daysToGo = Math.round((+new Date(`${c.startDate}T12:00:00Z`) - +new Date(`${today}T12:00:00Z`)) / 86400000);
+  // What Corda did on its own: read and sorted the mail behind today's to-dos (and anything new since
+  // you last looked), prepared the changes waiting for your OK, matched emails to meetings, flagged
+  // look-alike senders. Nothing here changed the schedule; every change still needs approval.
+  const since = lastSeen || new Date(+now - 86400000).toISOString();
+  const openEmailIds = new Set(items.map((i) => i.email?.id).filter(Boolean) as string[]);
+  const handled = data.emails.filter(
+    (e) => (!e.conferenceId || e.conferenceId === conferenceId) && (openEmailIds.has(e.id) || e.receivedAt > since),
+  );
+  const prepared = handled.flatMap((e) => (openEmailIds.has(e.id) ? e.proposals.filter((p) => p.status === 'Pending') : []));
+  const cordaDid: { title: string; sub: string; onOpen?: () => void }[] = [];
+  if (handled.length) {
+    const filed = handled.filter((e) => !openEmailIds.has(e.id)).length;
+    cordaDid.push({
+      title: `Read and sorted ${handled.length} email${handled.length === 1 ? '' : 's'}`,
+      sub: [`${openEmailIds.size} became to-dos`, filed ? `${filed} filed, nothing to do` : ''].filter(Boolean).join(' · '),
+    });
+  }
+  if (prepared.length)
+    cordaDid.push({
+      title: `Prepared ${prepared.length} change${prepared.length === 1 ? '' : 's'}`,
+      sub: 'Each waits for approval · nothing moved yet',
+      onOpen: () => document.getElementById('to-review')?.scrollIntoView({ behavior: 'smooth' }),
+    });
+  for (const e of handled.filter((x) => x.suspicious || x.senderStatus === 'unverified').slice(0, 2))
+    cordaDid.push({
+      title: 'Flagged a look-alike sender',
+      sub: `${(e.originalSender || e.sender).toLowerCase()} · moved to the top`,
+      onOpen: items.some((i) => i.email?.id === e.id) ? () => onItem(items.find((i) => i.email?.id === e.id)!) : undefined,
+    });
+  for (const e of handled) {
+    if (cordaDid.length >= 5) break;
+    const p = e.proposals.find((q) => (q.extraction as { meetingId?: string | null } | null)?.meetingId);
+    const m = p && data.meetings.find((x) => x.id === (p.extraction as { meetingId?: string }).meetingId);
+    if (m) cordaDid.push({ title: 'Matched an email to its meeting', sub: `${pair(m)} · ${fmt(m.start, zone, 'MMM d · h:mm a')}`, onOpen: () => onOpenMeeting(m.id) });
+  }
+  // Alerts: things that will go wrong if nobody acts (not decisions; those are in To review).
+  const alerts: { title: string; sub: string; action?: { label: string; run: () => void } }[] = [];
+  for (const i of items.filter((x) => x.corda.tone === 'wait').slice(0, 3))
+    alerts.push({ title: `${i.who}: ${i.corda.text.toLowerCase().startsWith('waiting') ? i.corda.text : `waiting · ${i.corda.text}`}`, sub: `Received ${fmt(i.at, zone, 'MMM d, h:mm a')}`, action: { label: 'Open', run: () => onItem(i) } });
+  const deadline = (c as { preferenceDeadline?: string | null }).preferenceDeadline;
+  if (deadline && today <= fmt(deadline, zone, 'yyyy-MM-dd')) {
+    const sent = new Set(data.bankerPreferences.filter((p) => p.conferenceId === conferenceId && p.submissionStatus === 'Submitted').map((p) => p.bankerId));
+    const missing = data.users.filter((u) => u.role === 'BANKER' && !sent.has(u.id));
+    if (missing.length)
+      alerts.push({
+        title: `Preferences due ${fmt(deadline, zone, 'MMM d')}`,
+        sub: `${missing.slice(0, 3).map((u) => u.name.split(' ')[0]).join(', ')}${missing.length > 3 ? ` and ${missing.length - 3} more` : ''} haven’t sent theirs`,
+      });
+  }
+
   return (
     <div className="v5-page">
-      <header className="v5-hero">
-        <span className="eyebrow">
-          {c.name}
-          {inEvent ? ` · Day ${dayNo} of ${dayCount}` : today < c.startDate ? ` · starts ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'EEE MMM d')} (in ${Math.round((+new Date(`${c.startDate}T12:00:00Z`) - +new Date(`${today}T12:00:00Z`)) / 86400000)} days)` : ' · ended'}
-          {' · '}
-          {fmt(now.toISOString(), zone, 'EEE MMM d, h:mm a')}
-        </span>
-        <h1>
-          Good {hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'}, {first}.
-        </h1>
-        <p>
-          {needLine} {nextLine}
-        </p>
+      <header className="v5-today-head">
+        <div>
+          <span className="eyebrow">
+            {c.name}
+            {inEvent ? ` · Day ${dayNo} of ${dayCount}` : today < c.startDate ? ` · in ${daysToGo} day${daysToGo === 1 ? '' : 's'}` : ' · ended'}
+          </span>
+          <h1>Today</h1>
+        </div>
+        <nav className="v5-counts" aria-label="Summary">
+          <a href="#to-review">
+            <b>{items.length}</b> to review
+          </a>
+          <a href="#alerts">
+            <span className="alert-dot" aria-hidden="true" />
+            <b>{alerts.length}</b> alert{alerts.length === 1 ? '' : 's'}
+          </a>
+          <a href="#done-by-corda">
+            <CordaMark size={16} />
+            <b>{cordaDid.length}</b> done by Corda
+          </a>
+        </nav>
       </header>
-
-      <section aria-label="At a glance" className="v5-glance">
-        <button onClick={() => onOpenType?.('new')}>
-          <strong>{newSince}</strong>
-          <span>New requests since you last looked</span>
-        </button>
-        <button onClick={() => onOpenType?.('new')}>
-          <strong>{unscheduled}</strong>
-          <span>Waiting to be scheduled</span>
-        </button>
-        <button onClick={onOpenSchedule}>
-          <strong>{confirmedCount}</strong>
-          <span>Confirmed meetings</span>
-        </button>
-      </section>
 
       <HoldsBar data={data} run={run} />
 
@@ -210,6 +231,55 @@ export function MyDay({
 
         </>
       )}
+
+      <section className="v5-two" aria-label="Done by Corda and alerts">
+        <div className="v5-corda-panel" id="done-by-corda">
+          <h2>
+            <CordaMark size={18} /> Done by Corda
+          </h2>
+          {cordaDid.length ? (
+            cordaDid.map((d, i) => (
+              <div key={i} className="v5-row">
+                <Check size={16} strokeWidth={2.4} aria-hidden="true" />
+                <span>
+                  <strong>{d.title}</strong>
+                  <span>{d.sub}</span>
+                </span>
+                {d.onOpen && (
+                  <button className="v5-link" onClick={d.onOpen}>
+                    Open
+                  </button>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="v5-none">No new email.</p>
+          )}
+        </div>
+        <div className="v5-alert-panel" id="alerts">
+          <h2>
+            <span className="alert-dot" aria-hidden="true" /> Alerts
+          </h2>
+          {alerts.length ? (
+            alerts.map((x, i) => (
+              <div key={i} className="v5-row">
+                <span className="alert-dot" aria-hidden="true" />
+                <span>
+                  <strong>{x.title}</strong>
+                  <span>{x.sub}</span>
+                </span>
+                {x.action && (
+                  <button className="v5-link" onClick={x.action.run}>
+                    {x.action.label}
+                  </button>
+                )}
+              </div>
+            ))
+          ) : (
+            <p className="v5-none">No alerts.</p>
+          )}
+        </div>
+      </section>
 
       {/* Alex: no agenda list here; the day's meetings live on Schedule. */}
       {changes.length > 0 && (

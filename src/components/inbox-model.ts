@@ -66,6 +66,8 @@ export type InboxItem = {
   mine: boolean;
   /** The one person who owns this item (assigned, else the issuer's coverage banker). */
   owner: string | null;
+  /** The card's last line: what Corda prepared (sug), a warning (flag), who it waits on (wait), or a plain note. */
+  corda: { tone: 'sug' | 'flag' | 'wait' | 'note'; text: string };
 };
 
 const x = (p: { extraction: unknown }) => p.extraction as unknown as Extraction;
@@ -139,6 +141,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         whenText: fmt(r.start, zone, WHEN),
         mine: owns(a),
         owner: ownerOf(a),
+        corda: { tone: 'note', text: `From ${data.users.find((u) => u.id === r.salespersonId)?.name || 'sales'}` },
       });
     } else
       items.push({
@@ -159,6 +162,7 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         whenText: meetingStart((a as { meetingId?: string | null }).meetingId) ? fmt(meetingStart((a as { meetingId?: string | null }).meetingId)!, zone, WHEN) : '',
         mine: owns(a),
         owner: ownerOf(a),
+        corda: { tone: 'note', text: actionKind(a, data).label },
       });
   }
   for (const [emailId, list] of byEmail) {
@@ -276,6 +280,13 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
       whenText,
       mine: list.some(owns),
       owner: ownerOf(list[0]),
+      corda: suspicious
+        ? { tone: 'flag', text: 'Check the sender first' }
+        : escalation
+          ? { tone: 'flag', text: 'Reply before anything else' }
+          : blockers.length
+            ? { tone: 'wait', text: blockers[0] }
+            : { tone: 'sug', text: changes.length > 1 ? `${changes.length} changes prepared` : 'Change prepared' },
     });
   }
   return sortItems(items, 'meeting');

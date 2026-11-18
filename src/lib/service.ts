@@ -290,7 +290,7 @@ async function draftDomains(tx: Tx | typeof db, at: { emailId?: string | null; m
  * alternatives where a requested time does not work. Escalations get an apologetic, human note.
  * Nothing is written to the database.
  */
-async function buildReply(tx: Tx | typeof db, user: User, emailId: string) {
+async function buildReply(tx: Tx | typeof db, user: User, emailId: string, opts: { assumeApproved?: boolean } = {}) {
   const email = await tx.email.findUniqueOrThrow({ where: { id: emailId }, include: { proposals: { orderBy: { askIndex: 'asc' } } } });
   const [issuers, investors, conferences, actions] = await Promise.all([
     tx.issuer.findMany(),
@@ -338,11 +338,12 @@ async function buildReply(tx: Tx | typeof db, user: User, emailId: string) {
     questions: string[] = [],
     alternatives: string[] = [],
     questionAskIds: string[] = [];
+  let assumed = false;
   for (const { p, e } of asks) {
     const zone = conferences.find((c) => c.id === e.conferenceId)?.timezone || 'America/New_York';
     const other = perspective === 'issuer' ? names.investor(e.investorId) : perspective === 'investor' ? names.issuer(e.issuerId) : `${names.issuer(e.issuerId)} / ${names.investor(e.investorId)}`;
     const target = e.windows.find((w) => w.kind === 'availability');
-    if (p.status === 'Approved') {
+    const doneLine = async () => {
       if (e.operation === 'reschedule' && target) done.push(`We've moved the ${other} meeting to ${formatInTimeZone(target.start, zone, 'EEEE h:mm a')}.`);
       else if (e.operation === 'cancel') done.push(`We've cancelled the ${other} meeting.`);
       else if (e.category === 'New Meeting Request') {
@@ -359,6 +360,9 @@ async function buildReply(tx: Tx | typeof db, user: User, emailId: string) {
       }
       else if (e.category === 'Issuer Availability Update') done.push(`We've updated your availability.`);
       else if (e.operation === 'update') done.push(`We've noted ${e.attendees} attendees for the ${other} meeting.`);
+    };
+    if (p.status === 'Approved') {
+      await doneLine();
       continue;
     }
     if (!['Pending', 'Clarification requested'].includes(p.status)) continue;
@@ -392,6 +396,11 @@ async function buildReply(tx: Tx | typeof db, user: User, emailId: string) {
     if (q.length) {
       questions.push(...q);
       questionAskIds.push(p.id);
+    } else if (opts.assumeApproved && p.status === 'Pending') {
+      // Preview only: word the reply as it will read once the prepared change is approved.
+      const before = done.length;
+      await doneLine();
+      if (done.length > before) assumed = true;
     }
   }
   const parts = [hi, '', 'Thanks for your note.'];
@@ -403,7 +412,7 @@ async function buildReply(tx: Tx | typeof db, user: User, emailId: string) {
   if (questionAskIds.length) parts.push('', "We haven't changed anything else on the schedule yet.");
   parts.push('', 'Best regards,', user.name);
   const { text } = stripSensitiveQuotes(parts.join('\n'));
-  return { to, cc, subject: replySubject(email.subject), body: text, allowedDomains: allowed, kind: 'reply', questionAskIds };
+  return { to, cc, subject: replySubject(email.subject), body: text, allowedDomains: allowed, kind: 'reply', questionAskIds, assumed };
 }
 async function makeConfirmationDraft(tx: Tx, user: User, meetingId: string) {
   const m = await tx.meeting.findUniqueOrThrow({ where: { id: meetingId } }),
@@ -1089,12 +1098,12 @@ export async function command(user: User, type: string, input: unknown): Promise
   if (type === 'reassignEmail') return reassignEmail(user, input);
   if (type === 'replyPreview') {
     banker(user);
-    const p = z.object({ emailId: z.string() }).parse(input);
+    const p = z.object({ emailId: z.string(), assumeApproved: z.boolean().optional() }).parse(input);
     const existing = await db.draft.findFirst({
       where: { emailId: p.emailId, status: 'Draft', kind: { in: ['reply', 'escalation', ''] } },
       orderBy: { createdAt: 'desc' },
     });
-    return { ...(await buildReply(db, user, p.emailId)), existingDraftId: existing?.id || null };
+    return { ...(await buildReply(db, user, p.emailId, { assumeApproved: p.assumeApproved })), existingDraftId: existing?.id || null };
   }
   if (type === 'replySave') {
     banker(user);

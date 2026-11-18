@@ -1,7 +1,8 @@
 'use client';
+import { CordaMark } from './ui/corda-mark';
 import { SelectMenu } from './ui/select-menu';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Plus, RefreshCw } from 'lucide-react';
 import type { AppState } from '@/lib/types';
 import { RequestDecision } from './decision';
 import { EmailReview } from './review';
@@ -252,14 +253,13 @@ export function Inbox({
       el?.scrollBy({ left: dir * Math.max(300, el.clientWidth * 0.8), behavior: 'smooth' });
     };
     return (
-      <section className="v5-desk" aria-label="Needs your decision">
+      <section className="v5-desk" aria-label="To review" id="to-review">
         <div className="v5-section-head">
           <h2>
-            Needs your decision <span className="count">{all.length}</span>
+            To review <span className="count">{all.length}</span>
           </h2>
           <span className="grow" />
           <button className="v5-link" onClick={onDrafts}>Drafts{drafts ? ` ${drafts}` : ''}</button>
-          <button className="v5-link" onClick={onAllEmail}>All email</button>
         </div>
         <div className="v5-desk-bar">
           {chipsEl}
@@ -278,16 +278,16 @@ export function Inbox({
                       {itemKindLabel[i.type]}
                       {i.more ? ` +${i.more}` : ''}
                     </span>
+                    <span className="ago">{receivedAgo(i.at, data.now, zone)}</span>
                   </span>
                   <strong>{i.who}</strong>
                   <span className="what">{i.what}</span>
-                  {i.whenText && (
-                    <span className="when">
-                      <CalendarDays size={13} /> <span className="t">{i.whenText}</span>
-                    </span>
-                  )}
-                  {i.tone === 'amber' && i.sub && i.kind === 'email' && <span className="block">{i.sub}</span>}
-                  <span className="foot">Received {receivedAgo(i.at, data.now, zone)}</span>
+                  {i.whenText && <span className="when t">{i.whenText}</span>}
+                  <span className={`corda-line ${i.corda.tone}`}>
+                    {i.corda.tone === 'sug' && <CordaMark size={16} />}
+                    {i.corda.tone === 'flag' && <span className="alert-dot" aria-hidden="true" />}
+                    <span>{i.corda.text}</span>
+                  </span>
                 </button>
               ))}
             </div>

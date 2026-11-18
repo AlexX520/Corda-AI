@@ -17,6 +17,8 @@
     "start:hosted": "prisma migrate deploy && tsx prisma/seed.ts && next start --hostname 0.0.0.0 --port ${PORT:-3000}"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "^5.3.0",
+    "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@kenjiuno/msgreader": "^1.28.0",
     "@prisma/client": "6.19.0",
