@@ -1361,9 +1361,11 @@ export async function command(user: User, type: string, input: unknown): Promise
       const { windows, busy } = await resources(tx, r.conferenceId, r.issuerId, r.investorId);
       if (!isAvailable(slot, windows, busy))
         throw new Error('Selected alternative is no longer available.');
+      // The note says what was picked, so the desk does not read the older times as current.
+      const picked = `${user.name} picked ${formatInTimeZone(slot.start, c.timezone, 'MMM d · h:mm a')}${r.status === 'Needs New Time' ? ' from the offered times' : ''}.`;
       const updated = await tx.meetingRequest.update({
         where: { id: r.id },
-        data: { ...slot, status: 'Awaiting Banker Approval' },
+        data: { ...slot, status: 'Awaiting Banker Approval', notes: r.notes ? `${r.notes}\n${picked}` : picked },
       });
       await tx.action.create({
         data: {
@@ -2034,21 +2036,45 @@ export async function command(user: User, type: string, input: unknown): Promise
     const c = await db.conference.findUniqueOrThrow({ where: { id: r.conferenceId } }),
       i = await db.issuer.findUniqueOrThrow({ where: { id: r.issuerId } }),
       v = await db.investor.findUniqueOrThrow({ where: { id: r.investorId } });
-    const facts = `${p.purpose}: ${v.name} with ${i.name}, ${c.name}, requested ${formatInTimeZone(r.start, c.timezone, 'MMM d h:mm a')} ${c.timezone}. Current status: ${r.status}. This draft does not change meeting status.`;
-    const body = await generateDraft(
-      facts,
-      `Hello,\n\n${facts}\n\nPlease let us know your availability. Any changes remain subject to banker and issuer approval.\n\nBest regards,\n${user.name}`,
-    );
+    // A short, human email to the issuer. Open times are real (availability minus meetings).
+    const zone = c.timezone;
+    const at = (d: Date | string) => formatInTimeZone(d, zone, 'MMM d · h:mm a');
+    const outside = /\nOutside .+ availability/.test(r.notes || '');
+    const { windows, busy } = await resources(db, c.id, r.issuerId, r.investorId);
+    const near = availableSlots(windows, busy, r.duration, c.slotMinutes)
+      .filter((x) => +new Date(x.start) !== +r.start && +new Date(x.start) > +now())
+      .sort((a, b) => Math.abs(+new Date(a.start) - +r.start) - Math.abs(+new Date(b.start) - +r.start))
+      .slice(0, 3)
+      .sort((a, b) => +new Date(a.start) - +new Date(b.start));
+    const ask = `${v.name} would like to meet ${i.name} at ${c.name} on ${at(r.start)} (${r.duration} min).`;
+    const lines =
+      p.purpose === 'Meeting confirmation'
+        ? [`${v.name} and ${i.name} are confirmed for ${at(r.start)} (${r.duration} min) at ${c.name}.`, 'The calendar invite follows separately.']
+        : p.purpose === 'Cancellation'
+          ? [`${v.name} has to cancel the ${at(r.start)} meeting with ${i.name} at ${c.name}. Sorry for the change.`]
+          : p.purpose === 'Reschedule request'
+            ? [`${v.name} would like to move the ${i.name} meeting at ${c.name} (now ${at(r.start)}).`, near.length ? `Open times on our side: ${near.map((x) => at(x.start)).join(', ')}. Would one of these work?` : 'Which times would work for you?']
+            : p.purpose === 'Alternative time proposal'
+              ? [
+                  ask,
+                  outside ? 'That is outside the times you gave us. Could you make it?' : 'That time is no longer open on our side.',
+                  ...(near.length ? [`${outside ? 'If not, these' : 'These'} times are open: ${near.map((x) => at(x.start)).join(', ')}.`] : []),
+                ]
+              : [ask, 'Does that time work for you?'];
+    const fallback = ['Hi,', '', ...lines.flatMap((l, k) => (k ? ['', l] : [l])), '', 'Best regards,', user.name].join('\n');
+    const facts = `Email to ${i.name} from ${user.name} (conference desk). Facts: ${lines.join(' ')} Nothing is booked until both sides agree.`;
+    const body = await generateDraft(facts, fallback);
+    const subject = `${c.name}: ${v.name} × ${i.name}${p.purpose === 'Meeting confirmation' ? ' — confirmed' : p.purpose === 'Cancellation' ? ' — cancelled' : ''}`;
     return db.$transaction(async (tx) => {
       const d = await tx.draft.create({
         data: {
           requestId: r.id,
           createdBy: user.id,
           sender: user.email,
-          to: [],
+          to: [i.contactEmail].filter(Boolean),
           cc: [],
           historicalParticipants: [],
-          subject: `${c.name} | ${p.purpose}`,
+          subject,
           body,
         },
       });
@@ -2404,7 +2430,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         data: {
           status: 'Needs New Time',
           alternativeDates: p.alternatives,
-          notes: `${r.notes ? `${r.notes}\n` : ''}${user.name}: ${formatInTimeZone(r.start, zone, 'EEE MMM d, h:mm a')} doesn't work — ${p.reason}`,
+          notes: `${r.notes ? `${r.notes}\n` : ''}${user.name}: ${formatInTimeZone(r.start, zone, 'MMM d · h:mm a')} doesn't work — ${p.reason}`,
         },
       });
       await tx.action.updateMany({ where: { requestId: r.id, status: 'Open' }, data: { status: 'Resolved' } });
@@ -2412,7 +2438,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         tx,
         user,
         r,
-        `${formatInTimeZone(r.start, zone, 'EEE h:mm a')} doesn't work (${p.reason}).${p.alternatives.length ? ` Open: ${p.alternatives.map((x) => formatInTimeZone(new Date(x), zone, 'EEE h:mm a')).join(', ')}.` : ''} Pick another time.`,
+        `${formatInTimeZone(r.start, zone, 'MMM d · h:mm a')} doesn't work (${p.reason}).${p.alternatives.length ? ` Open: ${p.alternatives.map((x) => formatInTimeZone(new Date(x), zone, 'MMM d · h:mm a')).join(', ')}.` : ''} Pick another time.`,
       );
       await audit(tx, user, 'Request time declined', 'MeetingRequest', r.id, r, updated);
       return updated;
@@ -2439,7 +2465,7 @@ export async function command(user: User, type: string, input: unknown): Promise
       const zone = e.conferenceId ? (await tx.conference.findUnique({ where: { id: e.conferenceId } }))?.timezone || 'America/New_York' : 'America/New_York';
       const issuer = e.issuerId ? (await tx.issuer.findUnique({ where: { id: e.issuerId } }))?.name : null;
       const to = e.windows.find((w) => w.kind !== 'existingMeeting');
-      const title = `${issuer || 'The issuer'} wants to move ${investor?.name || 'the meeting'}${meeting ? ` from ${formatInTimeZone(meeting.start, zone, 'EEE MMM d, h:mm a')}` : ''}${to ? ` to ${formatInTimeZone(new Date(to.start), zone, 'EEE MMM d, h:mm a')}` : ''}`;
+      const title = `${issuer || 'The issuer'} wants to move ${investor?.name || 'the meeting'}${meeting ? ` from ${formatInTimeZone(meeting.start, zone, 'MMM d · h:mm a')}` : ''}${to ? ` to ${formatInTimeZone(new Date(to.start), zone, 'MMM d · h:mm a')}` : ''}`;
       await tx.proposal.update({ where: { id: pr.id }, data: { status: 'Waiting on sales', reviewNote: `Asked ${sales.name} to check with ${investor?.name || 'the investor'}.${p.note ? ` ${p.note}` : ''}` } });
       await tx.action.create({
         data: {
@@ -2602,7 +2628,15 @@ export async function command(user: User, type: string, input: unknown): Promise
     const options = [];
     // Planned jointly: a time picked for one issuer is busy for the investor when placing the next.
     const planned: { start: Date; end: Date }[] = [];
-    for (const issuerId of parsed.investorId ? parsed.issuerIds.slice(0, 8) : []) {
+    // A day outside the event, or a time with no day at a multi-day event: ask for the day, never guess one.
+    const eventDayList = eventDays(c);
+    const needDay = Boolean(parsed.dayOutside) || (Boolean(parsed.windowStart) && !parsed.date && eventDayList.length > 1);
+    const dayHint = needDay
+      ? `${parsed.dayOutside ? `${parsed.dayOutside} is not an event day. ` : 'Add the day. '}${c.name} runs ${eventDayList
+          .map((d) => formatInTimeZone(new Date(`${d}T17:00:00Z`), 'UTC', 'MMM d (EEE)'))
+          .join(', ')}.`
+      : null;
+    for (const issuerId of parsed.investorId && !needDay ? parsed.issuerIds.slice(0, 8) : []) {
       const res = await resources(db, c.id, issuerId, parsed.investorId!);
       const windows = res.windows;
       const busy = [...res.busy, ...planned];
@@ -2632,9 +2666,9 @@ export async function command(user: User, type: string, input: unknown): Promise
       ]);
       const zone = c.timezone;
       const duplicate = meeting
-        ? `${names.investor(parsed.investorId!)} already meets ${names.issuer(issuerId)} ${formatInTimeZone(meeting.start, zone, 'EEE h:mm a')}.`
+        ? `${names.investor(parsed.investorId!)} already meets ${names.issuer(issuerId)} ${formatInTimeZone(meeting.start, zone, 'MMM d · h:mm a')}.`
         : request
-          ? `A request for ${names.investor(parsed.investorId!)} × ${names.issuer(issuerId)} is already open (${formatInTimeZone(request.start, zone, 'EEE h:mm a')}).`
+          ? `A request for ${names.investor(parsed.investorId!)} × ${names.issuer(issuerId)} is already open (${formatInTimeZone(request.start, zone, 'MMM d · h:mm a')}).`
           : null;
       // The exact time sales typed, checked on its own, with the nearest open times if it does not work.
       const askedSlot = parsed.windowStart ? { start: winStart, end: addMinutes(winStart, parsed.duration) } : null;
@@ -2649,7 +2683,7 @@ export async function command(user: User, type: string, input: unknown): Promise
         : null;
       options.push({ issuerId, proposal, asked, duplicate, searched: parsed.windowStart ? 'window' : parsed.date ? 'day' : 'event' });
     }
-    return { parsed, proposal: options[0]?.proposal || null, options };
+    return { parsed, proposal: options[0]?.proposal || null, options, dayHint };
   }
   if (type.startsWith('meeting')) {
     const result = await meetingCommand(user, type, input);

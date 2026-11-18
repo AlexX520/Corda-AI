@@ -928,7 +928,22 @@ export function RequestDecision({
           </div>
         </div>
       )}
-      {r.notes && <p className="dc-text">“{r.notes}”</p>}
+      {r.notes && (() => {
+        // First line: what sales typed. Later lines: what happened since (time declined, new pick).
+        const [said, ...since] = r.notes.split('\n').filter((l) => l.trim() && !/^Outside .+ availability/.test(l));
+        return (
+          <>
+            {said && <p className="dc-text">“{said}”</p>}
+            {since.length > 0 && (
+              <ul className="dc-trail">
+                {since.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            )}
+          </>
+        );
+      })()}
       {noOpen && (
         <div className="dc-no">
           <strong>Tell {n.user(r.salespersonId)} this time doesn’t work</strong>

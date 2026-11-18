@@ -16,6 +16,8 @@ export type ParsedRequest = {
   windowEnd: string | null; // HH:mm
   duration: number;
   missing: string[];
+  /** A day was named but is not an event day ("Monday" for a Tue–Thu event); nothing is guessed. */
+  dayOutside?: string | null;
 };
 
 const GENERIC = new Set([
@@ -146,6 +148,9 @@ export function parseRequestText(
   }
   if (!date && /\b(day one|day 1|first day)\b/.test(lower)) date = days[0];
   if (!date && days.length === 1) date = days[0];
+  // A day was named but none of the event days match it: say so instead of moving it to another day.
+  const dayNamed = dayWord?.[0] || named?.[0] || numeric?.[0] || (/\b(today|tomorrow|tmrw|tmw)\b/.exec(lower)?.[0] ?? null);
+  const dayOutside = !date && dayNamed ? dayNamed.replace(/^\w/, (x) => x.toUpperCase()) : null;
 
   let windowStart: string | null = null,
     windowEnd: string | null = null;
@@ -179,7 +184,7 @@ export function parseRequestText(
   ].filter(Boolean) as string[];
   const investorAt = all.find((h) => h.kind === 'investor' && h.id === investorId)?.at;
   const issuerIds = [...new Set(all.filter((h) => h.kind === 'issuer' && h.at !== investorAt).map((h) => h.id))];
-  return { issuerId, issuerIds: issuerIds.length ? issuerIds : issuerId ? [issuerId] : [], investorId, date, windowStart, windowEnd, duration, missing };
+  return { issuerId, issuerIds: issuerIds.length ? issuerIds : issuerId ? [issuerId] : [], investorId, date, windowStart, windowEnd, duration, missing, dayOutside };
 }
 
 const WORD_HOURS: Record<string, number> = { a: 1, an: 1, one: 1, two: 2, three: 3 };

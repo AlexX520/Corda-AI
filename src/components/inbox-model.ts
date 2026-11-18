@@ -141,7 +141,11 @@ export function inboxItems(data: AppState, actions: Action[], zone: string): Inb
         whenText: fmt(r.start, zone, WHEN),
         mine: owns(a),
         owner: ownerOf(a),
-        corda: { tone: 'note', text: `From ${data.users.find((u) => u.id === r.salespersonId)?.name || 'sales'}` },
+        corda: /\nOutside .+ availability/.test(r.notes || '')
+          ? { tone: 'flag', text: `Outside ${issuer}'s availability` }
+          : r.status === 'Awaiting Banker Approval'
+            ? { tone: 'note', text: `${data.users.find((u) => u.id === r.salespersonId)?.name.split(' ')[0] || 'Sales'} picked a new time` }
+            : { tone: 'note', text: `From ${data.users.find((u) => u.id === r.salespersonId)?.name || 'sales'}` },
       });
     } else
       items.push({

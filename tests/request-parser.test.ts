@@ -52,3 +52,14 @@ test('"tomorrow" resolves against the event-local today (round 3)', () => {
   const p = parseRequestText('Ford Credit / T. Rowe Price tomorrow', { ...ctx, today: '2026-10-19' });
   assert.equal(p.date, '2026-10-20');
 });
+
+test('a day outside the event is reported, never moved to another day', () => {
+  const days = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const inEvent = new Set<string>();
+  for (let d = new Date(`${ctx.conference.startDate}T12:00:00Z`); d.toISOString().slice(0, 10) <= ctx.conference.endDate; d.setUTCDate(d.getUTCDate() + 1)) inEvent.add(days[d.getUTCDay()]);
+  const outside = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].find((d) => !inEvent.has(d.slice(0, 3)))!;
+  const p = parseRequestText(`Bayview / ford 3pm ${outside}`, ctx);
+  assert.equal(p.date, null);
+  assert.equal(p.dayOutside?.toLowerCase(), outside);
+  assert.ok(p.missing.includes('day'));
+});

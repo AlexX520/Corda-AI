@@ -45,7 +45,7 @@ export function MySchedule({
       <header className="v5-hero">
         <span className="eyebrow">
           {c.name}
-          {daysAway > 0 ? ` · starts ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'EEE MMM d')} (in ${daysAway} days)` : ''}
+          {daysAway > 0 ? ` · starts ${fmt(`${c.startDate}T12:00:00Z`, 'UTC', 'MMM d')} (in ${daysAway} days)` : ''}
         </span>
         <h1>My schedule</h1>
         <p>
@@ -135,7 +135,7 @@ export function MyPreferences({ data, conferenceId, run }: { data: AppState; con
       <header className="v5-hero">
         <span className="eyebrow">
           {c.name}
-          {deadline ? ` · due ${fmt(deadline, c.timezone, 'EEE MMM d')}` : ''}
+          {deadline ? ` · due ${fmt(deadline, c.timezone, 'MMM d')}` : ''}
           {submitted ? ' · sent' : ''}
         </span>
         <h1>My preferences</h1>

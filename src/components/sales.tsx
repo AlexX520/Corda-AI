@@ -153,7 +153,7 @@ export function SalesHome({
         conferenceId: m.conferenceId,
         start: m.start,
         status: { text: m.status, tone: m.status === 'Confirmed' ? 'green' : '' },
-        reason: m.changedAt ? `Changed ${fmt(m.changedAt, zone, 'EEE h:mm a')}${m.changeSummary ? `: ${m.changeSummary}` : ''}` : m.location || '',
+        reason: m.changedAt ? `Changed ${fmt(m.changedAt, zone, 'MMM d · h:mm a')}${m.changeSummary ? `: ${m.changeSummary}` : ''}` : m.location || '',
         priority: data.requests.find((r) => r.id === m.requestId)?.priority || '—',
         open: () => onOpenMeeting(m.id),
       })),
@@ -169,7 +169,8 @@ export function SalesHome({
           conferenceId: r.conferenceId,
           start: r.start,
           status: { text: st.text, tone: st.tone },
-          reason: r.reason || st.hint,
+          // Asked anyway: the status already says it; the hint says who acts next.
+          reason: st.text === 'Outside availability' ? st.hint : r.reason || st.hint,
           priority: r.priority,
           open: () => onOpenRequest(r.id),
         };
@@ -292,7 +293,7 @@ export function SalesHome({
                     <tr key={r.key} className="clickable" onClick={r.open}>
                       <td><strong>{n.investor(r.investorId)}</strong><small>{r.kind}</small></td>
                       <td>{n.issuer(r.issuerId)}</td>
-                      <td>{fmt(r.start, zone, 'EEE h:mm a')}</td>
+                      <td>{fmt(r.start, zone, 'MMM d · h:mm a')}</td>
                       <td>
                         <span className={`req-status ${r.status.tone}`}><i /><span>{r.status.text}</span></span>
                         {r.reason && <small>{r.reason}</small>}
@@ -315,7 +316,7 @@ export function SalesHome({
                 {feed.map((f) => (
                   <li key={f.id} className={f.unread ? 'unread' : ''}>
                     <span>{f.text}</span>
-                    <small>{fmt(f.at, zone, 'EEE h:mm a')}</small>
+                    <small>{fmt(f.at, zone, 'MMM d · h:mm a')}</small>
                   </li>
                 ))}
               </ul>

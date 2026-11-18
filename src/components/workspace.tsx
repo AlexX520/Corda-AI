@@ -1893,8 +1893,8 @@ function LoginScreen({
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const roles = [
-    { role: 'BANKER', title: 'Banker', what: 'Coordinators run every request, change, room and coverage. Other bankers see their schedule and set preferences.' },
-    { role: 'MANAGER', title: 'Head of desk', what: 'How the desk is doing, what is stuck, and every request.' },
+    { role: 'BANKER', title: 'Banker', what: 'Coordinators handle every request and change. Other bankers see their schedule and set preferences.' },
+    { role: 'MANAGER', title: 'Head of desk', what: 'How the desk is doing, what is stuck, and allocation of rooms and coverage.' },
     { role: 'SALES', title: 'Sales', what: 'Your clients’ meetings, and one-line meeting requests.' },
   ] as const;
   // Coordinators are bankers: listed first in the Banker card, with a tag.

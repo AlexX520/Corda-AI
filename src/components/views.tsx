@@ -49,6 +49,9 @@ export function requestedBy(r: RequestItem, data: AppState) {
 /** Plain-language status so nobody has to decode workflow states. */
 export function requestStatus(r: RequestItem, role: string) {
   const sales = role === 'SALES';
+  // Sales asked for a time outside the issuer's availability on purpose ("Ask anyway").
+  if (!['Confirmed', 'Cancelled', 'Needs New Time'].includes(r.status) && /\nOutside .+ availability/.test(r.notes || ''))
+    return { tone: 'amber', text: 'Outside availability', hint: sales ? 'Desk to check with the issuer' : 'Ask the issuer first' };
   switch (r.status) {
     case 'Potential Match':
       return { tone: 'green', text: 'Time is open', hint: sales ? 'Banker to confirm' : 'Ready to confirm' };
@@ -247,6 +250,8 @@ type Parsed = {
     duplicate: string | null;
     searched: 'window' | 'day' | 'event';
   }[];
+  /** Set when the day must be added or corrected before any time is offered. */
+  dayHint?: string | null;
 };
 /**
  * One-line request entry for sales: "Ford Credit / PIMCO 2-3pm Tue", or a wish list
@@ -382,6 +387,7 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
               <span>
                 Investor <b>{p.investorId ? n.investor(p.investorId) : '—'}</b> · {p.duration} min
               </span>
+              {result!.dayHint && <span className="warn">{result!.dayHint}</span>}
               {p.missing.filter((m) => m !== 'time' && m !== 'day').length > 0 && (
                 <span className="warn">Add: {p.missing.filter((m) => m !== 'time' && m !== 'day').join(', ')}</span>
               )}
@@ -423,7 +429,7 @@ export function QuickRequest({ data, conferenceId, run }: { data: AppState; conf
                         )
                       ) : o.proposal ? (
                         <span>
-                          {fmt(o.proposal.start, c.timezone, 'EEE h:mm')}–{fmt(o.proposal.end, c.timezone, 'h:mm a')}
+                          {fmt(o.proposal.start, c.timezone, 'MMM d · h:mm')}–{fmt(o.proposal.end, c.timezone, 'h:mm a')}
                           {o.searched !== 'window' && <small> (first open time {o.searched === 'day' ? 'that day' : 'at the event'})</small>}
                           {o.proposal.status !== 'Potential Match' && <small className="warn"> · {o.proposal.status.toLowerCase()}</small>}
                         </span>
