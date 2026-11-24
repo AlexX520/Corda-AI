@@ -339,7 +339,8 @@ export function Workspace() {
         setQueueSection('tasks');
         setClassic(false);
       }
-      setPage(id === 'queue' && data?.user.role === 'BANKER' ? 'overview' : id);
+      // Read-only bankers have no inbox; managers and coordinators do (Tao, Nov 24).
+      setPage(id === 'queue' && data?.user.role === 'BANKER' && !canOperate(data.user) ? 'overview' : id);
     }
     setSearch('');
     setMobile(false);
@@ -350,7 +351,7 @@ export function Workspace() {
     if (data && isDesk(data.user.role)) {
       setClassic(false);
       setQueueSection('tasks');
-      setPage(data.user.role === 'MANAGER' ? 'queue' : 'overview');
+      setPage(data.user.role === 'MANAGER' || page === 'queue' ? 'queue' : 'overview');
     }
   }
   async function switchUser(id: string) {
@@ -468,7 +469,8 @@ export function Workspace() {
           ]
       : banker
         ? [
-            { id: 'overview', label: 'Today', icon: Sun, count: inboxCount },
+            { id: 'overview', label: 'Today', icon: Sun },
+            { id: 'queue', label: 'Inbox', icon: InboxIcon, count: inboxCount },
             { id: 'schedule', label: 'Schedule', icon: CalendarDays },
             { id: 'allocation', label: 'Rooms & coverage', icon: SlidersHorizontal },
           ]
@@ -681,21 +683,6 @@ export function Workspace() {
               onOpenEvent={(id) => {
                 setConferenceId(id);
                 navigate('planner');
-              }}
-              onOpenQueue={(d) => {
-                setDrill(d || null);
-                if (d?.focus === 'escalation') setQueueFocus('escalation');
-                else setQueueFocus('all');
-                navigate('queue');
-              }}
-              onOpenMeetings={(id) => {
-                if (id) setConferenceId(id);
-                navigate('planner');
-              }}
-              onOpenEmail={(id) => openEmail(id)}
-              onOpenAudit={(q) => {
-                setAuditFilter(q || null);
-                navigate('audit');
               }}
             />
           )}

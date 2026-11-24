@@ -2711,3 +2711,8 @@ a.v5-kpi:hover { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12); }
 .v5-dot.amber { background: #71717a; }
 .v5-dot.ok { background: #111111; }
 .v5-bar > span { background: #111111; }
+
+/* Desk head home, Nov 24: plain number cards and a banker coverage panel. */
+.v5-kpis div.v5-kpi { cursor: default; }
+.v5-coverage h3 { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.v5-coverage h3 .q { font-size: 13px; font-weight: 400; color: var(--v5-muted, #8a8a85); }

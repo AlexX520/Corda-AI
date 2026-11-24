@@ -514,7 +514,8 @@ export function EmailDecision({
         </div>
       )}
 
-      {(needsMeeting && !cancelRequest) && !escalation && (
+      {/* Once handled, the meeting has moved: re-matching it against the email's old time only confuses. */}
+      {(needsMeeting && !cancelRequest) && !escalation && !done && (
         <div className="dc-pick-block">
           {meeting && !pickOpen && meetingPick.candidates.length <= 1 ? null : meeting && !pickOpen ? (
             <div className="dc-matched">
@@ -558,7 +559,7 @@ export function EmailDecision({
           )}
         </div>
       )}
-      {(needsRequest || cancelRequest) && !escalation && (
+      {(needsRequest || cancelRequest) && !escalation && !done && (
         <div className="dc-pick-block">
           <label className="dc-pick">
             <span>Request</span>

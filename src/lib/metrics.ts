@@ -222,6 +222,8 @@ export function computeMetrics(x: MetricsInput) {
       };
     })
     .sort((a, b) => b.meetings + b.openItems - (a.meetings + a.openItems));
+  // Confirmed meetings no banker covers yet (desk head home, "Banker coverage").
+  const uncovered = confirmed.filter((m) => !m.bankerIds.length && !x.coverage.some((c) => c.meetingId === m.id)).length;
 
   // Issuer ranking (confirmed, most first) and the target list: the issuers taking part with the
   // fewest confirmed meetings, so the desk helps them first. Only for one event at a time.
@@ -276,6 +278,7 @@ export function computeMetrics(x: MetricsInput) {
     unanswered,
     escalations,
     workload,
+    uncovered,
     demoRecords: x.emails.filter((e) => e.source === 'demo-history').length,
   };
 }
