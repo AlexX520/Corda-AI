@@ -2690,3 +2690,24 @@ html { scroll-behavior: smooth; }
 .v5-profile .v5-select .menu { top: auto; bottom: calc(100% + 6px); left: 0; min-width: 240px; }
 .v5-profile { position: relative; }
 .v5-profile .v5-select .menu { min-width: 0; width: calc(100% + 40px); max-width: none; }
+/* Manager home (Nov 23): Confirmed / Pending / Total, issuer ranking, target list, pending breakdown. */
+a.v5-kpi { text-decoration: none; }
+a.v5-kpi:hover { box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12); }
+.v5-panel > .v5-none { margin: 0; padding: 0 22px 12px; font-size: 13px; color: var(--muted); }
+.v5-panel .line.target { box-shadow: inset 3px 0 0 #111111; }
+.v5-targets { border-top: 2px solid #111111; }
+.v5-targets .rank {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 999px;
+  background: #111111; color: #fff; font-size: 12px; font-weight: 600; font-family: var(--font-mono);
+}
+.v5-pending { scroll-margin-top: 24px; }
+.v5-pending .group { border-top: 1px solid #f4f4f5; }
+.v5-pending .ghead { display: flex; justify-content: space-between; align-items: center; padding: 12px 22px 6px; font-size: 13.5px; }
+.v5-pending .ghead span { font-family: var(--font-mono); color: var(--muted); }
+.v5-pending .group .line { border-top: 0; padding-top: 8px; padding-bottom: 8px; }
+.v5-pending .group > .v5-none { margin: 0; padding: 0 22px 12px; font-size: 13px; color: var(--muted); }
+/* Manager colours: black, white, grey; escalations keep the one alert colour. */
+.v5-dot.red { background: var(--alert); }
+.v5-dot.amber { background: #71717a; }
+.v5-dot.ok { background: #111111; }
+.v5-bar > span { background: #111111; }

@@ -27,7 +27,13 @@ export function ManagerHome({
   onOpenAudit: (q?: Record<string, string>) => void;
 }) {
   // Event picker: "All events" uses the metrics in the app state; one event is fetched filtered.
-  const [eventId, setEventId] = useState('');
+  // Default to the live or upcoming event with the most work in it (issuer counts across events
+  // are not comparable); "All events" stays one click away.
+  const [eventId, setEventId] = useState(() => {
+    const live = (data.metrics?.events || []).filter((e) => e.state !== 'Done');
+    const pick = [...live].sort((a, b) => b.openItems + b.meetings - (a.openItems + a.meetings) || a.startDate.localeCompare(b.startDate))[0];
+    return pick?.id || '';
+  });
   const [scoped, setScoped] = useState<M | null>(null);
   useEffect(() => {
     if (!eventId) return setScoped(null);
@@ -73,20 +79,100 @@ export function ManagerHome({
 
       <section aria-label="Key numbers" className="v5-kpis">
         <button className="v5-card v5-kpi" onClick={() => onOpenMeetings(eventId || undefined)}>
-          <span className="l">Meetings confirmed</span>
-          <span className="v">{m.totals.meetings}</span>
-          <span className="n">{m.totals.requested ? `${pct(m.totals.rate)} of requests granted (${m.totals.confirmed} of ${m.totals.requested})` : 'No requests yet'}</span>
+          <span className="l">Confirmed meetings</span>
+          <span className="v">{m.meetings.confirmed}</span>
+          <span className="n">On the schedule, nothing waiting</span>
         </button>
+        <a className="v5-card v5-kpi" href="#pending-meetings">
+          <span className="l">Pending meetings</span>
+          <span className="v">{m.meetings.pending}</span>
+          <span className="n">
+            {m.meetings.pendingByStage[0]} with the issuer · {plural(m.meetings.pendingByStage[1], 'move')} · {m.meetings.pendingByStage[2]} to confirm
+          </span>
+        </a>
         <div className="v5-card v5-kpi">
-          <span className="l">Time to confirm</span>
-          <span className="v">{hours(m.totals.medianHoursToConfirm)}</span>
-          <span className="n">median, request to confirmed meeting · {plural(m.totals.confirmedFromRequests, 'request')}</span>
+          <span className="l">Total meetings</span>
+          <span className="v">{m.meetings.total}</span>
+          <span className="n">Confirmed + pending</span>
         </div>
-        <button className="v5-card v5-kpi" onClick={() => onOpenAudit({ action: '' })}>
-          <span className="l">Hours saved</span>
-          <span className="v">{m.roi.hoursSaved} h</span>
-          <span className="n">{plural(m.roi.asksHandled, 'request')} handled in Corda · {m.roi.minutesPerAsk} min each, assumed</span>
-        </button>
+      </section>
+
+      <div className="v5-two">
+        <section aria-label="Issuers by confirmed meetings" className="v5-card v5-panel big">
+          <h3>
+            Issuers by confirmed meetings{eventId ? '' : ' · all events'}
+          </h3>
+          {m.issuerRanking.length ? (
+            m.issuerRanking.map((p) => (
+              <button
+                key={p.id}
+                className={`line ${m.targets.some((t) => t.id === p.id) ? 'target' : ''}`}
+                style={{ gridTemplateColumns: 'minmax(0, 1fr) 140px 40px' }}
+                onClick={() => onOpenAudit({ issuer: p.id })}
+              >
+                <span className="two">
+                  <span>{p.name}</span>
+                  <span className="v5-bar"><span style={{ width: `${(p.confirmed / Math.max(1, ...m.issuerRanking.map((x) => x.confirmed))) * 100}%` }} /></span>
+                </span>
+                <span className="r q">{p.pending ? `${p.pending} pending` : ''}</span>
+                <strong className="r">{p.confirmed}</strong>
+              </button>
+            ))
+          ) : (
+            <p className="v5-none">No meetings yet.</p>
+          )}
+        </section>
+        <section aria-label="Target list" className="v5-card v5-panel small v5-targets">
+          <h3>Target list</h3>
+          <p className="v5-none">
+            {eventId ? `The ${m.targetCount} issuers with the fewest confirmed meetings. Schedule more for them first.` : 'Pick an event to see its targets.'}
+          </p>
+          {m.targets.map((t, i) => (
+            <button key={t.id} className="line" style={{ gridTemplateColumns: '22px minmax(0, 1fr) auto' }} onClick={() => onOpenEvent(eventId)}>
+              <span className="rank">{i + 1}</span>
+              <span className="two">
+                <strong>{t.name}</strong>
+                <small>
+                  {t.confirmed} confirmed{t.pending ? ` · ${t.pending} pending` : ''}
+                  {t.openSlots !== null ? ` · ${t.openSlots} open slot${t.openSlots === 1 ? '' : 's'}` : ' · no availability yet'}
+                </small>
+              </span>
+              <span className="r q">Schedule</span>
+            </button>
+          ))}
+        </section>
+      </div>
+
+      <section aria-label="Pending meetings" id="pending-meetings" className="v5-card v5-panel v5-pending">
+        <h3>Pending meetings · {m.meetings.pending}</h3>
+        {([1, 2, 3] as const).map((stage) => {
+          const list = m.meetings.pendingItems.filter((p) => p.stage === stage);
+          const title = stage === 1 ? 'Requested, issuer has not confirmed' : stage === 2 ? 'Issuer wants to move, investor has not confirmed' : 'Answered, the desk has not confirmed';
+          return (
+            <div key={stage} className="group">
+              <div className="ghead">
+                <strong>{title}</strong>
+                <span>{list.length}</span>
+              </div>
+              {list.length ? (
+                list.map((p) => (
+                  <button
+                    key={p.key}
+                    className="line"
+                    style={{ gridTemplateColumns: 'minmax(0, 1fr) 150px 90px' }}
+                    onClick={() => (p.emailId ? onOpenEmail(p.emailId) : onOpenQueue({ scope: 'everyone' }))}
+                  >
+                    <span>{p.issuer} × {p.investor}</span>
+                    <span className="r q">{p.waitingOn === 'Desk' ? (p.stage === 2 ? 'Desk to ask sales' : 'Desk to confirm') : `Waiting on ${p.waitingOn.toLowerCase()}`}</span>
+                    <span className="r q">since {fmt(p.since, data.conferences[0]?.timezone, 'MMM d')}</span>
+                  </button>
+                ))
+              ) : (
+                <p className="v5-none">None.</p>
+              )}
+            </div>
+          );
+        })}
       </section>
 
       <section aria-label="Needs your attention" className="v5-stack">
@@ -162,27 +248,32 @@ export function ManagerHome({
         <section aria-label="How requests were handled" className="v5-card v5-panel big">
           <h3>How email requests were handled</h3>
           <div className="v5-mix" role="img" aria-label={`${m.emails.approvedClean} approved as read, ${m.emails.approvedEdited} approved after edits, ${m.emails.rejected} rejected`}>
-            <span style={{ flexGrow: m.emails.approvedClean, background: '#15803d' }} />
-            <span style={{ flexGrow: m.emails.approvedEdited, background: '#d97706' }} />
-            <span style={{ flexGrow: m.emails.rejected, background: '#a1a1aa' }} />
+            <span style={{ flexGrow: m.emails.approvedClean, background: '#111111' }} />
+            <span style={{ flexGrow: m.emails.approvedEdited, background: '#71717a' }} />
+            <span style={{ flexGrow: m.emails.rejected, background: '#d4d4d8' }} />
           </div>
           <div className="v5-legend">
-            <span><i style={{ background: '#15803d' }} />Approved as read <b>{m.emails.approvedClean}</b> · {share(m.emails.approvedClean)}</span>
-            <span><i style={{ background: '#d97706' }} />Approved after edits <b>{m.emails.approvedEdited}</b> · {share(m.emails.approvedEdited)}</span>
-            <span><i style={{ background: '#a1a1aa' }} />Declined by the desk <b>{m.emails.declined}</b> · {share(m.emails.declined)}</span>
+            <span><i style={{ background: '#111111' }} />Approved as read <b>{m.emails.approvedClean}</b> · {share(m.emails.approvedClean)}</span>
+            <span><i style={{ background: '#71717a' }} />Approved after edits <b>{m.emails.approvedEdited}</b> · {share(m.emails.approvedEdited)}</span>
+            <span><i style={{ background: '#d4d4d8' }} />Declined by the desk <b>{m.emails.declined}</b> · {share(m.emails.declined)}</span>
             <span>Phishing and noise rejected <b>{m.emails.rejectedNoise}</b></span>
             <span>Still pending <b>{m.emails.pending}</b></span>
           </div>
         </section>
-        <section aria-label="Meetings per issuer" className="v5-card v5-panel small">
-          <h3>Meetings per issuer</h3>
-          {m.perIssuer.slice(0, 6).map((p) => (
-            <button key={p.id} className="line" style={{ gridTemplateColumns: 'minmax(0, 1fr) 40px 110px' }} onClick={() => onOpenAudit({ issuer: p.id })}>
-              <span>{p.name}</span>
-              <strong className="r">{p.meetings}</strong>
-              <span className="r q">{p.requested} requested</span>
-            </button>
-          ))}
+        <section aria-label="Speed" className="v5-card v5-panel small">
+          <h3>Speed</h3>
+          <div className="line static" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }}>
+            <span className="two"><span>Time to confirm</span><small>median, request to confirmed meeting · {plural(m.totals.confirmedFromRequests, 'request')}</small></span>
+            <strong className="r">{hours(m.totals.medianHoursToConfirm)}</strong>
+          </div>
+          <button className="line" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }} onClick={() => onOpenAudit({ action: '' })}>
+            <span className="two"><span>Hours saved</span><small>{plural(m.roi.asksHandled, 'request')} handled in Corda · {m.roi.minutesPerAsk} min each, assumed</small></span>
+            <strong className="r">{m.roi.hoursSaved} h</strong>
+          </button>
+          <div className="line static" style={{ gridTemplateColumns: 'minmax(0, 1fr) auto' }}>
+            <span className="two"><span>Requests granted</span><small>{m.totals.confirmed} of {m.totals.requested} requests</small></span>
+            <strong className="r">{pct(m.totals.rate)}</strong>
+          </div>
         </section>
       </div>
     </div>

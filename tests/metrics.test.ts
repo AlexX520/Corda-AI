@@ -100,3 +100,46 @@ test('per issuer / investor counts; median helper; edit detection', () => {
   assert.equal(extractionEdited(a, { ...a, meetingId: 'm1', windows: [{ ...a.windows[0], evidence: 'b' }] }), false);
   assert.equal(extractionEdited(a, { ...a, windows: [{ ...a.windows[0], start: 'z' }] }), true);
 });
+
+test('pending meetings: three stages, counted once, a move is not also confirmed; targets are the fewest confirmed', async () => {
+  const { pendingMeetings, computeMetrics } = await import('../src/lib/metrics');
+  const now = new Date('2026-11-23T15:00:00Z');
+  const issuers = [
+    { id: 'ford', name: 'Ford Credit', contactEmail: 'ir@ford.example' },
+    { id: 'ally', name: 'Ally', contactEmail: 'ir@ally.example' },
+    { id: 'gmf', name: 'GM Financial', contactEmail: 'ir@gmf.example' },
+    { id: 'bay', name: 'Bayview', contactEmail: 'ir@bay.example' },
+  ];
+  const meetings = [
+    { id: 'm1', conferenceId: 'c', issuerId: 'ford', investorId: 'pimco', status: 'Confirmed', requestId: null, bankerIds: [], start: now, createdAt: now },
+    { id: 'm2', conferenceId: 'c', issuerId: 'ford', investorId: 'wel', status: 'Confirmed', requestId: null, bankerIds: [], start: now, createdAt: now },
+    { id: 'm3', conferenceId: 'c', issuerId: 'ally', investorId: 'pimco', status: 'Confirmed', requestId: null, bankerIds: [], start: now, createdAt: now },
+  ];
+  const requests = [
+    { id: 'r1', conferenceId: 'c', issuerId: 'gmf', investorId: 'apollo', status: 'Potential Match', createdAt: now },
+    { id: 'r2', conferenceId: 'c', issuerId: 'ally', investorId: 'blk', status: 'Potential Match', createdAt: now },
+    { id: 'r3', conferenceId: 'c', issuerId: 'ford', investorId: 'blk', status: 'Confirmed', createdAt: now },
+  ];
+  const proposals = [
+    // Ford moves Wellington, sales was asked → stage 2 waiting on the investor
+    { id: 'p1', emailId: 'e1', status: 'Pending', editedOnReview: false, conferenceId: 'c', category: 'Reschedule Request', issuerId: 'ford', investorId: 'wel', sender: 'ir@ford.example', receivedAt: now },
+    // Ally says yes to BlackRock → the sales request moves to stage 3
+    { id: 'p2', emailId: 'e2', status: 'Pending', editedOnReview: false, conferenceId: 'c', category: 'Meeting Confirmation', issuerId: 'ally', investorId: 'blk', sender: 'ir@ally.example', receivedAt: now },
+  ];
+  const actions = [{ id: 'a1', type: 'Sales check', status: 'Open', assignedTo: 's', createdAt: now, conferenceId: 'c', title: '', proposalId: 'p1' }];
+  const p = pendingMeetings({ requests, meetings, proposals, actions, issuers });
+  assert.equal(p.items.length, 3);
+  assert.deepEqual(p.items.map((i) => [i.issuerId, i.stage, i.waitingOn]), [['gmf', 1, 'Issuer'], ['ford', 2, 'Investor'], ['ally', 3, 'Desk']]);
+  assert.equal(p.confirmed.length, 2, 'Ford × Wellington is being moved, so it is pending, not confirmed');
+  const m = computeMetrics({
+    now,
+    conferences: [{ id: 'c', name: 'ABS', type: 'Conference', startDate: '2026-12-08', endDate: '2026-12-10', location: '' }],
+    issuers, investors: [], users: [], requests, meetings, coverage: [], proposals, actions, emails: [],
+    availability: issuers.map((i) => ({ conferenceId: 'c', issuerId: i.id })),
+    openSlots: { bay: 12 },
+  });
+  assert.deepEqual([m.meetings.confirmed, m.meetings.pending, m.meetings.total], [2, 3, 5]);
+  assert.deepEqual(m.issuerRanking.map((r) => r.id), ['ally', 'ford', 'gmf', 'bay']);
+  assert.deepEqual(m.targets.map((r) => r.id), ['bay', 'gmf', 'ally']);
+  assert.equal(m.targets[0].openSlots, 12);
+});

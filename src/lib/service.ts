@@ -2827,13 +2827,24 @@ async function managerMetrics(conferenceId?: string) {
     db.meetingRequest.findMany({ select: { id: true, conferenceId: true, issuerId: true, investorId: true, status: true, createdAt: true } }),
     db.meeting.findMany({ select: { id: true, conferenceId: true, issuerId: true, investorId: true, status: true, requestId: true, bankerIds: true, start: true, createdAt: true } }),
     db.meetingCoverageAssignment.findMany({ select: { meetingId: true, bankerId: true } }),
-    db.proposal.findMany({ select: { status: true, editedOnReview: true, extraction: true, email: { select: { conferenceId: true, suspicious: true, status: true } } } }),
-    db.action.findMany({ select: { id: true, type: true, status: true, assignedTo: true, createdAt: true, conferenceId: true, title: true } }),
+    db.proposal.findMany({ select: { id: true, emailId: true, status: true, reviewNote: true, editedOnReview: true, extraction: true, email: { select: { conferenceId: true, suspicious: true, status: true, sender: true, originalSender: true, receivedAt: true } } } }),
+    db.action.findMany({ select: { id: true, type: true, status: true, assignedTo: true, createdAt: true, conferenceId: true, title: true, proposalId: true } }),
     db.email.findMany({ select: { id: true, subject: true, sender: true, issuerId: true, conferenceId: true, status: true, receivedAt: true, escalation: true, source: true } }),
   ]);
   // Event picker: every list is narrowed to that event.
   const inEvent = <T extends { conferenceId: string | null }>(rows: T[]) => (conferenceId ? rows.filter((r) => r.conferenceId === conferenceId) : rows);
+  // One event: who takes part (sent availability) and how many open future slots each issuer has left.
+  const conf = conferenceId ? conferences.find((c) => c.id === conferenceId) : undefined;
+  const availability = conf ? await db.availability.findMany({ where: { conferenceId: conf.id }, select: { conferenceId: true, issuerId: true } }) : [];
+  const openSlots: Record<string, number> = {};
+  if (conf)
+    for (const issuerId of [...new Set(availability.map((a) => a.issuerId))]) {
+      const r = await resources(db as unknown as Tx, conf.id, issuerId);
+      openSlots[issuerId] = availableSlots(r.windows, r.busy, conf.slotMinutes, conf.slotMinutes).filter((x) => +new Date(x.start) > +now()).length;
+    }
   return computeMetrics({
+    availability,
+    openSlots,
     now: now(),
     conferences: conferenceId ? conferences.filter((c) => c.id === conferenceId) : conferences,
     issuers,
@@ -2843,13 +2854,23 @@ async function managerMetrics(conferenceId?: string) {
     meetings: inEvent(meetings),
     coverage,
     proposals: inEvent(
-      proposals.map((p) => ({
-        status: p.status,
-        editedOnReview: p.editedOnReview,
-        conferenceId: p.email.conferenceId,
-        noise: p.email.suspicious || p.email.status === 'Quarantined',
-        category: String((p.extraction as { category?: string } | null)?.category || ''),
-      })),
+      proposals.map((p) => {
+        const e = (p.extraction || {}) as { category?: string; issuerId?: string | null; investorId?: string | null };
+        return {
+          id: p.id,
+          emailId: p.emailId,
+          status: p.status,
+          reviewNote: p.reviewNote,
+          editedOnReview: p.editedOnReview,
+          conferenceId: p.email.conferenceId,
+          noise: p.email.suspicious || p.email.status === 'Quarantined',
+          category: String(e.category || ''),
+          issuerId: e.issuerId || null,
+          investorId: e.investorId || null,
+          sender: p.email.originalSender || p.email.sender,
+          receivedAt: p.email.receivedAt,
+        };
+      }),
     ),
     actions: conferenceId ? actions.filter((a) => a.conferenceId === conferenceId || !a.conferenceId) : actions,
     emails: inEvent(emails),
